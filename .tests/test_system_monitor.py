@@ -12,6 +12,24 @@ system_monitor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(system_monitor)
 
 
+def test_backend_telemetry_is_disabled_without_opt_in(monkeypatch):
+    monkeypatch.delenv("DASWA_SYSTEM_MONITOR", raising=False)
+
+    assert system_monitor._monitor_enabled() is False
+
+
+def test_backend_telemetry_accepts_explicit_enable_values(monkeypatch):
+    for value in ("1", "true", "yes", "on", "enable", "enabled"):
+        monkeypatch.setenv("DASWA_SYSTEM_MONITOR", value)
+        assert system_monitor._monitor_enabled() is True
+
+
+def test_backend_telemetry_rejects_other_values(monkeypatch):
+    for value in ("0", "false", "no", "off", "disable", "disabled", "unexpected"):
+        monkeypatch.setenv("DASWA_SYSTEM_MONITOR", value)
+        assert system_monitor._monitor_enabled() is False
+
+
 def test_nvidia_parser_keeps_each_gpu_id_and_metrics():
     output = "0, GPU-a, RTX A, 55, 1024, 8192, 62\n1, GPU-b, RTX B, 21, 2048, 16384, 51\n"
 

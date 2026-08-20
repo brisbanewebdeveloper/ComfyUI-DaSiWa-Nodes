@@ -45,9 +45,9 @@ def _memory_fields(sample):
 
 
 def _monitor_enabled():
-    """Continuous polling is on by default; any explicit falsy value disables it."""
-    return os.environ.get("DASWA_SYSTEM_MONITOR", "").strip().lower() not in (
-        "0", "false", "no", "off", "disable", "disabled",
+    """Enable backend telemetry only after an explicit environment opt-in."""
+    return os.environ.get("DASWA_SYSTEM_MONITOR", "").strip().lower() in (
+        "1", "true", "yes", "on", "enable", "enabled",
     )
 
 

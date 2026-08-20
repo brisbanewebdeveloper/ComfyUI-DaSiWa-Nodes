@@ -113,14 +113,14 @@ Additionally, updates are broadcast via WebSocket event `dasiwa.system_monitor` 
 Two independent levels:
 
 - **Browser-local (UI):** Use the settings button next to the monitor and disable **Show system monitor**. This only hides the panel in your browser; it does not stop the lightweight backend telemetry thread, which keeps the WebSocket event and REST endpoints live so re-enabling is instant without a ComfyUI restart.
-- **Backend (real disable):** Set the `DASWA_SYSTEM_MONITOR` environment variable to `0`, `false`, `no`, `off`, `disable`, or `disabled` before starting ComfyUI. This skips starting the polling thread entirely — no `psutil` sampling and no `nvidia-smi`/`rocm-smi` subprocess calls. Any other value (or an unset variable) leaves the monitor on, preserving the default local-run behavior.
+- **Backend (explicit enable):** Backend telemetry is off by default. Set `DASWA_SYSTEM_MONITOR` to `1`, `true`, `yes`, `on`, `enable`, or `enabled` before starting ComfyUI. Without one of those values, the polling thread, WebSocket event, REST endpoints, `psutil` sampling, and GPU subprocess calls remain disabled.
 
 ```bash
 # bash / zsh
-export DASWA_SYSTEM_MONITOR=0
+export DASWA_SYSTEM_MONITOR=1
 
 # fish
-set -x DASWA_SYSTEM_MONITOR 0
+set -x DASWA_SYSTEM_MONITOR 1
 ```
 
 ## Container / sandbox safety
@@ -131,4 +131,4 @@ Cloud containers and sandboxes often expose an incomplete `/proc` (for example, 
 - A failing `nvidia-smi`/`rocm-smi`/DRM probe returns an empty GPU list instead of raising.
 - The monitor thread never crashes the ComfyUI server because of an unavailable stat.
 
-This is independent of the disable switch above — leaving the monitor on in a container is now quiet.
+This is independent of the enable switch above — backend telemetry starts only after explicit opt-in.

@@ -16,7 +16,7 @@ ComfyUI/models/llm/
 
 For the `transformers` backend, the folder must include `config.json`, tokenizer files, processor files for vision models, and `.safetensors` weights. A single `.safetensors` file is not enough for LLM chat inference.
 
-For the `llama_cpp` backend, select a local `.gguf` file. This requires a CUDA-enabled `llama-cpp-python` installation in the ComfyUI Python environment; it is intentionally optional so a generic dependency install does not replace a GPU build with a CPU-only wheel. Install it with `CMAKE_ARGS="-DGGML_CUDA=on" /path/to/ComfyUI/venv/bin/pip install --force-reinstall --no-cache-dir llama-cpp-python`. The `ollama` backend instead sends requests to the configured Ollama server and uses `ollama_model` as its model name.
+For the `llama_cpp` backend, select a local `.gguf` file. This requires a CUDA-enabled `llama-cpp-python` installation in the ComfyUI Python environment; it is intentionally optional so a generic dependency install does not replace a GPU build with a CPU-only wheel. Install it with `CMAKE_ARGS="-DGGML_CUDA=on" /path/to/ComfyUI/venv/bin/pip install --force-reinstall --no-cache-dir llama-cpp-python`. The `ollama` backend instead sends requests to the configured Ollama server and uses `ollama_model` as its model name. Loopback URLs work by default. Set `allow_remote_ollama` only when intentionally sending prompts to a trusted non-loopback server.
 
 You can also enter a Hugging Face repo id in `hf_repo_id`, such as:
 
@@ -43,6 +43,7 @@ Important controls:
 - `trust_remote_code`: enable only for models that require trusted custom model code.
 - `llama_n_ctx`, `llama_n_gpu_layers`, `llama_n_threads`, and `llama_chat_format`: llama.cpp GGUF controls. `-1` GPU layers requests full offload; `0` uses CPU only.
 - `ollama_model`, `ollama_url`, and `ollama_timeout`: Ollama API controls.
+- `allow_remote_ollama`: permits prompt requests to a non-loopback Ollama host. It is off by default; URLs containing credentials, query strings, or fragments are rejected.
 
 ### DaSiWa LLM Analyze
 

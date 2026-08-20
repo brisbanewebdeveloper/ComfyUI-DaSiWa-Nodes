@@ -6,9 +6,11 @@ does not hold a live reference to a very large model.
 """
 
 import gc
+from ipaddress import ip_address
 import json
 import os
 from urllib import error as urlerror
+from urllib.parse import urlsplit
 from urllib import request as urlrequest
 from dataclasses import dataclass
 
@@ -382,6 +384,36 @@ def _generation_cache_kwargs(config, use_kv_cache):
     return kwargs
 
 
+def _validate_ollama_url(ollama_url: str, allow_remote: bool) -> str:
+    """Validate the Ollama API boundary and require opt-in for non-loopback hosts."""
+    base_url = (ollama_url or "").strip().rstrip("/")
+    try:
+        parsed = urlsplit(base_url)
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("Enter a valid Ollama server URL.") from exc
+
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Ollama URL must use http or https and include a host.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Ollama URL must not contain credentials.")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Ollama URL must not contain a query string or fragment.")
+
+    hostname = parsed.hostname.rstrip(".").lower()
+    is_loopback = hostname == "localhost" or hostname.endswith(".localhost")
+    if not is_loopback:
+        try:
+            is_loopback = ip_address(hostname).is_loopback
+        except ValueError:
+            pass
+    if not is_loopback and allow_remote is not True:
+        raise ValueError(
+            "Remote Ollama URLs require allow_remote_ollama=true. Only enable it for a trusted server."
+        )
+    return base_url
+
+
 def _load_transformers_model(config, need_vision):
     try:
         from transformers import AutoProcessor, AutoTokenizer
@@ -570,7 +602,10 @@ def _run_ollama_generation(config, system_prompt, user_text, max_new_tokens, tem
     if unload_after_request:
         payload_data["keep_alive"] = 0
     payload = json.dumps(payload_data).encode()
-    endpoint = config["ollama_url"].rstrip("/") + "/api/chat"
+    base_url = _validate_ollama_url(
+        config["ollama_url"], config.get("allow_remote_ollama", False)
+    )
+    endpoint = base_url + "/api/chat"
     request = urlrequest.Request(endpoint, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urlrequest.urlopen(request, timeout=config["ollama_timeout"]) as response:
@@ -802,7 +837,10 @@ class DaSiWa_LLMModelSelector:
                 "ollama_model": ("STRING", {"default": "", "description": "Ollama model name, for example qwen3:8b. Required when backend is ollama."}),
                 "ollama_url": ("STRING", {"default": "http://127.0.0.1:11434", "description": "Ollama server base URL."}),
                 "ollama_timeout": ("INT", {"default": 300, "min": 1, "max": 3600, "step": 1, "description": "Ollama request timeout in seconds."}),
-            }
+            },
+            "optional": {
+                "allow_remote_ollama": ("BOOLEAN", {"default": False, "description": "Allow Ollama requests to a non-loopback host. Enable only for a trusted server."}),
+            },
         }
 
     RETURN_TYPES = ("DASIWA_LLM_CONFIG",)
@@ -814,11 +852,13 @@ class DaSiWa_LLMModelSelector:
                backend, task, device, dtype, quantization, cache_mode, trust_remote_code,
                attention_implementation, kv_cache_implementation, kv_cache_quant_backend,
                kv_cache_nbits, kv_cache_residual_length, llama_n_ctx, llama_n_gpu_layers,
-               llama_n_threads, llama_chat_format, ollama_model, ollama_url, ollama_timeout):
+               llama_n_threads, llama_chat_format, ollama_model, ollama_url, ollama_timeout,
+               allow_remote_ollama=False):
         if backend == "ollama":
             model_path = ollama_model.strip()
             if not model_path:
                 raise ValueError("Enter ollama_model when backend is ollama.")
+            ollama_url = _validate_ollama_url(ollama_url, allow_remote_ollama is True)
         else:
             model_path = _resolve_model_path(
                 model, custom_path, hf_repo_id, hf_revision, download_if_missing,
@@ -845,6 +885,7 @@ class DaSiWa_LLMModelSelector:
             "llama_n_threads": llama_n_threads,
             "llama_chat_format": llama_chat_format.strip(),
             "ollama_url": ollama_url.strip(),
+            "allow_remote_ollama": allow_remote_ollama is True,
             "ollama_timeout": ollama_timeout,
         },)
 
