@@ -209,5 +209,5 @@ class MiniMaxH3Director:
         return guide, length, resolved, int(width), int(height), selected_model, mode in BASE_MODES, mode == "REF2VA", frame_rate
 
 
-NODE_CLASS_MAPPINGS = {"MiniMaxH3Director": MiniMaxH3Director}
-NODE_DISPLAY_NAME_MAPPINGS = {"MiniMaxH3Director": "MiniMax H3 Director"}
+NODE_CLASS_MAPPINGS = {"DaSiWaMiniMaxH3Director": MiniMaxH3Director}
+NODE_DISPLAY_NAME_MAPPINGS = {"DaSiWaMiniMaxH3Director": "DaSiWa MiniMax H3 Director"}

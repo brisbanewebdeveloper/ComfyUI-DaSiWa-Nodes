@@ -13,6 +13,55 @@ const AUDIO_MARKERS_JS = ["fully_copy","partially_copy","reference","weak_refere
 const ALL_MARKERS_JS = [...new Set([...VISUAL_MARKERS_JS,...AUDIO_MARKERS_JS])];
 const DEFAULT_STATE = { version: 1, items: [], prompt_blocks: [], builder_state: null, resolution: null };
 const MAX = { image: 9, video: 3, audio: 3, total: 12 };
+const DIRECTOR_NODE_ID = "DaSiWaMiniMaxH3Director";
+const LEGACY_DIRECTOR_NODE_ID = "MiniMaxH3Director";
+const DIRECTOR_MODES = new Set(["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA"]);
+
+function isLegacyTimeline(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const state = JSON.parse(value);
+    return !!(state && typeof state === "object" && (
+      Array.isArray(state.items) ||
+      Array.isArray(state.prompt_blocks) ||
+      state.builder_state ||
+      state.resolution
+    ));
+  } catch {
+    return false;
+  }
+}
+
+function isLegacyDaSiWaDirector(node) {
+  if (!node || node.type !== LEGACY_DIRECTOR_NODE_ID) return false;
+  const inputNames = new Set((node.inputs || []).map(input => input?.name));
+  if (["fl2va_model", "ref2va_model", "external_prompt_overwrite", "external_width_overwrite"]
+    .some(name => inputNames.has(name))) {
+    return true;
+  }
+  const values = Array.isArray(node.widgets_values) ? node.widgets_values : [];
+  return DIRECTOR_MODES.has(values[0]) && values.some(isLegacyTimeline);
+}
+
+function migrateLegacyDaSiWaDirectors(graphData) {
+  const visited = new WeakSet();
+  let migrated = 0;
+  const visit = value => {
+    if (!value || typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
+    if (isLegacyDaSiWaDirector(value)) {
+      value.type = DIRECTOR_NODE_ID;
+      if (value.properties?.["Node name for S&R"] === LEGACY_DIRECTOR_NODE_ID) {
+        value.properties["Node name for S&R"] = DIRECTOR_NODE_ID;
+      }
+      migrated += 1;
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(graphData);
+  return migrated;
+}
+
 // H3's VAE emits 16px latent cells and the diffusion transformer patchifies
 // them in 2×2 groups, so both canvas edges must be divisible by 32.
 const MINIMAX_MULTIPLE = 32;
@@ -923,4 +972,18 @@ function install(node) {
   render();
 }
 
-app.registerExtension({ name: "DaSiWa.MiniMaxH3Director", nodeCreated(node) { if (node.comfyClass === "MiniMaxH3Director") install(node); }, loadedGraphNode(node) { if (node.comfyClass === "MiniMaxH3Director") { install(node); node.__dasiwaH3RestorePersistedState?.(); } } });
+app.registerExtension({
+  name: "DaSiWa.MiniMaxH3Director",
+  beforeConfigureGraph(graphData) {
+    migrateLegacyDaSiWaDirectors(graphData);
+  },
+  nodeCreated(node) {
+    if (node.comfyClass === DIRECTOR_NODE_ID) install(node);
+  },
+  loadedGraphNode(node) {
+    if (node.comfyClass === DIRECTOR_NODE_ID) {
+      install(node);
+      node.__dasiwaH3RestorePersistedState?.();
+    }
+  },
+});

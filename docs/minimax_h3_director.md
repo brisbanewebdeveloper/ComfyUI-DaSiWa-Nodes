@@ -8,6 +8,7 @@ Since the last GitHub release (August 2026):
 
 ### New features
 
+- **Optional integrated executor:** **DaSiWa MiniMax H3 Director Executor** consumes the existing guide and performs native conditioning, SigmaShift, sampling, video decode, and optional audio decode. The Guide remains available for external sampler graphs.
 - **Simple / Structured prompt-mode toggle:** a mode-bar switch changes how builder fields assemble into the final prompt — **Structured** keeps the labelled sections (headers added upstream), **Simple** renders one flat, header-less block. Persisted in `builder_state` (`prompt_mode`), restored on load, honored by **Preview Prompt**; defaults to Structured for backward compatibility.
 - **Grouped column dropdowns:** Aspect / Resolution / Input scaling now render as grouped, ascending columns (aspect by orientation, resolution by ###p / MP tier) with the auto options relabelled **Native (ShortEdge 768px)** (Resolution) and **Native (ShortEdge 2048px)** (Input scaling); menus clamp to the node viewport and scroll natively with the mouse wheel.
 - **Frame rate:** new `frame_rate` FLOAT input (0.1–240, default 24) sets the output FPS and is emitted as a `frame_rate` output for downstream nodes to read; the legacy `external_prompt` input was dropped in favour of `external_prompt_overwrite`.
@@ -37,6 +38,7 @@ Since the last GitHub release (August 2026):
 
 ### Bug fixes
 
+- **Director node-ID collision:** the DaSiWa Director now registers as `DaSiWaMiniMaxH3Director` instead of the shared `MiniMaxH3Director` ID, so it can coexist with other Director packages. DaSiWa workflow graphs saved under the old ID are identified by their socket/widget schema and migrated before graph configuration.
 - **Legacy Director prompt preservation:** pre-builder Director workflows stored their editable prompt in the old `prompt` widget or the timeline JSON, before `builder_state` existed. On load, such a prompt is now detected and migrated into a lossless Simple-prompt builder state instead of being silently dropped, so old videos drop into ComfyUI with their prompt intact. Existing builder content always wins, so current workflows load idempotently.
 - **Serialized standard prompt:** `emit()` now writes the resolved prompt back to the `prompt` widget (and fires its callback) on every state change, so the standard ComfyUI prompt widget stays in sync with the assembled builder output and round-trips through `widgets_values` on save/load.
 - **Legacy widget order preserved (`frame_rate` moved to the end):** the `frame_rate` input inserted at widget position 5 in a recent change shifted every pre-`frame_rate` save one slot — old videos loaded with an empty prompt and crashed the queue (`float('match')`). `frame_rate` is now appended **last** in the required input list so the eight legacy widgets keep their original positional order; `build_guide` additionally coerces a non-numeric `frame_rate` (e.g. the stale 9th value from an old save) to the 24.0 default instead of raising.
@@ -79,10 +81,11 @@ Install dependencies and restart ComfyUI:
 pip install -r requirements.txt
 ```
 
-Ensure your ComfyUI version includes native MiniMax H3 support. Add these two nodes from `DaSiWa/MiniMax H3`:
+Ensure your ComfyUI version includes native MiniMax H3 support. Add the Director and choose one execution route from `DaSiWa/MiniMax H3`:
 
-1. **MiniMax H3 Director** — your timeline, references, and prompt editor.
+1. **DaSiWa MiniMax H3 Director** — your timeline, references, and prompt editor.
 2. **MiniMax H3 Director Guide** — validation and routing to native H3 nodes.
+3. **DaSiWa MiniMax H3 Director Executor** — optional integrated sampling and decode route.
 
 Wire them like this:
 
@@ -125,16 +128,26 @@ Wire them like this:
 
 Connections detail:
 
-- Director `guide` → Guide `guide`
-- Selected MiniMax H3 model → Guide `model`
+- Director `guide` → Guide `guide` for a custom sampling graph, or Executor `guide` for the integrated route
 - `CLIP` → Guide `clip`
 - Visual `VAE` → Guide `vae`
 - In REF2VA: audio VAE → Guide `audio_vae`
 - Guide outputs `positive` and `latent` → standard MiniMax H3 sampler/decoder chain
 
+For the integrated route:
+
+- Selected MiniMax H3 model → Executor `model`
+- `CLIP` → Executor `clip`
+- Visual `VAE` → Executor `video_vae`
+- Director `guide` → Executor `guide`
+- In REF2VA, or to decode generated FL2VA audio: audio VAE → Executor `audio_vae`
+- Executor outputs decoded images/audio plus FPS, frame count, sampled latent, and a run report
+
 Important: the Guide node replaces and wraps ComfyUI's native `MiniMaxH3ImageToVideo` and `MiniMaxH3ReferenceToVideo` nodes. You do not add or wire those native nodes yourself — the Guide calls them internally based on the chosen mode.
 
 The Director has optional model sockets (`fl2va_model`, `ref2va_model`) for lazy loading: connect whichever model matches your active mode. The Guide refuses REF2VA without an audio VAE connected.
+
+The registered Director node ID is `DaSiWaMiniMaxH3Director`. Workflows opened in the ComfyUI frontend are automatically migrated from the former DaSiWa `MiniMaxH3Director` ID; API prompt JSON should use the new ID directly.
 
 ## Modes at a glance
 
