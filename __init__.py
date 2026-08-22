@@ -15,6 +15,11 @@ if __package__:
     from .nodes.nodes_minimax_h3_executor import MiniMaxH3DirectorExecutor
     from .nodes.nodes_minimax_h3_director_guide import MiniMaxH3DirectorGuide
     from .nodes.nodes_minimax_h3_cache import MiniMaxH3Cache
+    from .nodes.nodes_minimax_h3_sequence import (
+        MiniMaxH3SequenceExecutor,
+        MiniMaxH3SequencePlan,
+        MiniMaxH3SequenceSegment,
+    )
     from .nodes import nodes_system_monitor
     from .nodes.helper_logging import log_startup_summary
 
@@ -41,6 +46,9 @@ if __package__:
         "DaSiWaMiniMaxH3DirectorExecutor": MiniMaxH3DirectorExecutor,
         "MiniMaxH3DirectorGuide": MiniMaxH3DirectorGuide,
         "MiniMaxH3Cache": MiniMaxH3Cache,
+        "DaSiWaMiniMaxH3SequenceSegment": MiniMaxH3SequenceSegment,
+        "DaSiWaMiniMaxH3SequencePlan": MiniMaxH3SequencePlan,
+        "DaSiWaMiniMaxH3SequenceExecutor": MiniMaxH3SequenceExecutor,
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
@@ -66,6 +74,9 @@ if __package__:
         "DaSiWaMiniMaxH3DirectorExecutor": "DaSiWa MiniMax H3 Director Executor",
         "MiniMaxH3DirectorGuide": "MiniMax H3 Director Guide",
         "MiniMaxH3Cache": "MiniMax H3 Cache",
+        "DaSiWaMiniMaxH3SequenceSegment": "DaSiWa MiniMax H3 Sequence Segment",
+        "DaSiWaMiniMaxH3SequencePlan": "DaSiWa MiniMax H3 Sequence Plan",
+        "DaSiWaMiniMaxH3SequenceExecutor": "DaSiWa MiniMax H3 Sequence Executor",
     }
     log_startup_summary(len(NODE_CLASS_MAPPINGS))
 else:

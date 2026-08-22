@@ -143,6 +143,29 @@ For the integrated route:
 - In REF2VA, or to decode generated FL2VA audio: audio VAE → Executor `audio_vae`
 - Executor outputs decoded images/audio plus FPS, frame count, sampled latent, and a run report
 
+### Multi-segment sequence route
+
+The sequence route leaves the existing Director, Guide, and single-shot Executor unchanged:
+
+1. Create one Director node per shot and connect each `guide` to **DaSiWa MiniMax H3 Sequence Segment**.
+2. Set `run` per segment. When `run` is off, provide `source_images` (and optionally `source_audio`) or a matching disk cache.
+3. Give cached segments a stable `cache_key`. Change that key whenever their reference or source media changes.
+4. Add segment outputs to the autogrowing **DaSiWa MiniMax H3 Sequence Plan** in playback order.
+5. Connect the plan, CLIP, visual VAE, audio VAE, and the FL2VA/REF2VA models to **DaSiWa MiniMax H3 Sequence Executor**.
+
+The Executor provides:
+
+- lazy model routing for mixed FL2VA and REF2VA plans;
+- deterministic per-segment seeds (`seed + segment index + seed_offset`);
+- optional 5/22/39/56-frame synchronized AV latent continuity;
+- CPU-only retained handoff latents and model cleanup between segments;
+- local disk cache/resume under `output/dasiwa_h3_sequence_cache`;
+- cached or source passthrough for unselected segments;
+- concatenated `images` and `audio`, plus FPS, total frame count, and a JSON run report.
+- native 24 FPS output, matching MiniMax H3's fixed synchronized AV grid.
+
+All guides in one plan must use the same canvas. `cache_key` is deliberately explicit because loaded reference tensors do not retain a reliable content identity; reusing a key after media changes can load stale output. Cache files are local and are read with PyTorch's restricted weights-only loader.
+
 Important: the Guide node replaces and wraps ComfyUI's native `MiniMaxH3ImageToVideo` and `MiniMaxH3ReferenceToVideo` nodes. You do not add or wire those native nodes yourself — the Guide calls them internally based on the chosen mode.
 
 The Director has optional model sockets (`fl2va_model`, `ref2va_model`) for lazy loading: connect whichever model matches your active mode. The Guide refuses REF2VA without an audio VAE connected.
