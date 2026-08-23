@@ -174,7 +174,11 @@ app.registerExtension({
             saveLastFrameLabel.append(saveLastFrame, " Save last frame");
             const autoPlay = document.createElement("input");
             autoPlay.type = "checkbox";
-            autoPlay.checked = true;
+            this.properties ??= {};
+            autoPlay.checked = this.properties.autoplay ?? true;
+            autoPlay.addEventListener("change", () => {
+                this.properties.autoplay = autoPlay.checked;
+            });
             const autoPlayLabel = document.createElement("label");
             autoPlayLabel.style.cssText = "display:flex;align-items:center;gap:3px;margin-left:auto;white-space:nowrap;cursor:pointer";
             autoPlayLabel.append(autoPlay, " Autoplay");
@@ -250,6 +254,22 @@ app.registerExtension({
             };
             this.dasiwaVideoPreview = preview;
             this.dasiwaVideoPreviewWidget = previewWidget;
+            this.dasiwaFrameExportCheckboxes = { save_first_frame: saveFirstFrame, save_last_frame: saveLastFrame };
+            this.dasiwaAutoPlayCheckbox = autoPlay;
+            return result;
+        };
+
+        const originalOnConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const result = originalOnConfigure ? originalOnConfigure.apply(this, arguments) : undefined;
+            // widgets_values / properties are applied after onNodeCreated built the
+            // checkboxes, so their initial `checked` snapshot predates the restored state.
+            for (const [name, checkbox] of Object.entries(this.dasiwaFrameExportCheckboxes ?? {})) {
+                checkbox.checked = Boolean(this.widgets?.find((widget) => widget.name === name)?.value);
+            }
+            if (this.dasiwaAutoPlayCheckbox) {
+                this.dasiwaAutoPlayCheckbox.checked = this.properties?.autoplay ?? true;
+            }
             return result;
         };
 
