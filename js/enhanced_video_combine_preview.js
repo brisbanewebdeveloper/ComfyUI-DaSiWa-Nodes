@@ -68,6 +68,28 @@ function fitPreviewHeight(node) {
     node.graph?.setDirtyCanvas(true);
 }
 
+let videoCombineWidgetSchema = {};
+
+function sanitizeWidgetValues(node) {
+    for (const widget of node.widgets ?? []) {
+        const spec = videoCombineWidgetSchema[widget.name];
+        const def = Array.isArray(spec) ? spec[1] ?? {} : spec ?? {};
+        if (widget.type === "COMBO") {
+            const options = widget.options?.values ?? [];
+            if (options.length && !options.includes(widget.value)) {
+                widget.value = def.default ?? options[0];
+                widget.callback?.(widget.value);
+            }
+        } else if (widget.type === "BOOLEAN") {
+            if (typeof widget.value !== "boolean") {
+                const d = def.default;
+                widget.value = typeof d === "boolean" ? d : false;
+                widget.callback?.(widget.value);
+            }
+        }
+    }
+}
+
 function showHelpDialog() {
     const dialog = document.createElement("dialog");
     dialog.style.cssText = "max-width:620px;color:#ddd;background:#202225;border:1px solid #555;border-radius:8px;padding:18px;font:13px sans-serif;line-height:1.45";
@@ -101,9 +123,11 @@ app.registerExtension({
 
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
         const originalOnExecuted = nodeType.prototype.onExecuted;
+        videoCombineWidgetSchema = nodeData?.input?.required ?? {};
 
         nodeType.prototype.onNodeCreated = function () {
             const result = originalOnNodeCreated ? originalOnNodeCreated.apply(this, arguments) : undefined;
+            sanitizeWidgetValues(this);
             hideLegacyLogLevelWidget(this);
             hideFrameExportWidgets(this);
             const previewNode = this;

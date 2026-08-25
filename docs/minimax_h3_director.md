@@ -26,6 +26,8 @@ Since the last GitHub release (August 2026):
 - **Video thumbnail previews:** every uploaded video now extracts its first frame and displays it as a background behind the clip tile, replacing the generic icon. Makes it easy to tell references apart without opening each one.
 - **Cleaner toolbar:** consolidated into a single horizontal row with mode buttons on the left and Clear/Remove/? controls on the right; removed redundant bubble elements and pulsing glows for a quieter interface.
 - **Dark-blue audio lane accent:** distinguishes the audio lane visually from the Image/Video lane and the green "+ empty-slot" indicators.
+- **Sampling controls + external override sockets:** a new **Sampling** row exposes `sampler`, `scheduler`, `steps`, `shift_video` and `shift_audio` (persisted into the hidden `internal_execution` block, round-tripped through `timeline_data`). Five optional inputs (`external_sampler`, `external_scheduler`, `external_steps`, `external_shift_video`, `external_shift_audio`) let another node override them; precedence is external > internal > built-in default, and a connected socket disables the local fields with an "external sampling connected" note.
+- **Built-in live step preview:** the Director now decodes per-step frames itself (no KJ preview node needed) and streams them into its own **Preview & Output** panel. Toggle and limits live in the ☰ *Preview & Output options* menu: **live step preview** (default on, true bypass when off), **max resolution** (default 1024 px), **frames** (1 = still JPEG, >1 = animated WebP or NVENC H.264 MP4) and **fps**. Decoding precedence: `preview_tiny_vae` widget (a `models/vae_approx` combo rendered like a plain model selector — the Director's JS strips the optional socket's ring so no input dot shows, e.g. `taeh3.safetensors`, the H3 tiny decoder core's VAELoader cannot build) > `preview_vae` socket (full-quality `vae.decode()`) > core previewer > latent-to-RGB fallback. The media preview popup is a third narrower than before (400 px instead of 600 px).
 
 ### Earlier additions
 
@@ -391,6 +393,34 @@ The Guide is a thin adapter between your authored timeline and ComfyUI's native 
    - These feed downstream samplers and decoders exactly like any other H3 workflow.
 
 You never call the native MiniMax H3 nodes directly when using Director+Guide; the Guide abstracts that away.
+
+## Model chain: patching & preview
+
+The Director's `fl2va_model` and `ref2va_model` inputs are plain `MODEL` sockets, so any node that outputs `MODEL` can sit upstream of the Director — a LoRA loader, the **MiniMax H3 Cache** patcher, **Patch Comfy Kitchen Attention**, or a KJ `ModelPreviewOverrideKJ`. This is the same forward chain you already use:
+
+```
+Checkpoint.MODEL → LoRALoader.MODEL → [KJ.model → KJ.MODEL] → Director.fl2va_model
+Checkpoint.CLIP  → LoRALoader.clip  → Director.clip
+```
+
+Three rules keep the chain valid:
+
+1. **Forward chain only — never a loop.** A patcher's output feeds *into* the Director's model input; it must never come back out of the Director. The Director is a terminal media node (it emits `frame_rate`, `duration`, `images`, never `MODEL`), and a wire from the Director back into its own model input would be a graph `dependency_cycle`, which ComfyUI's validation rejects.
+2. **One loader per model, in mode order.** `select_execution_model` picks `ref2va_model` for REF2VA and `fl2va_model` otherwise; the active input must be connected (the unconnected twin may stay empty).
+3. **Type-safe wires.** ComfyUI only lets you connect type-compatible sockets, so `LoRA.MODEL → Director.fl2va_model` is legal but `LoRA.MODEL → Director.clip` is not. No name or type resolution happens at runtime — the socket you plugged in arrives as the keyword-argument named for that socket.
+
+### Sampling settings
+
+The five sampling fields (`sampler`, `scheduler`, `steps`, `shift_video`, `shift_audio`) live in the **Sampling** row of the node and persist in `internal_execution` (round-tripped through `timeline_data`), surviving reloads. Backend precedence: **external socket > internal UI value > built-in default** (`res_multistep` / `simple` / 25 / 11 / 4). Connect an `external_*` sampling input to override from another node; an empty/zero external value falls back to the internal value, and a connected socket disables the local fields with a note.
+
+### Built-in live step preview
+
+The Director decodes per-step denoising frames itself and streams them into its own **Preview & Output** panel — no preview node is required, and the default ComfyUI previewer (`--preview-method`) needs no enabling: the wrapper is independent of it.
+
+- **Toggle:** **live step preview** in the ☰ *Preview & Output options* menu (default on). When off the backend skips the whole decode path (no tiny-VAE decode, no `send_sync`) — a true bypass, not just a hidden pane.
+- **Limits:** `preview_max_resolution` (default 1024 px, 0 = full), `preview_frames` (1 = still JPEG; >1 = animated WebP, or NVENC H.264 MP4 when PyAV probes NVENC), `preview_fps` (default 12).
+- **Decoder precedence:** `preview_tiny_vae` combo widget (a `models/vae_approx` filename selector, e.g. `taeh3.safetensors` — the special H3 tiny decoder that core's `VAELoader` cannot build; rendered like a model selector, no input ring on the node edge) > `preview_vae` input socket (full-quality `vae.decode()`) > core latent previewer > latent-to-RGB fallback. The tiny-VAE path clamps output before uint8 because taeh3 output is not [0,1]-guaranteed. Implementation note: the widget must stay a **bare-list combo spec** — `(_vae_approx_options(), {"default": "none", ...})`, the same shape as core `VAELoader.vae_name`. The legacy `("STRING", {"combo": [...]})` tuple renders as a free-text field (no dropdown) in frontend v1.49.x. The hollow optional-input ring is removed **client-side**: the Director's JS (`install()` in `js/minimax_h3_director_v2.js`, run on node create + workflow load) sets the `preview_tiny_vae` socket's `shape = null` — a bare-list combo that is *optional* would otherwise draw a `HollowCircle` ring, while core's *required* `VAELoader.vae_name` draws none. A backend `socketless: True` option-dict key is ineffective on the legacy `INPUT_TYPES` path in v1.49.x (the frontend's `socketless` gate reads `widget.options`, which `addComboWidget` only ever populates with `{values, advanced, hidden}`), so the ring strip is the only reliable mechanism.
+- **KJ alternative:** a KJ `ModelPreviewOverrideKJ` in the chain remains a valid external preview. Because KJ's preview is a native `OUTER_SAMPLE` model wrapper — not a DOM hook on the graph sampler — its own widget also animates during the Director's internal-execution runs. Canonical wiring is unchanged: `Settings.MODEL → KJ.model → KJ.MODEL → Director.ref2va_model`.
 
 ## Dense prompting guide
 

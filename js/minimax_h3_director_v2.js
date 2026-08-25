@@ -7,57 +7,8 @@ const DEFAULT_BUILDER_STATE = mode => {
   }
   return { version: 1, mode: mode || "FL2VA", imd: "", soundscape: "", music: "", duration: 5, ref: { subject_defs: [], summary_types: ["reference generation"], summary_text: "", retention: [], style_line: "", detail: "", soundscape: "", music: "" } };
 };
-const DEFAULT_STATE = { version: 1, items: [], prompt_blocks: [], builder_state: null, resolution: null };
+const DEFAULT_STATE = { version: 1, items: [], prompt_blocks: [], builder_state: null, resolution: null, seed_control: { mode: "random", last_seed: null, recent: [] } };
 const MAX = { image: 9, video: 3, audio: 3, total: 12 };
-const DIRECTOR_NODE_ID = "DaSiWaMiniMaxH3Director";
-const LEGACY_DIRECTOR_NODE_ID = "MiniMaxH3Director";
-const DIRECTOR_MODES = new Set(["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA"]);
-
-function isLegacyTimeline(value) {
-  if (typeof value !== "string") return false;
-  try {
-    const state = JSON.parse(value);
-    return !!(state && typeof state === "object" && (
-      Array.isArray(state.items) ||
-      Array.isArray(state.prompt_blocks) ||
-      state.builder_state ||
-      state.resolution
-    ));
-  } catch {
-    return false;
-  }
-}
-
-function isLegacyDaSiWaDirector(node) {
-  if (!node || node.type !== LEGACY_DIRECTOR_NODE_ID) return false;
-  const inputNames = new Set((node.inputs || []).map(input => input?.name));
-  if (["fl2va_model", "ref2va_model", "external_prompt_overwrite", "external_width_overwrite"]
-    .some(name => inputNames.has(name))) {
-    return true;
-  }
-  const values = Array.isArray(node.widgets_values) ? node.widgets_values : [];
-  return DIRECTOR_MODES.has(values[0]) && values.some(isLegacyTimeline);
-}
-
-function migrateLegacyDaSiWaDirectors(graphData) {
-  const visited = new WeakSet();
-  let migrated = 0;
-  const visit = value => {
-    if (!value || typeof value !== "object" || visited.has(value)) return;
-    visited.add(value);
-    if (isLegacyDaSiWaDirector(value)) {
-      value.type = DIRECTOR_NODE_ID;
-      if (value.properties?.["Node name for S&R"] === LEGACY_DIRECTOR_NODE_ID) {
-        value.properties["Node name for S&R"] = DIRECTOR_NODE_ID;
-      }
-      migrated += 1;
-    }
-    for (const child of Object.values(value)) visit(child);
-  };
-  visit(graphData);
-  return migrated;
-}
-
 // H3's VAE emits 16px latent cells and the diffusion transformer patchifies
 // them in 2×2 groups, so both canvas edges must be divisible by 32.
 const MINIMAX_MULTIPLE = 32;
@@ -75,6 +26,168 @@ const REPOSITORY_URL = "https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/b
 const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "heic", "heif", "jpeg", "jpg", "jxl", "png", "tif", "tiff", "webp"]);
 const VIDEO_EXTENSIONS = new Set(["3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "mts", "ts", "webm", "wmv"]);
 const AUDIO_EXTENSIONS = new Set(["aac", "aif", "aiff", "alac", "amr", "ape", "caf", "flac", "m4a", "mka", "mp3", "oga", "ogg", "opus", "wav", "wave", "weba", "wma"]);
+const AUTOMATIC_SAVE_METADATA_KEYS = new Set(["model_hash", "text_positive", "text_negative", "text_steps", "text_cfg", "text_sampler", "text_scheduler", "text_seed", "text_model"]);
+const IMAGE_SAVE_OPTION_KEYS = new Set(["filename_prefix", "file_format", "compression"]);
+const VIDEO_SAVE_OPTION_KEYS = new Set(["filename_prefix", "codec", "container", "bit_depth", "quality", "pingpong", "crop_to_audio", "audio_codec", "audio_bitrate", "save_first_frame", "save_last_frame"]);
+// Pill / modal display names for each post-process stage (cleaner than the raw id).
+const PP_STAGE_LABELS = {
+  frame_interpolation: "Frame Interpolation",
+  torch_resize: "Torch Resize",
+  model_upscale: "Model Upscaler",
+  rtx_refiner: "RTX Upscaler & Refiner",
+  watermark: "Watermark",
+};
+const ppStageLabel = (id) => PP_STAGE_LABELS[id] || String(id || "").replaceAll("_", " ");
+// Full option spec for each post-process stage, mirroring the real standalone nodes.
+// The burger modal always renders every field below (filling missing keys with the
+// default), so a freshly-saved stage still exposes the complete option set.
+const PP_QUALITY_OPTIONS = ["Low", "Medium", "High", "Ultra"];
+const PP_STAGE_FIELDS = {
+  frame_interpolation: [
+    { key: "factor", type: "number", min: 1, max: 4, step: 0.5, default: 2 },
+    { key: "model", type: "modelFolder", folder: "frame_interpolation" },
+  ],
+  torch_resize: [
+    { key: "size_mode", type: "combo", options: ["Multiplier", "Target resolution"], default: "Multiplier" },
+    { key: "scale_multiplier", type: "number", min: 0.25, max: 8, step: 0.25, default: 2 },
+    { key: "interpolation", type: "combo", options: ["Nearest", "Bilinear", "Bicubic", "Area", "Lanczos"], default: "Lanczos" },
+  ],
+  model_upscale: [
+    { key: "model_name", type: "modelFolder", folder: "upscale_models" },
+  ],
+  rtx_refiner: [
+    { key: "denoise", type: "boolean", default: false },
+    { key: "denoise_quality", type: "combo", options: PP_QUALITY_OPTIONS, default: "Ultra" },
+    { key: "deblur", type: "boolean", default: false },
+    { key: "deblur_quality", type: "combo", options: PP_QUALITY_OPTIONS, default: "Ultra" },
+    { key: "upscale", type: "combo", options: ["Off", "VSR", "High Bitrate"], default: "VSR" },
+    { key: "upscale_quality", type: "combo", options: PP_QUALITY_OPTIONS, default: "Ultra" },
+    { key: "resize_type", type: "combo", options: ["Keep Ratio", "Manual", "Preset Ratio", "Scale", "Same Size"], default: "Scale" },
+    { key: "scale", type: "number", min: 1, max: 4, step: 0.05, default: 2.0 },
+    { key: "megapixels", type: "number", min: 0.01, max: 64, step: 0.01, default: 2.0 },
+    { key: "width", type: "number", min: 64, max: 8192, step: 8, default: 1920 },
+    { key: "height", type: "number", min: 64, max: 8192, step: 8, default: 1080 },
+    { key: "divisible_by", type: "combo", options: ["8", "16", "32", "64", "128"], default: "8" },
+    { key: "ratio_preset", type: "combo", options: ["1:1", "4:3", "3:2", "16:9", "21:9"], default: "16:9" },
+    { key: "resize_method", type: "combo", options: ["Center Crop (Fill)", "Letterbox (Fit)"], default: "Center Crop (Fill)" },
+    { key: "device_id", type: "number", min: 0, max: 8, step: 1, default: 0 },
+    { key: "empty_cache", type: "boolean", default: false },
+    { key: "use_mmap", type: "boolean", default: false },
+    { key: "auto_unload_models", type: "boolean", default: true },
+  ],
+  watermark: [
+    { key: "watermark_path", type: "imagePicker" },
+    { key: "position", type: "combo", options: ["bottom-right", "bottom-left", "top-right", "top-left", "center"], default: "bottom-right" },
+  ],
+};
+// Saver option specs (image / video) for the save-node gear, same field-list format.
+const PP_IMAGE_SAVE_FIELDS = [
+  { key: "filename_prefix", type: "text", default: "Director" },
+  { key: "file_format", type: "combo", options: ["webp", "png"], default: "webp" },
+  { key: "compression", type: "number", min: 0, max: 100, step: 1, default: 15 },
+];
+const PP_VIDEO_SAVE_FIELDS = [
+  { key: "filename_prefix", type: "text", default: "Director/video" },
+  { key: "codec", type: "combo", options: ["Auto", "AV1", "VP9", "H.265 (HEVC)", "H.264"], default: "Auto" },
+  { key: "container", type: "combo", options: ["Auto", "WebM", "MKV", "MP4", "Animated WebP", "Animated AVIF"], default: "Auto" },
+  { key: "bit_depth", type: "combo", options: ["Auto", "8-bit", "10-bit"], default: "Auto" },
+  { key: "quality", type: "number", min: 0, max: 51, step: 1, default: 20 },
+  { key: "pingpong", type: "boolean", default: false },
+  { key: "crop_to_audio", type: "boolean", default: false },
+  { key: "audio_codec", type: "combo", options: ["Auto", "AAC", "Opus", "MP3"], default: "Auto" },
+  { key: "audio_bitrate", type: "combo", options: ["64k", "96k", "128k", "160k", "192k", "256k", "320k"], default: "192k" },
+  { key: "save_first_frame", type: "boolean", default: false },
+  { key: "save_last_frame", type: "boolean", default: false },
+];
+// Tuning for the MiniMax H3 Cache optimization (opened from its pill), mirroring the
+// standalone DaSiWa "MiniMax H3 Cache" node.
+const PP_H3_CACHE_FIELDS = [
+  { key: "reuse_threshold", type: "number", min: 0, max: 1, step: 0.01, default: 0.05 },
+  { key: "start_percent", type: "number", min: 0, max: 1, step: 0.01, default: 0.15 },
+  { key: "end_percent", type: "number", min: 0, max: 1, step: 0.01, default: 0.90 },
+  { key: "max_steps", type: "number", min: 1, max: 10, step: 1, default: 2 },
+  { key: "device", type: "combo", options: ["auto", "cuda", "cpu"], default: "auto" },
+  { key: "verbose", type: "boolean", default: false },
+];
+// MiniMax H3 sampling contract (comfy.samplers KSamplerSelect/BasicScheduler names).
+const SAMPLER_OPTIONS = ["euler", "euler_ancestral", "euler_ancestral_cfg_pp", "heun", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_2m_sde_gpu", "dpmpp_2s_ancestral", "dpmpp_sde", "lms", "dpm_2", "res_multistep", "res_multistep_cfg_pp", "res_multistep_ancestral", "res_multistep_ancestral_cfg_pp", "uni_pc"];
+const SCHEDULER_OPTIONS = ["simple", "sgm_uniform", "karras", "exponential", "ddim_uniform", "beta", "normal", "linear_quadratic", "kl_optimal"];
+// Built-in live step-preview settings (rendered inside the ☰ "Preview & Output options" modal).
+const PREVIEW_OPTION_FIELDS = [
+  { key: "live_step_preview", type: "boolean", default: true },
+  { key: "preview_max_resolution", type: "number", default: 1024, min: 0, max: 8192 },
+  { key: "preview_frames", type: "number", default: 1, min: 1, max: 32 },
+  { key: "preview_fps", type: "number", default: 12, min: 1, max: 60 },
+];
+// Fetch a ComfyUI model-folder listing (e.g. "upscale_models", "frame_interpolation").
+async function ppLoadModelList(folder) {
+  try {
+    const res = await fetch(api.apiURL(`/models/${encodeURIComponent(folder)}`));
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data.map(String) : [];
+  } catch { return []; }
+}
+// Fetch the ComfyUI input-folder image listing (the DaSiWa route registered by
+// nodes/input_images.py). Used to feed the watermark picker with real images.
+async function ppLoadInputImages() {
+  try {
+    const res = await fetch(api.apiURL("/dasiwa/input-images"));
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.images) ? data.images.map(String) : [];
+  } catch { return []; }
+}
+// Build a "select from the ComfyUI input folder" control: a dropdown fed by the
+// input-folder listing, a live thumbnail preview of the chosen image, and an
+// upload button that drops a new image into the input folder and selects it.
+// Sets target[key] as the user interacts; returns immediately (list loads async).
+function ppImagePicker(field, key, target, inputStyle, currentValue) {
+  const box = document.createElement("div"); box.style.cssText = "display:flex;flex-direction:column;gap:5px";
+  const row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;align-items:center";
+  const select = document.createElement("select"); select.style.cssText = inputStyle + ";flex:1;min-width:0"; select.disabled = true;
+  const ph = document.createElement("option"); ph.value = "(loading…)"; ph.textContent = "(loading…)"; ph.selected = true; select.append(ph);
+  const uploadBtn = document.createElement("button"); uploadBtn.textContent = "Upload"; uploadBtn.title = "Upload a watermark image into the ComfyUI input folder";
+  uploadBtn.style.cssText = "padding:3px 9px;background:rgba(74,144,217,.15);border:1px solid rgba(74,144,217,.4);border-radius:4px;color:#a8d4ff;cursor:pointer;font-size:11px;white-space:nowrap";
+  row.append(select, uploadBtn);
+  const preview = document.createElement("div");
+  const renderPreview = (path) => {
+    preview.innerHTML = ""; if (!path) return;
+    const img = document.createElement("img"); img.src = viewUrl(path); img.style.cssText = "max-width:140px;max-height:64px;object-fit:contain;border:1px solid #2f5478;border-radius:4px;background:#080d11;padding:2px";
+    const cap = document.createElement("span"); cap.textContent = path; cap.style.cssText = "display:block;font-size:9px;color:#6fa8e0;margin-top:2px";
+    preview.append(img, cap);
+  };
+  const populate = (images) => {
+    select.innerHTML = "";
+    const opts = images.length ? images : ["(no images in input folder)"];
+    for (const opt of opts) { const o = document.createElement("option"); o.value = opt; o.textContent = opt; if (opt === currentValue) o.selected = true; select.append(o); }
+    if (currentValue && !images.includes(currentValue)) { const o = document.createElement("option"); o.value = currentValue; o.textContent = `${currentValue} (current)`; o.selected = true; select.append(o); }
+    select.disabled = false;
+    select.onchange = () => { target[key] = select.value; renderPreview(select.value); };
+    renderPreview(select.value);
+  };
+  const refresh = () => ppLoadInputImages().then(populate).catch(() => populate([]));
+  const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
+  uploadBtn.onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const file = fileInput.files[0]; fileInput.value = ""; if (!file) return;
+    uploadBtn.disabled = true;
+    try {
+      const rel = await uploadFile(file, uploadBtn);
+      await refresh();
+      if (Array.from(select.options).some(o => o.value === rel)) select.value = rel;
+      target[key] = rel; renderPreview(rel);
+      uploadBtn.textContent = "Upload";
+    } catch {
+      uploadBtn.textContent = "Failed";
+    } finally {
+      uploadBtn.disabled = false;
+    }
+  };
+  box.append(row, preview, fileInput);
+  field.append(box);
+  void refresh();
+}
 let cssInstalled = false;
 
 function installStyles() {
@@ -86,14 +199,23 @@ function installStyles() {
     .ds-h3 button{background:#202b35;color:#dbe7f0;border:1px solid #40515e;border-radius:4px;padding:4px 7px;cursor:pointer}.ds-h3 button:hover{background:#2c3c49}.ds-h3-lane-add{position:absolute;right:6px;z-index:3;width:22px;height:22px;padding:0!important;border-radius:50%!important;font-size:17px;line-height:18px;background:rgba(70,150,105,.3)!important;border-color:rgba(126,210,157,.75)!important;color:#bff3d0!important}
     .ds-h3-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.ds-h3-modebar{display:flex;gap:4px;padding:4px;background:#0d1217;border:1px solid #344452;border-radius:6px}.ds-h3-modebar button{padding:4px 9px!important;border-radius:999px!important;background:transparent!important;color:#9fb3c2!important}.ds-h3-modebar button:hover{background:rgba(126,235,167,.10)!important;box-shadow:0 0 10px rgba(126,235,167,.5)}.ds-h3-modebar button.active{color:#efe6ff!important;border-color:rgba(177,128,255,.8)!important;box-shadow:0 0 10px rgba(151,91,255,.6);font-weight:700}.ds-h3-clear-btn,.ds-h3-remove-btn{padding:3px 7px!important;font-size:11px;border-radius:999px!important}.ds-h3-modebar .ds-h3-clear-btn{background:rgba(255,100,100,.08)!important;color:#ffb0b0!important;border:1px solid rgba(255,100,100,.35)!important}.ds-h3-modebar .ds-h3-remove-btn{background:rgba(255,150,60,.08)!important;color:#ffcfab!important;border:1px solid rgba(255,150,60,.3)!important}.ds-h3-modebar .ds-h3-clear-btn:hover{background:rgba(255,100,100,.35)!important;color:#ffe2e2!important;border-color:rgba(255,100,100,.95)!important;box-shadow:0 0 14px rgba(255,100,100,.75)}.ds-h3-modebar .ds-h3-remove-btn:hover{background:rgba(255,150,60,.35)!important;color:#ffeadb!important;border-color:rgba(255,150,60,.95)!important;box-shadow:0 0 14px rgba(255,150,60,.75)}.ds-h3-modebar .ds-h3-clear-btn-empty{opacity:.45}.ds-h3-modebar .ds-h3-clear-btn-empty:hover{opacity:1}.ds-h3-prompt{width:100%;min-height:88px;box-sizing:border-box;background:#0d1217;color:#e5eef4;border:1px solid #40515e;border-radius:4px;padding:7px;resize:vertical}.ds-h3-prompt-panel{width:100%;box-sizing:border-box;border:0;border-radius:0;padding:0;display:flex;flex-direction:column;gap:6px;background:transparent}.ds-h3-status{min-height:16px;color:#f3c67a}.ds-h3-info-field{box-sizing:border-box;min-height:28px;border:1px solid #40515e;border-radius:4px;padding:6px 7px;background:#0d1217}.ds-h3-status.error{color:#ff6f6f;font-weight:700}.ds-h3-small{font-size:11px;color:#9fb3c2}.ds-h3-ruler{position:relative;height:19px;color:#8fa3b2;font-size:10px;white-space:nowrap;overflow:hidden}.ds-h3-ruler span{position:absolute;top:1px;border-left:1px solid #587084;padding-left:2px;height:16px}.ds-h3-track{position:relative;min-height:280px;max-width:100%;overflow-x:auto;overflow-y:hidden;background:#0b1015;border:1px solid #344452;border-radius:5px;padding:7px 6px 6px}.ds-h3-track::before{content:none}.ds-h3-track-inner{position:relative;min-width:100%;height:204px;overflow:visible;background:repeating-linear-gradient(90deg,#111a21 0,#111a21 49px,#1b2933 50px)}.ds-h3-track-inner::after{content:'';position:absolute;left:var(--insert-x,-8px);top:0;height:204px;border-left:2px solid #f3c67a;pointer-events:none}.ds-h3-track-inner.over{outline:2px solid #8dd7ff;outline-offset:-2px}.ds-h3-timeline-lane{position:absolute;left:0;right:0;height:120px;box-sizing:border-box;border-bottom:1px solid #344452;cursor:pointer}.ds-h3-empty-slot{position:absolute;top:21px;height:88px;box-sizing:border-box;border:1px dashed #587084;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#7890a0;font-size:10px;pointer-events:none}.ds-h3-timeline-lane.disabled .ds-h3-empty-slot{display:none}.ds-h3-timeline-lane.visual{top:0;background:rgba(17,30,39,.72)}.ds-h3-timeline-lane.audio{top:120px;background:rgba(22,49,36,.55)}.ds-h3-timeline-lane.selected{box-shadow:inset 0 0 0 2px #8dd7ff}.ds-h3-timeline-lane.disabled{background:rgba(51,55,60,.72);filter:grayscale(1);cursor:not-allowed}.ds-h3-timeline-lane.disabled::after{content:"Not supported by the selected mode";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#a1a8ad;font-size:11px;font-weight:600;background:rgba(0,0,0,.35);pointer-events:none}.ds-h3-lane-label{position:absolute;left:5px;top:2px;color:#8fa3b2;font-size:10px;text-transform:uppercase;pointer-events:none;z-index:1}.ds-h3-grip{position:absolute;top:0;width:11px;height:100%;cursor:ew-resize;background:rgba(255,255,255,.22);z-index:4}.ds-h3-grip.left{left:0;border-right:1px solid rgba(255,255,255,.65)}.ds-h3-grip.right{right:0;border-left:1px solid rgba(255,255,255,.65)}.ds-h3-clip{position:absolute;top:18px;height:48px;min-width:64px;box-sizing:border-box;border:1px solid #73c7ef;border-radius:4px;background:#1b4558;color:#e5eef4;padding:6px 14px 19px;cursor:grab;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-h3-clip.image,.ds-h3-clip.video{min-width:112px!important;width:112px!important;height:112px;top:7px}.ds-h3-clip.audio{border-color:#7ecf9d;background:#254b38;top:7px;height:112px}.ds-h3-waveform{position:absolute;inset:22px 12px 55px;width:calc(100% - 24px);height:calc(100% - 77px);pointer-events:none;opacity:.9}.ds-h3-crop-marker,.ds-h3-audio-crop-marker{position:absolute;top:20px;bottom:18px;width:4px;background:#fff;box-shadow:0 0 4px #000;cursor:ew-resize;z-index:6}.ds-h3-crop-marker.start,.ds-h3-audio-crop-marker.start{background:#f3c67a}.ds-h3-crop-marker.end,.ds-h3-audio-crop-marker.end{background:#8dd7ff;transform:translateX(-4px)}.ds-h3-crop-readout{position:absolute;left:14px;right:14px;bottom:3px;font-size:10px;line-height:12px;color:#d9f5e2;background:rgba(0,0,0,.36);pointer-events:none;text-align:center;overflow:hidden;white-space:nowrap}.ds-h3-clip-close{position:absolute!important;right:2px;top:2px;width:18px;height:18px;padding:0!important;line-height:15px!important;font-size:16px;color:#fff!important;background:rgba(105,28,28,.9)!important;border-color:#f08080!important;z-index:5}.ds-h3-clip.video{border-color:#b887d8;background:#432e52}.ds-h3-clip.text{border-color:#83c98a;background:#27442d}
   `;
-  style.textContent += `.ds-h3-preview-overlay{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;background:rgba(8,10,14,.6)}.ds-h3-preview-panel{width:min(600px,90vw);max-height:85vh;display:flex;flex-direction:column;background:#111820;border:1px solid #40515e;border-radius:10px;overflow:hidden;box-shadow:0 8px 32px #000}.ds-h3-preview-header,.ds-h3-preview-meta{padding:8px 12px;background:#0d1217;color:#dbe7f0}.ds-h3-preview-header{display:flex;justify-content:space-between;border-bottom:1px solid #344452}.ds-h3-preview-body{padding:12px;background:#090d11;display:flex;justify-content:center}.ds-h3-preview-media{max-width:100%;max-height:40vh;object-fit:contain}.ds-h3-preview-controls{padding:8px 12px;background:#0d1217;display:flex;flex-direction:column;gap:6px}.ds-h3-preview-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:#9fb3c2}.ds-h3-preview-row input[type="number"]{width:60px;padding:2px 4px;background:#111a21;color:#dbe7f0;border:1px solid #40515e;border-radius:3px}.ds-h3-preview-row input[type="text"],.ds-h3-preview-row textarea{flex:1;min-width:150px;padding:3px 5px;background:#111a21;color:#dbe7f0;border:1px solid #40515e;border-radius:3px;font-size:11px}.ds-h3-preview-row textarea{resize:vertical;min-height:30px}.ds-h3-preview-meta{font-size:11px;color:#9fb3c2;border-top:1px solid #344452}`;
+  style.textContent += `.ds-h3-preview-overlay{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;background:rgba(8,10,14,.6)}.ds-h3-preview-panel{width:min(400px,90vw);max-height:85vh;display:flex;flex-direction:column;background:#111820;border:1px solid #40515e;border-radius:10px;overflow:hidden;box-shadow:0 8px 32px #000}.ds-h3-preview-header,.ds-h3-preview-meta{padding:8px 12px;background:#0d1217;color:#dbe7f0}.ds-h3-preview-header{display:flex;justify-content:space-between;border-bottom:1px solid #344452}.ds-h3-preview-body{padding:12px;background:#090d11;display:flex;justify-content:center}.ds-h3-preview-media{max-width:100%;max-height:40vh;object-fit:contain}.ds-h3-preview-controls{padding:8px 12px;background:#0d1217;display:flex;flex-direction:column;gap:6px}.ds-h3-preview-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:#9fb3c2}.ds-h3-preview-row input[type="number"]{width:60px;padding:2px 4px;background:#111a21;color:#dbe7f0;border:1px solid #40515e;border-radius:3px}.ds-h3-preview-row input[type="text"],.ds-h3-preview-row textarea{flex:1;min-width:150px;padding:3px 5px;background:#111a21;color:#dbe7f0;border:1px solid #40515e;border-radius:3px;font-size:11px}.ds-h3-preview-row textarea{resize:vertical;min-height:30px}.ds-h3-preview-meta{font-size:11px;color:#9fb3c2;border-top:1px solid #344452}`;
   style.textContent += `
     .ds-h3-docs{font-weight:700;min-width:26px;padding:4px 8px!important}.ds-h3-ruler{display:none}.ds-h3-clip.video{width:var(--clip-width)!important;min-width:180px!important}.ds-h3-clip-identity{position:absolute;left:5px;top:4px;z-index:5;padding:1px 4px;border-radius:3px;background:rgba(0,0,0,.65);color:#fff;font-size:10px;font-weight:700;pointer-events:none}.ds-h3-video-scale{position:absolute;left:12px;right:12px;top:27px;height:44px;pointer-events:none;opacity:.8;background:repeating-linear-gradient(90deg,rgba(216,174,245,.82) 0,rgba(216,174,245,.82) 1px,transparent 1px,transparent 12px),linear-gradient(transparent 48%,rgba(216,174,245,.7) 49%,rgba(216,174,245,.7) 52%,transparent 53%)}.ds-h3-prompt-panel{min-height:120px;overflow:visible}.ds-h3-prompt-field{position:relative;flex:none;min-height:90px}.ds-h3-prompt-panel .ds-h3-prompt-field>.ds-h3-prompt{height:100%;min-height:0;padding-bottom:16px;resize:none}.ds-h3-prompt-field-resizer{position:absolute;bottom:0;left:0;width:100%;height:12px;cursor:ns-resize;display:flex;justify-content:center;align-items:flex-end;padding-bottom:4px;box-sizing:border-box;z-index:2;touch-action:none}.ds-h3-prompt-field-resizer::after{content:"";width:40px;height:4px;background:rgba(255,255,255,.16);border-radius:2px}.ds-h3-prompt-field-resizer:hover::after,.ds-h3-prompt-field-resizer.active::after{background:rgba(141,215,255,.8)}
-    .ds-h3-video-stream-controls{position:absolute;right:5px;top:4px;z-index:7;display:flex;gap:3px}.ds-h3-clip.selected .ds-h3-video-stream-controls{right:24px}.ds-h3-video-stream-controls button{min-width:24px;padding:3px 6px!important;font-size:11px;line-height:14px;background:rgba(10,17,23,.85)!important}.ds-h3-video-stream-controls button.active{background:rgba(125,82,188,.9)!important;border-color:#d4b3ff;color:#fff}.ds-h3-lock-icon{position:absolute;right:4px;top:4px;z-index:8;font-size:13px;color:#f3c67a;text-shadow:0 0 4px rgba(0,0,0,.9);pointer-events:none}.ds-h3-edit-btn{position:absolute;right:5px;bottom:5px;z-index:7;font-size:14px;padding:3px 6px!important;border-radius:3px!important;background:rgba(20,35,45,.8)!important;border-color:rgba(100,150,180,.5)!important}.ds-h3-empty-slot{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#7eeba7;border:1.5px dashed #7eeba7;border-radius:6px;cursor:pointer;box-sizing:border-box;background:rgba(126,235,167,.06);transition:all .15s ease;pointer-events:auto}.ds-h3-empty-slot:hover{background:rgba(126,235,167,.18);border-color:#bff3d0;color:#d4ffe1;box-shadow:0 0 14px rgba(126,235,167,.45);transform:scale(1.02)}.ds-h3-timeline-lane.disabled .ds-h3-empty-slot{opacity:.15;cursor:not-allowed;pointer-events:none}.ds-h3-timeline-lane.audio .ds-h3-empty-slot{color:#5b8dd9;border-color:#5b8dd9;background:rgba(91,141,217,.06)}.ds-h3-timeline-lane.audio .ds-h3-empty-slot:hover{background:rgba(91,141,217,.18);border-color:#8bb4f0;color:#b3d4fc;box-shadow:0 0 14px rgba(91,141,217,.45)}.ds-h3-prompt-panel.disabled{opacity:.5;filter:grayscale(.55)}.ds-h3-prompt-panel.disabled textarea,.ds-h3-prompt-panel.disabled input,.ds-h3-prompt-panel.disabled button{pointer-events:none}.ds-h3-ext-note{font-weight:600;color:#7ec8f0}.ds-h3-prompt-mode-btn{white-space:nowrap}.ds-h3-modebar .ds-h3-prompt-mode-btn.active{background:rgba(126,235,167,.14)!important;color:#d7ffe3!important;border-color:rgba(126,235,167,.9)!important;box-shadow:0 0 8px rgba(126,235,167,.45);font-weight:700}.ds-h3-global-prompt{min-height:140px}
+    .ds-h3-video-stream-controls{position:absolute;right:5px;top:4px;z-index:7;display:flex;gap:3px}.ds-h3-clip.selected .ds-h3-video-stream-controls{right:24px}.ds-h3-video-stream-controls button{min-width:24px;padding:3px 6px!important;font-size:11px;line-height:14px;background:rgba(10,17,23,.85)!important}.ds-h3-video-stream-controls button.active{background:rgba(125,82,188,.9)!important;border-color:#d4b3ff;color:#fff}.ds-h3-lock-icon{position:absolute;right:4px;top:4px;z-index:8;font-size:13px;color:#f3c67a;text-shadow:0 0 4px rgba(0,0,0,.9);pointer-events:none}.ds-h3-edit-btn{position:absolute;right:5px;bottom:5px;z-index:7;font-size:14px;padding:3px 6px!important;border-radius:3px!important;background:rgba(20,35,45,.8)!important;border-color:rgba(100,150,180,.5)!important}.ds-h3-empty-slot{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#7eeba7;border:1.5px dashed #7eeba7;border-radius:6px;cursor:pointer;box-sizing:border-box;background:rgba(126,235,167,.06);transition:all .15s ease;pointer-events:auto}.ds-h3-empty-slot:hover{background:rgba(126,235,167,.18);border-color:#bff3d0;color:#d4ffe1;box-shadow:0 0 14px rgba(126,235,167,.45);transform:scale(1.02)}.ds-h3-timeline-lane.disabled .ds-h3-empty-slot{opacity:.15;cursor:not-allowed;pointer-events:none}.ds-h3-timeline-lane.audio .ds-h3-empty-slot{color:#5b8dd9;border-color:#5b8dd9;background:rgba(91,141,217,.06)}.ds-h3-timeline-lane.audio .ds-h3-empty-slot:hover{background:rgba(91,141,217,.18);border-color:#8bb4f0;color:#b3d4fc;box-shadow:0 0 14px rgba(91,141,217,.45)}.ds-h3-prompt-panel.disabled{opacity:.5;filter:grayscale(.55)}.ds-h3-prompt-panel.disabled textarea,.ds-h3-prompt-panel.disabled input,.ds-h3-prompt-panel.disabled button{pointer-events:none}.ds-h3-ext-note{font-weight:600;color:#7ec8f0}.ds-h3-prompt-mode-btn{white-space:nowrap}.ds-h3-pp-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 10px!important;border-radius:999px!important;background:transparent!important;color:#9fb3c2!important;font-size:11px!important;font-family:inherit;border:1px solid #40515e!important;cursor:pointer;white-space:nowrap;transition:all .16s ease}.ds-h3-pp-btn:hover{background:rgba(74,144,217,.12)!important;border-color:rgba(74,144,217,.5)!important}.ds-h3-pp-btn.active{background:rgba(74,144,217,.18)!important;color:#a8d4ff!important;border-color:rgba(74,144,217,.85)!important;box-shadow:0 0 12px rgba(74,144,217,.5);font-weight:700}.ds-h3-pp-summary{color:#6fa8e0;font-size:10px!important;font-weight:400!important}.ds-h3-pp-burger{display:inline-flex;align-items:center;justify-content:center;min-width:16px;min-height:16px;padding:0 4px!important;font-size:9px!important;background:rgba(74,144,217,.22)!important;border:1px solid rgba(74,144,217,.45)!important;border-radius:3px!important;color:#cfe6ff!important;cursor:pointer;white-space:nowrap;margin-left:2px}.ds-h3-pp-btn.active .ds-h3-pp-burger{background:rgba(74,144,217,.35)!important;border-color:rgba(74,144,217,.7)!important}.ds-h3-modebar .ds-h3-prompt-mode-btn.active{background:rgba(126,235,167,.14)!important;color:#d7ffe3!important;border-color:rgba(126,235,167,.9)!important;box-shadow:0 0 8px rgba(126,235,167,.45);font-weight:700}.ds-h3-global-prompt{min-height:140px}
   `;
   style.textContent += `.ds-h3-res-field{display:flex;flex-direction:column;gap:3px;min-width:150px;font-size:10px;font-weight:600;letter-spacing:.4px;color:#8fb3d6;text-transform:uppercase}.ds-h3-res-control{display:flex;position:relative}.ds-h3-res-select{position:absolute;inset:0;width:100%;opacity:0;pointer-events:none}.ds-h3-res-btn{width:100%;display:flex;align-items:center;gap:8px;box-sizing:border-box;min-height:30px;padding:0 9px;background:#16283a;border:1px solid #2f5478;border-radius:5px;color:#d6ebff;font:12px system-ui,sans-serif;cursor:pointer;text-align:left;transition:background .16s ease,border-color .16s ease,box-shadow .16s ease}.ds-h3-res-btn:hover:not(:disabled){background:#1d3550;border-color:#3f79b4;box-shadow:0 0 9px rgba(74,144,217,.28)}.ds-h3-res-btn:focus-visible{outline:none;border-color:#4f97d6;box-shadow:0 0 0 2px rgba(74,144,217,.35)}.ds-h3-res-btn:disabled{opacity:.4;cursor:not-allowed}.ds-h3-res-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-h3-res-caret{flex:none;color:#6fa8e0;font-size:9px;transition:transform .18s ease}.ds-h3-res-btn[aria-expanded="true"] .ds-h3-res-caret{transform:rotate(180deg)}.ds-h3-res-swatch{flex:none;display:flex;align-items:center;justify-content:center;width:20px;height:20px}.ds-h3-res-swatch-box{background:#3f79b4;border:1px solid #9fd0ff;border-radius:1px;box-shadow:inset 0 0 4px rgba(0,0,0,.4);transition:background .16s ease,border-color .16s ease,box-shadow .16s ease}.ds-h3-res-btn:hover:not(:disabled) .ds-h3-res-swatch-box,.ds-h3-res-btn[aria-expanded="true"] .ds-h3-res-swatch-box{background:#5b9be0;border-color:#c4e4ff}.ds-h3-res-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:2500;min-width:100%;max-height:290px;overflow-y:auto;padding:4px;background:#101c28;border:1px solid #35618f;border-radius:6px;box-shadow:0 10px 30px rgba(0,0,0,.65);display:none}.ds-h3-res-menu.open{display:block}.ds-h3-res-menu.grid.open{display:grid;gap:2px}.ds-h3-res-menu.grid .ds-h3-res-item-label{white-space:normal;overflow-wrap:anywhere}.ds-h3-res-menu[data-place="up"]{top:auto;bottom:calc(100% + 4px)}.ds-h3-res-item{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;padding:6px 9px;background:transparent;border:0;border-radius:4px;color:#cfe3f7;font:12px system-ui,sans-serif;cursor:pointer;text-align:left;transition:background .12s ease,color .12s ease,box-shadow .12s ease}.ds-h3-res-item:hover{background:rgba(74,144,217,.24);color:#fff;box-shadow:inset 0 0 0 1px rgba(96,168,232,.35)}.ds-h3-res-item.active{background:rgba(74,144,217,.34);color:#fff;font-weight:600;box-shadow:inset 0 0 0 1px rgba(120,190,255,.55)}.ds-h3-res-item.active:hover{background:rgba(74,144,217,.44)}.ds-h3-res-item-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-h3-res-num{width:100%;box-sizing:border-box;height:30px;padding:0 8px;background:#16283a;border:1px solid #2f5478;border-radius:5px;color:#d6ebff;font:12px system-ui,sans-serif;transition:background .16s ease,border-color .16s ease,box-shadow .16s ease}.ds-h3-res-num:hover:not(:disabled){background:#1d3550;border-color:#3f79b4}.ds-h3-res-num:focus{outline:none;border-color:#4f97d6;box-shadow:0 0 0 2px rgba(74,144,217,.3)}.ds-h3-res-num:disabled{opacity:.4;cursor:not-allowed}.ds-h3-res-menu.cols.open{display:flex;align-items:flex-start;gap:7px}.ds-h3-res-col{display:flex;flex-direction:column;gap:2px;min-width:84px}.ds-h3-res-col-title{font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#6fa8e0;padding:1px 9px 3px;border-bottom:1px solid #2f5478;margin-bottom:2px}.ds-h3-res-menu.cols .ds-h3-res-item{white-space:nowrap}`;
   document.head.appendChild(style);
 }
+
+// Built-in live step preview: the backend OUTER_SAMPLE wrapper ships per-step
+// frames to the Director's own Preview & Output panel. Route each event to the
+// matching node's live slot (node_id === ComfyUI node id === unique_id).
+api.addEventListener("dasiwa_director_v2_preview", e => {
+  const d = e.detail || e.data || {};
+  const n = app.graph?._nodes?.find(x => String(x.id) === String(d.node_id));
+  n?.__dasiwaH3ShowStepPreview?.({ src: `data:${d.mime};base64,${d.image}`, mime: d.mime, w: d.w, h: d.h, step: d.step, total: d.total, fps: d.fps ?? 12, frames: d.frames });
+});
 
 function parseState(value) { try { const s = JSON.parse(value || "{}"); return { ...DEFAULT_STATE, ...s, items: Array.isArray(s.items) ? s.items : [], prompt_blocks: Array.isArray(s.prompt_blocks) ? s.prompt_blocks : [] }; } catch { return structuredClone(DEFAULT_STATE); } }
 function textValue(value) { return typeof value === "string" ? value.trim() : ""; }
@@ -113,6 +235,10 @@ function legacyPrompt(state, widgetPrompt) {
   return [global, ...blocks.filter(block => block?.enabled !== false).map(block => textValue(block?.text)).filter(Boolean)].filter(Boolean).join("\n");
 }
 function viewUrl(path) { return api.apiURL(`/view?filename=${encodeURIComponent(path)}&type=input`); }
+function savedViewUrl(entry) {
+  const params = new URLSearchParams({ filename: entry.filename, subfolder: entry.subfolder || "", type: entry.type || "output" });
+  return api.apiURL(`/view?${params}`);
+}
 function count(state, type) { return state.items.filter(i => i.enabled !== false && i.type === type).length; }
 function idFor(type, n) { return `${type}-${Date.now()}-${n}`; }
 function mediaTypeFor(file) {
@@ -209,6 +335,12 @@ function install(node) {
   node.__dasiwaH3Installed = true;
   installStyles();
   if (!window.__dasiwaH3MenuCloseInstalled) { window.__dasiwaH3MenuCloseInstalled = true; window.addEventListener("pointerdown", event => { const open = document.querySelector(".ds-h3-res-menu.open"); if (open && !open.parentElement.contains(event.target)) open.classList.remove("open"); }, true); }
+  // preview_tiny_vae ships as a bare-list combo (the VAELoader look). As an
+  // optional socket LiteGraph would still draw a hollow ring on the node edge
+  // (core's required VAELoader.vae_name gets none). Null the socket shape so
+  // the combo reads as a plain model selector; the socket stays present and
+  // connectable, only the ring is gone. Runs on nodeCreated + loadedGraphNode.
+  for (const input of node.inputs || []) if (input.name === "preview_tiny_vae") { input.shape = null; break; }
   const dataWidget = node.widgets?.find(w => w.name === "timeline_data");
   if (!dataWidget) return;
   dataWidget.hidden = true; dataWidget.options = { ...(dataWidget.options || {}), hidden: true };
@@ -221,7 +353,16 @@ function install(node) {
     const height = Number(value);
     if (Number.isFinite(height) && height >= 60) fieldHeights[key] = height;
   }
-  const mode = () => node.widgets?.find(w => w.name === "mode")?.value || "FL2VA";
+  const DEFAULT_POSTPROCESS_RECIPE = [{ id: "frame_interpolation", enabled: false, factor: 2, model: "rife_v4.26.safetensors" }, { id: "torch_resize", enabled: false, size_mode: "Multiplier", scale_multiplier: 2, interpolation: "Lanczos" }, { id: "model_upscale", enabled: false, model_name: "2x-AnimeSharpV4_RCAN.safetensors" }, { id: "rtx_refiner", enabled: false, upscale: "VSR", upscale_quality: "Ultra" }, { id: "watermark", enabled: false, watermark_path: "", position: "bottom-right" }];
+  state.postprocess_recipe = Array.isArray(state.postprocess_recipe) ? state.postprocess_recipe : DEFAULT_POSTPROCESS_RECIPE;
+  state.seed_control = { mode: "random", last_seed: null, recent: [], ...(state.seed_control && typeof state.seed_control === "object" ? state.seed_control : {}) };
+  state.seed_control.mode = state.seed_control.mode === "fixed" ? "fixed" : "random";
+  state.seed_control.recent = Array.isArray(state.seed_control.recent) ? state.seed_control.recent.map(String).filter(value => /^\d+$/.test(value)).slice(0, 10) : [];
+  state.internal_execution = { sampler: "res_multistep", scheduler: "simple", steps: 25, shift_video: 11, shift_audio: 4, comfy_kitchen_attention: false, cache: { enabled: false, reuse_threshold: 0.05, start_percent: 0.15, end_percent: 0.90, max_steps: 2, device: "auto", verbose: false }, ...(state.internal_execution && typeof state.internal_execution === "object" ? state.internal_execution : {}) };
+  state.internal_execution.cache = { enabled: false, reuse_threshold: 0.05, start_percent: 0.15, end_percent: 0.90, max_steps: 2, device: "auto", verbose: false, ...(state.internal_execution.cache && typeof state.internal_execution.cache === "object" ? state.internal_execution.cache : {}) };
+  state.internal_execution.save = { output_kind: "image", filename_prefix: "DaSiWa_MiniMaxH3_%date:yyyyMMdd%_%seed%", file_format: "webp", compression: 15, save_output: true, save_workflow: true, codec: "Auto", container: "Auto", bit_depth: "Auto", quality: 20, pingpong: false, crop_to_audio: false, audio_codec: "Auto", audio_bitrate: "192k", save_first_frame: false, save_last_frame: false, model_hash: "", text_positive: "", text_negative: "", text_steps: 0, text_cfg: 0, text_sampler: "", text_scheduler: "", text_seed: 0, text_model: "", ...(state.internal_execution.save || {}) };
+  let selectedModeOverride = null;
+  const mode = () => selectedModeOverride ?? (node.widgets?.find(w => w.name === "mode")?.value || "FL2VA");
   let builderState = state.builder_state && typeof state.builder_state === "object" ? { ...DEFAULT_BUILDER_STATE(mode()), ...state.builder_state, ref: { ...DEFAULT_BUILDER_STATE(mode()).ref, ...(state.builder_state.ref || {}) } } : DEFAULT_BUILDER_STATE(mode());
   builderState.mode = mode();
   const isNaSentinel = v => typeof v === "string" && v.trim() === "N/A";
@@ -235,6 +376,10 @@ function install(node) {
   const heightWidget = node.widgets?.find(w => w.name === "height");
   for (const widget of [widthWidget, heightWidget]) { if (widget) { widget.hidden = true; widget.draw = () => {}; widget.computeSize = () => [0, -4]; } }
   const promptWidget = node.widgets?.find(w => w.name === "prompt"); if (promptWidget) { promptWidget.hidden = true; promptWidget.draw = () => {}; promptWidget.computeSize = () => [0, -4]; }
+  // Legacy execution opt-in remains readable for old workflows but is no longer
+  // a Director control: normal H3 execution follows the native graph path.
+  const internalExecuteWidget = node.widgets?.find(w => w.name === "internal_execute");
+  if (internalExecuteWidget) { internalExecuteWidget.hidden = true; internalExecuteWidget.draw = () => {}; internalExecuteWidget.computeSize = () => [0, -4]; }
   function migrateLegacyExternalPromptInput() {
     const legacyIndex = node.inputs?.findIndex(input => input.name === "external_prompt") ?? -1;
     if (legacyIndex < 0) return;
@@ -257,14 +402,21 @@ function install(node) {
   const externalPromptInput = () => node.inputs?.find(i => i.name === "external_prompt_overwrite");
   const externalCanvasInput = name => node.inputs?.find(i => i.name === name);
   const hasExternalCanvas = () => externalCanvasInput("external_width_overwrite")?.link != null && externalCanvasInput("external_height_overwrite")?.link != null;
+  const seedWidget = () => node.widgets?.find(w => w.name === "seed");
+  if (!seedWidget()) { const widget = node.addWidget("number", "seed", 0, null, { min: 0, max: 0xffffffffffffffff, step: 1 }); widget.hidden = true; widget.draw = () => {}; widget.computeSize = () => [0, -4]; }
+  const hasExternalSeed = () => node.inputs?.find(i => i.name === "seed")?.link != null;
   const hasExternalPrompt = () => {
     if (externalPromptInput()?.link != null) return true;
     const w = externalPromptWidget();
     return Boolean(w && String(w.value || "").trim().length > 0);
   };
+  const hasExternalSampling = () => ["external_sampler", "external_scheduler", "external_steps", "external_shift_video", "external_shift_audio"].some(n => node.inputs?.find(i => i.name === n)?.link != null);
   let lastExternalPromptLinked = hasExternalPrompt();
   let lastExternalCanvasLinked = hasExternalCanvas();
+  let lastExternalSeedLinked = hasExternalSeed();
+  let lastExternalSamplingLinked = hasExternalSampling();
   const status = document.createElement("div"); status.className = "ds-h3-status ds-h3-info-field"; status.textContent = ""; status.style.display = "none";
+
   const timeline = document.createElement("div"); timeline.className = "ds-h3 ds-h3-root"; timeline.tabIndex = 0;
   timeline.addEventListener("wheel", event => {
     const openMenu = event.target instanceof Element ? event.target.closest(".ds-h3-res-menu.open") : null;
@@ -644,8 +796,8 @@ function install(node) {
   const mutate = fn => { fn(state); syncAttachedPrompts(); state.items.forEach((x, i) => { x.order = i; }); state.prompt_blocks.forEach((x, i) => { x.order = i; }); applyResolution?.(); emit(); render(); };
   const activeItems = () => state.items.filter(x => x.enabled !== false);
   const isReferenceMode = () => mode() === "REF2VA";
-  const allowsType = type => isReferenceMode() || ((mode() === "I2VA" || mode() === "FL2VA" || mode() === "L2VA") && type === "image");
-  const frameSlots = () => mode() === "T2VA" ? [] : mode() === "I2VA" ? [0] : mode() === "FL2VA" ? [0, 1] : mode() === "L2VA" ? [0, 1] : [];
+  const allowsType = type => mode() === "Image Inpaint" ? type === "image" : isReferenceMode() || ((mode() === "I2VA" || mode() === "FL2VA" || mode() === "L2VA") && type === "image");
+  const frameSlots = () => mode() === "T2VA" ? [] : (mode() === "I2VA" || mode() === "Image Inpaint") ? [0] : mode() === "FL2VA" ? [0, 1] : mode() === "L2VA" ? [0, 1] : [];
   const imageCapacity = () => frameSlots().length;
   const isLockedSlot = (item) => mode() === "L2VA" && laneForItem(item) === "visual" && item.slot === 0;
   const displayedItems = () => isReferenceMode() ? activeItems() : activeItems().filter(x => x.type === "image").sort((a, b) => a.slot - b.slot).slice(0, imageCapacity());
@@ -784,22 +936,179 @@ function install(node) {
     } catch (error) { console.error(error); setStatus(`Upload failed: ${error.message || error}`, true); }
   }
   async function acceptFile(file, targetLane = null) { const type = mediaTypeFor(file); const validLane = targetLane === "visual" ? type === "image" || type === "video" : targetLane === "audio" ? type === "audio" : true; const modeSupportsType = !!type && allowsType(type); const lane = type === "audio" ? "audio" : "visual"; if (!type || !validLane || !modeSupportsType) { const requirement = mode() === "FL2VA" ? "FL2VA supports image references only; video and audio are unavailable." : targetLane ? `Drop ${targetLane === "audio" ? "audio" : "image or video"} files on this lane.` : "This media type is not available in the selected MiniMax mode."; setStatus(requirement, true); return; } if (count(state, type) >= MAX[type] || activeItems().length >= MAX.total) { setStatus(`Limit reached: ${MAX[type]} ${type}s / ${MAX.total} files.`, true); return; } const laneAvail = availableSlots(lane); const laneOccupied = new Set(activeItems().filter(x => laneForItem(x) === lane).map(x => x.slot).filter(Number.isInteger)); const laneFree = laneAvail.some(slot => !laneOccupied.has(slot)); if (!laneFree) { setStatus(`No free ${lane} slot is available.`, true); return; } try { const value = await uploadFile(file, status); const [sourceDuration, dimensions] = await Promise.all([probeDuration(value, type), probeDimensions(value, type)]); if (sourceDuration !== null && sourceDuration < 2) { setStatus(`${file.name}: MiniMax references must be at least 2 seconds.`, true); return; } const duration = sourceDuration === null ? null : Math.min(sourceDuration, 15); let thumbnail = null; if (type === "video") { thumbnail = await captureFirstFrame(viewUrl(value)); } const item = { type, value, thumbnail, ...dimensions, ...(duration !== null ? { duration, source_duration: sourceDuration } : {}), ...((type === "video" || type === "audio") ? { trim_start: 0, trim_end: duration } : {}) }; addItem(item); applyResolution(); const added = state.items[state.items.length - 1]; if (type === "audio") void extractWaveform(value, added.id); setStatus(sourceDuration > 15 ? `${file.name} added; cropped to the first 15 seconds.` : `${file.name} added.`); } catch (error) { setStatus(error.message || "Upload failed", true); } }
+  function selectDirectorMode(value) {
+    if (!modeWidget) return;
+    selectedModeOverride = value;
+    modeWidget.value = value;
+    modeWidget.callback?.call(modeWidget, value);
+    builderState.mode = value;
+    node.graph?.setDirtyCanvas(true, true);
+  }
+
   const render = () => {
+    if (!Array.isArray(state.postprocess_recipe)) state.postprocess_recipe = DEFAULT_POSTPROCESS_RECIPE;
     timeline.replaceChildren();
     const selected = state.items.find(item => item.id === selectedId);
     const modeGroup = document.createElement("div"); modeGroup.className = "ds-h3-mode-group"; modeGroup.style.display = "flex"; modeGroup.style.flexDirection = "column"; modeGroup.style.alignItems = "flex-start"; modeGroup.style.gap = "4px"; modeGroup.style.padding = "6px"; modeGroup.style.background = "#0d1217"; modeGroup.style.border = "1px solid #344452"; modeGroup.style.borderRadius = "6px";
-    const topRow = document.createElement("div"); topRow.className = "ds-h3-modebar"; topRow.style.flexWrap = "nowrap"; topRow.style.gap = "8px"; topRow.style.padding = "0"; topRow.style.border = "0"; topRow.style.background = "transparent"; topRow.style.width = "100%";
+    const topRow = document.createElement("div"); topRow.className = "ds-h3-modebar"; topRow.style.flexWrap = "wrap"; topRow.style.gap = "8px"; topRow.style.padding = "0"; topRow.style.border = "0"; topRow.style.background = "transparent"; topRow.style.width = "100%";
     const controlGroup = () => { const group = document.createElement("span"); group.className = "ds-h3-actions"; group.style.cssText = "gap:4px;flex-wrap:nowrap;white-space:nowrap"; return group; };
-    const modesSide = controlGroup(); const modeLabel = document.createElement("span"); modeLabel.textContent = "Model Mode:"; modeLabel.style.cssText = "color:#9fb3c2;font-weight:600"; modesSide.append(modeLabel); ["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA"].forEach(value => { const button = document.createElement("button"); button.textContent = value; button.classList.toggle("active", mode() === value); button.onclick = () => { if (modeWidget) { modeWidget.value = value; modeWidget.callback?.(value); } if (selectedLane === "audio" && value !== "REF2VA") selectedLane = "visual"; render(); }; modesSide.append(button); });
-    const promptSide = controlGroup(); promptSide.style.cssText += ";padding-left:8px;border-left:1px solid #344452"; const promptLabel = document.createElement("span"); promptLabel.textContent = "Prompt Mode:"; promptLabel.style.cssText = "color:#9fb3c2;font-weight:600"; promptSide.append(promptLabel); const styleLabel = promptStyle(); [["simple", "Simple"], ["structured", "Structured"]].forEach(([value, label]) => { const promptButton = document.createElement("button"); promptButton.className = "ds-h3-prompt-mode-btn"; promptButton.textContent = label; promptButton.classList.toggle("active", styleLabel === value); promptButton.title = `Use the ${label.toLowerCase()} prompt editor`; promptButton.onclick = () => { if (styleLabel === value) return; if (value === "simple") builderState.simple_prompt = previewTextFor(mode(), false); builderState.prompt_mode = value; emit(); render(); }; promptSide.append(promptButton); });
+    const modesSide = controlGroup(); const modeLabel = document.createElement("span"); modeLabel.textContent = "Model Mode:"; modeLabel.style.cssText = "color:#9fb3c2;font-weight:600"; modesSide.append(modeLabel); ["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA", "Image Inpaint"].forEach(value => { const button = document.createElement("button"); button.textContent = value; button.title = value === "Image Inpaint" ? "One image reference; output exactly one frame through Get Image from Batch." : `Use MiniMax H3 ${value} mode`; button.classList.toggle("active", mode() === value); button.onclick = () => { const previousMode = mode(); if (value === "Image Inpaint") { const images = activeItems().filter(item => item.type === "image"); if (!images.length) setStatus("Image Inpaint selected — add one image reference to continue."); state.items = state.items.filter(item => item.enabled === false || item.type === "image").map((item, index) => index === 0 ? { ...item, slot: 0, order: 0 } : { ...item, enabled: false }); state.image_inpaint_saved_duration ??= Number(node.widgets?.find(w => w.name === "duration")?.value) || 5; const durationWidget = node.widgets?.find(w => w.name === "duration"); if (durationWidget) { durationWidget.value = 1; durationWidget.callback?.call(durationWidget, 1); } } else if (previousMode === "Image Inpaint" && Number.isFinite(Number(state.image_inpaint_saved_duration))) { const durationWidget = node.widgets?.find(w => w.name === "duration"); if (durationWidget) { durationWidget.value = state.image_inpaint_saved_duration; durationWidget.callback?.call(durationWidget, durationWidget.value); } delete state.image_inpaint_saved_duration; } selectDirectorMode(value); if (selectedLane === "audio" && value !== "REF2VA") selectedLane = "visual"; emit(); render(); }; modesSide.append(button); });
+    const promptSide = controlGroup(); const promptLabel = document.createElement("span"); promptLabel.textContent = "Prompt Mode:"; promptLabel.style.cssText = "color:#9fb3c2;font-weight:600"; promptSide.append(promptLabel); const styleLabel = promptStyle(); [["simple", "Simple"], ["structured", "Structured"]].forEach(([value, label]) => { const promptButton = document.createElement("button"); promptButton.className = "ds-h3-prompt-mode-btn"; promptButton.textContent = label; promptButton.classList.toggle("active", styleLabel === value); promptButton.title = `Use the ${label.toLowerCase()} prompt editor`; promptButton.onclick = () => { if (styleLabel === value) return; if (value === "simple") builderState.simple_prompt = previewTextFor(mode(), false); builderState.prompt_mode = value; emit(); render(); }; promptSide.append(promptButton); });
     const actionsSide = controlGroup(); actionsSide.style.cssText += ";padding-left:8px;border-left:1px solid #344452"; const hasContent = state.items.length || state.prompt_blocks?.length || hasBuilderContent() || String(promptWidget?.value || "").trim(); if (selected) { if (!isLockedSlot(selected)) { const removeButton = document.createElement("button"); removeButton.className = "ds-h3-remove-btn"; removeButton.textContent = "Remove"; removeButton.title = `Remove selected ${selected.type}`; removeButton.onclick = () => remove(selected.id); actionsSide.append(removeButton); } else { setStatus(`${mediaReferenceName(selected.type)} ${selected.slot + 1} is locked in L2VA mode`, true); } } if (hasContent) { const clearButton = document.createElement("button"); clearButton.className = "ds-h3-clear-btn"; clearButton.textContent = "Clear"; clearButton.title = "Remove all media and prompts"; clearButton.onclick = clearAll; actionsSide.append(clearButton); } else { const clearButton = document.createElement("button"); clearButton.className = "ds-h3-clear-btn ds-h3-clear-btn-empty"; clearButton.textContent = "Clear"; clearButton.title = "Nothing to clear yet"; clearButton.onclick = () => setStatus("Nothing to clear."); actionsSide.append(clearButton); }
-    const spacer = document.createElement("span"); spacer.style.flex = "1";
     const docsButton = document.createElement("button"); docsButton.className = "ds-h3-docs"; docsButton.textContent = "?"; docsButton.title = "Open MiniMax H3 Director documentation on GitHub"; docsButton.onclick = () => window.open(REPOSITORY_URL, "_blank", "noopener,noreferrer");
-    topRow.append(modesSide, promptSide, actionsSide, spacer, docsButton); modeGroup.append(topRow);
-    const modeHint = { T2VA: "T2VA · no input frame", I2VA: "I2VA · one opening-frame slot", FL2VA: "FL2VA · opening and closing-frame slots", L2VA: "L2VA · one closing-frame slot" }; const hint = document.createElement("div"); hint.className = "ds-h3-mode-hint"; hint.style.fontSize = "11px"; hint.style.color = "#9fb3c2"; hint.style.margin = "0"; hint.textContent = modeHint[mode()] || `REF2VA · up to ${MAX.image} image, ${MAX.video} video, and ${MAX.audio} audio slots · ${MAX.total} combined files maximum`; modeGroup.append(hint);
-    timeline.append(modeGroup);
+    topRow.append(modesSide, actionsSide, docsButton); modeGroup.append(topRow);
+    const promptRow = document.createElement("div"); promptRow.className = "ds-h3-modebar"; promptRow.style.cssText = "padding:0;border:0;background:transparent;width:100%"; promptRow.append(promptSide); modeGroup.append(promptRow);
+    const modeHint = { T2VA: "T2VA · no input frame", I2VA: "I2VA · one opening-frame slot", FL2VA: "FL2VA · opening and closing-frame slots", L2VA: "L2VA · one closing-frame slot", "Image Inpaint": "Image Inpaint · exactly one image · output frame count 1 · no video/audio" }; const hint = document.createElement("div"); hint.className = "ds-h3-mode-hint"; hint.style.fontSize = "11px"; hint.style.color = "#9fb3c2"; hint.style.margin = "0"; hint.textContent = modeHint[mode()] || `REF2VA · up to ${MAX.image} image, ${MAX.video} video, and ${MAX.audio} audio slots · ${MAX.total} combined files maximum`; modeGroup.append(hint);
+    // Prompt controls belong with the mode pills; save configuration has one
+    // owner: the dedicated Save node panel.
+    const controlRow = document.createElement("div"); controlRow.className = "ds-h3-control-row"; controlRow.style.cssText = "width:100%;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:6px;margin-top:6px";
+    const postprocessPanel = document.createElement("div"); postprocessPanel.className = "ds-h3-postprocess-row"; postprocessPanel.style.cssText = "width:100%;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:4px 0 0;border-top:1px solid #344452;margin-top:2px";
+    const saveNodePanel = document.createElement("section"); saveNodePanel.className = "ds-h3-save-node"; saveNodePanel.style.cssText = "min-width:0;min-height:420px;height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;background:#0d1217;border:1px solid #344452;border-radius:6px";
+    let optimizationPanel = null; let postprocessInfo = null; let samplingPanel = null;
+    {
 
-    const resolutionPanel = document.createElement("div"); resolutionPanel.className = "ds-h3-resolution-panel"; resolutionPanel.style.cssText = "width:100%;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:end;gap:6px;padding:7px;margin-top:6px;background:#0d1217;border:1px solid #344452;border-radius:6px";
+      const openStageSettings = (label, target, fieldList) => {
+        const fields = fieldList || (target.id ? (PP_STAGE_FIELDS[target.id] || []) : []);
+        const overlay = document.createElement("div"); overlay.style.cssText = "position:fixed;inset:0;z-index:10020;display:grid;place-items:center;background:rgba(0,0,0,.66)";
+        const modal = document.createElement("div"); modal.style.cssText = "width:min(520px,calc(100vw - 32px));max-height:80vh;overflow:auto;padding:14px;background:#111a21;border:1px solid #4c6b80;border-radius:8px;color:#d5e6f2";
+        const heading = document.createElement("h3"); heading.textContent = label; heading.style.margin = "0 0 10px"; modal.append(heading);
+        const body = document.createElement("div"); modal.append(body);
+        const inputStyle = "padding:3px 6px;background:#16283a;border:1px solid #2f5478;border-radius:4px;color:#d6ebff;font:12px system-ui,sans-serif";
+        const ensureValue = (fspec) => { if (!(fspec.key in target)) target[fspec.key] = fspec.default; };
+        const makeCombo = (fspec, options, selected) => { const select = document.createElement("select"); select.style.cssText = inputStyle; const chosen = options.includes(selected) ? selected : (fspec.default && options.includes(fspec.default) ? fspec.default : options[0]); for (const opt of options) { const o = document.createElement("option"); o.value = opt; o.textContent = opt; if (opt === chosen) o.selected = true; select.append(o); } if (selected != null && selected !== "" && !options.includes(selected)) { const o = document.createElement("option"); o.value = selected; o.textContent = `${selected} (custom)`; o.selected = true; select.append(o); } return select; };
+        for (const fspec of fields) {
+          ensureValue(fspec);
+          const value = target[fspec.key];
+          const field = document.createElement("label"); field.style.cssText = "display:flex;flex-direction:column;gap:3px;margin:7px 0;font-size:11px";
+          const title = document.createElement("span"); title.textContent = fspec.key.replaceAll("_", " "); title.style.cssText = "color:#8fb3d6"; if (fspec.type !== "boolean") field.append(title);
+          if (fspec.type === "imagePicker") {
+            ppImagePicker(field, fspec.key, target, inputStyle, String(target[fspec.key] || ""));
+            body.append(field);
+          } else if (fspec.type === "modelFolder") {
+            const select = document.createElement("select"); select.style.cssText = inputStyle; select.disabled = true;
+            const placeholder = document.createElement("option"); placeholder.value = "(loading…)"; placeholder.textContent = "(loading…)"; placeholder.selected = true; select.append(placeholder);
+            field.append(select); body.append(field);
+            void ppLoadModelList(fspec.folder).then((options) => {
+              if (!select.isConnected) return;
+              select.innerHTML = "";
+              const opts = options.length ? options : ["(no models in " + fspec.folder + ")"];
+              const current = String(target[fspec.key] || "");
+              for (const opt of opts) { const o = document.createElement("option"); o.value = opt; o.textContent = opt; if (opt === current) o.selected = true; select.append(o); }
+              if (current && !opts.includes(current)) { const o = document.createElement("option"); o.value = current; o.textContent = `${current} (custom)`; o.selected = true; select.append(o); }
+              select.disabled = false; select.onchange = () => { target[fspec.key] = select.value; };
+            }).catch(() => {});
+          } else if (fspec.type === "combo") {
+            const select = makeCombo(fspec, fspec.options, value); select.onchange = () => { target[fspec.key] = select.value; }; field.append(select);
+            body.append(field);
+          } else if (fspec.type === "boolean") {
+            field.style.cssText = "display:flex;flex-direction:row;align-items:center;gap:6px;margin:7px 0;font-size:11px"; const input = document.createElement("input"); input.type = "checkbox"; input.checked = Boolean(value); input.onchange = () => { target[fspec.key] = input.checked; }; field.append(input, title);
+            body.append(field);
+          } else {
+            const input = document.createElement("input"); input.type = fspec.type === "number" ? "number" : "text"; input.value = String(value ?? "");
+            if (fspec.type === "number") { if (fspec.min != null) input.min = fspec.min; if (fspec.max != null) input.max = fspec.max; if (fspec.step != null) input.step = fspec.step; }
+            input.onchange = () => { target[fspec.key] = fspec.type === "number" ? Number(input.value) : input.value; };
+            field.append(input);
+            body.append(field);
+          }
+        }
+        const actions = document.createElement("div"); actions.style.cssText = "display:flex;justify-content:flex-end;gap:6px;margin-top:12px";
+        const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.onclick = () => overlay.remove();
+        const save = document.createElement("button"); save.textContent = "Save"; save.onclick = () => { emit(); overlay.remove(); render(); };
+        actions.append(cancel, save); modal.append(actions);
+        overlay.onclick = event => { if (event.target === overlay) overlay.remove(); };
+        overlay.append(modal); document.body.append(overlay);
+      };
+      for (const stage of state.postprocess_recipe) { const label = ppStageLabel(stage.id); const pill = document.createElement("div"); pill.className = "ds-h3-pp-btn"; pill.setAttribute("role", "button"); pill.setAttribute("tabindex", "0"); pill.classList.toggle("active", Boolean(stage.enabled)); pill.title = `Toggle ${label}`; pill.append(document.createTextNode(label)); const toggleStage = () => { stage.enabled = !stage.enabled; emit(); render(); }; pill.onclick = (event) => { if (event.target.closest(".ds-h3-pp-burger")) return; toggleStage(); }; pill.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (event.target.closest(".ds-h3-pp-burger")) return; toggleStage(); } }; const burger = document.createElement("button"); burger.type = "button"; burger.className = "ds-h3-pp-burger"; burger.textContent = "☰"; burger.title = `Advanced options for ${label}`; burger.onclick = (event) => { event.stopPropagation(); openStageSettings(label, stage); }; pill.append(burger); postprocessPanel.append(pill); }
+      const ppToken = (s) => {
+        switch (s.id) {
+          case "frame_interpolation": return `Frame Interpolation ×${Number(s.factor) || 2}`;
+          case "torch_resize": {
+            const target = (s.size_mode === "Target resolution" && s.width && s.height) ? `${s.width}×${s.height}` : `×${s.scale_multiplier || 1}`;
+            return `Resize ${s.interpolation || "Lanczos"} ${target}`;
+          }
+          case "model_upscale": return `Model Upscale ${(String(s.model_name || "").split("/").pop()) || "model"}`;
+          case "rtx_refiner": {
+            const mode = String(s.upscale || "VSR");
+            return mode === "Off" ? "Refiner (no upscale)" : `Refiner ${mode}${s.upscale_quality && s.upscale_quality !== "Ultra" ? " " + s.upscale_quality.toLowerCase() : ""}`;
+          }
+          case "watermark": return `Watermark ${s.position || "bottom-right"}`;
+          default: return s.id.replaceAll("_", " ");
+        }
+      };
+      const ppActive = state.postprocess_recipe.filter(s => s.enabled);
+      const ppSummary = document.createElement("span"); ppSummary.className = "ds-h3-pp-summary-line"; ppSummary.style.cssText = "width:100%;box-sizing:border-box;text-align:left;font-size:11px;color:#7ee19d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px";
+      if (ppActive.length) { ppSummary.textContent = ppActive.map(ppToken).join(" → "); } else { ppSummary.style.color = "#5a6b78"; ppSummary.textContent = "post-processing off"; }
+      postprocessInfo = ppSummary;
+      const postprocessTitle = document.createElement("span"); postprocessTitle.textContent = "Post processing:"; postprocessTitle.style.cssText = "font-size:11px;color:#9fb3c2;font-weight:600;margin-right:2px"; postprocessPanel.prepend(postprocessTitle);
+      // Optimization pills: Comfy Kitchen INT8 attention + MiniMax H3 residual cache.
+      // Both patch the H3 model inside the Director's internal (Image Inpaint) executor,
+      // so they are applied at runtime rather than wired as standalone graph nodes.
+      const exec = state.internal_execution; exec.cache = exec.cache && typeof exec.cache === "object" ? exec.cache : { enabled: false, reuse_threshold: 0.05, start_percent: 0.15, end_percent: 0.90, max_steps: 2, device: "auto", verbose: false };
+      optimizationPanel = document.createElement("div"); optimizationPanel.className = "ds-h3-optimization-row"; optimizationPanel.style.cssText = "width:100%;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:4px 0 0;border-top:1px solid #344452;margin-top:2px";
+      const optimizationTitle = document.createElement("span"); optimizationTitle.textContent = "Optimizations:"; optimizationTitle.style.cssText = "font-size:11px;color:#9fb3c2;font-weight:600;margin-right:2px"; optimizationPanel.append(optimizationTitle);
+      const makeOptPill = (label, active, onToggle, onSettings) => { const pill = document.createElement("div"); pill.className = "ds-h3-pp-btn"; pill.setAttribute("role", "button"); pill.setAttribute("tabindex", "0"); pill.classList.toggle("active", active); pill.title = `Toggle ${label}`; pill.append(document.createTextNode(label)); const toggleOpt = () => { onToggle(); emit(); render(); }; pill.onclick = (event) => { if (event.target.closest(".ds-h3-pp-burger")) return; toggleOpt(); }; pill.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (event.target.closest(".ds-h3-pp-burger")) return; toggleOpt(); } }; if (onSettings) { const burger = document.createElement("button"); burger.type = "button"; burger.className = "ds-h3-pp-burger"; burger.textContent = "☰"; burger.title = `Configure ${label}`; burger.onclick = (event) => { event.stopPropagation(); onSettings(); }; pill.append(burger); } optimizationPanel.append(pill); };
+      makeOptPill("Comfy Kitchen Attention", Boolean(exec.comfy_kitchen_attention), () => { exec.comfy_kitchen_attention = !exec.comfy_kitchen_attention; }, null);
+      makeOptPill("MiniMax H3 Cache", Boolean(exec.cache.enabled), () => { exec.cache.enabled = !exec.cache.enabled; }, () => { openStageSettings("MiniMax H3 Cache", exec.cache, PP_H3_CACHE_FIELDS); });
+      // Sampling panel: sampler/scheduler dropdowns + steps/shift number inputs,
+      // all bound to state.internal_execution (the backend already honors these).
+      const updateExec = (patch) => mutate(s => { const next = { ...s.internal_execution, ...patch }; if ("steps" in next) next.steps = Math.max(1, Math.min(1000, Math.trunc(next.steps || 25))); if ("shift_video" in next) next.shift_video = Math.max(0, Number(next.shift_video) || 0); if ("shift_audio" in next) next.shift_audio = Math.max(0, Number(next.shift_audio) || 0); s.internal_execution = next; });
+      samplingPanel = document.createElement("div"); samplingPanel.className = "ds-h3-sampling-row"; samplingPanel.style.cssText = "width:100%;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:end;gap:8px;padding:6px 0 0;border-top:1px solid #344452;margin-top:4px";
+      const samplingTitle = document.createElement("span"); samplingTitle.textContent = "Sampling:"; samplingTitle.style.cssText = "font-size:11px;color:#9fb3c2;font-weight:600;width:100%"; samplingPanel.append(samplingTitle);
+      const makeSamplingSelect = (label, value, options) => { const field = document.createElement("label"); field.style.cssText = "display:flex;flex-direction:column;gap:3px;font-size:10px;font-weight:600;letter-spacing:.4px;color:#8fb3d6;text-transform:uppercase"; const cap = document.createElement("span"); cap.textContent = label; field.append(cap); const select = document.createElement("select"); select.style.cssText = "min-width:160px;padding:3px 6px;background:#16283a;border:1px solid #2f5478;border-radius:4px;color:#d6ebff;font:12px system-ui,sans-serif"; options.forEach(opt => { const o = document.createElement("option"); o.value = opt; o.textContent = opt; if (opt === value) o.selected = true; select.append(o); }); if (!options.includes(value)) { const o = document.createElement("option"); o.value = value; o.textContent = `${value} (current)`; o.selected = true; select.append(o); } select.onchange = () => updateExec({ [label === "SAMPLER" ? "sampler" : "scheduler"]: select.value }); field.append(select); samplingPanel.append(field); return select; };
+      const samplerSelect = makeSamplingSelect("SAMPLER", exec.sampler, SAMPLER_OPTIONS);
+      const schedulerSelect = makeSamplingSelect("SCHEDULER", exec.scheduler, SCHEDULER_OPTIONS);
+      const makeSamplingNumber = (label, value, key, step, min, max, fallback) => { const field = document.createElement("label"); field.style.cssText = "display:flex;flex-direction:column;gap:3px;font-size:10px;font-weight:600;letter-spacing:.4px;color:#8fb3d6;text-transform:uppercase"; const cap = document.createElement("span"); cap.textContent = label; field.append(cap); const input = document.createElement("input"); input.type = "number"; input.step = step; input.min = min; input.max = max; input.value = value; input.style.cssText = "min-width:74px;padding:3px 6px;background:#16283a;border:1px solid #2f5478;border-radius:4px;color:#d6ebff;font:12px system-ui,sans-serif"; input.onchange = () => updateExec({ [key]: Number(input.value) || fallback }); field.append(input); samplingPanel.append(field); return input; };
+      makeSamplingNumber("STEPS", exec.steps, "steps", 1, 1, 1000, 25);
+      makeSamplingNumber("SHIFT V", exec.shift_video, "shift_video", 0.5, 0, 100, 11);
+      makeSamplingNumber("SHIFT A", exec.shift_audio, "shift_audio", 0.5, 0, 100, 4);
+      const samplingDisabled = hasExternalSampling();
+      if (samplingDisabled) {
+        samplingPanel.classList.add("disabled");
+        samplingPanel.querySelectorAll("select, input, button").forEach(el => { el.disabled = true; });
+        const note = document.createElement("div"); note.className = "ds-h3-small ds-h3-ext-note";
+        note.style.cssText = "width:100%";
+        note.textContent = "External sampling connected — local sampling fields are disabled (external values win).";
+        samplingPanel.append(note);
+      }
+      modeGroup.append(samplingPanel);
+      const saveSettings = state.internal_execution.save;
+      const outputKind = mode() === "Image Inpaint" ? "image" : "video";
+      saveSettings.output_kind = outputKind;
+      const saveTitle = document.createElement("strong"); saveTitle.textContent = "Preview & Output"; saveTitle.style.cssText = "font-size:12px;color:#d5e6f2";
+      const outputSettingsHint = () => { const flag = value => value ? "on" : "off"; const parts = [`prefix ${saveSettings.filename_prefix || "Director"}`, `save ${flag(saveSettings.save_output !== false)}`, `workflow ${flag(saveSettings.save_workflow !== false)}`]; if (outputKind === "image") parts.push(String(saveSettings.file_format || "webp").toUpperCase(), `compression ${saveSettings.compression ?? 15}`); else parts.push(saveSettings.codec || "Auto", saveSettings.container || "Auto", saveSettings.bit_depth || "Auto", `quality ${saveSettings.quality ?? 20}`, `pingpong ${flag(saveSettings.pingpong)}`, `crop to audio ${flag(saveSettings.crop_to_audio)}`, `${saveSettings.audio_codec || "Auto"} ${saveSettings.audio_bitrate || "192k"}`, `first frame ${flag(saveSettings.save_first_frame)}`, `last frame ${flag(saveSettings.save_last_frame)}`); return parts.join(" · "); };
+      const saveHint = document.createElement("span"); saveHint.textContent = outputSettingsHint(); saveHint.style.cssText = "font-size:11px;line-height:1.35;color:#7ee19d;overflow-wrap:anywhere";
+      const saveOptionFields = [...(outputKind === "image" ? PP_IMAGE_SAVE_FIELDS : PP_VIDEO_SAVE_FIELDS), ...PREVIEW_OPTION_FIELDS, { key: "save_output", type: "boolean", default: true }, { key: "save_workflow", type: "boolean", default: true }];
+      const saveHeader = document.createElement("div"); saveHeader.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px";
+      const saveMenu = document.createElement("button"); saveMenu.type = "button"; saveMenu.className = "ds-h3-res-btn"; saveMenu.textContent = "☰"; saveMenu.title = "Preview & Output options"; saveMenu.style.cssText = "width:30px;min-height:26px;padding:0;justify-content:center;gap:0"; saveMenu.onclick = () => openStageSettings("Preview & Output options", saveSettings, saveOptionFields); saveHeader.append(saveTitle, saveMenu);
+      const savedPreview = node.__dasiwaH3SavedPreview;
+      // Live step-preview slot: shows per-step frames streamed by the backend
+      // OUTER_SAMPLE wrapper (dasiwa_director_v2_preview events) until the
+      // final published output replaces it. Hidden until a run streams frames.
+      const stepPreviewSlot = document.createElement("div"); stepPreviewSlot.className = "ds-h3-step-preview"; stepPreviewSlot.style.cssText = "display:none;flex-direction:column;gap:4px;padding:6px;background:#080d11;border:1px solid #2d4658;border-radius:4px";
+      const stepPreviewMedia = document.createElement("img"); stepPreviewMedia.style.cssText = "display:block;width:100%;max-height:220px;object-fit:contain;background:#000"; stepPreviewMedia.setAttribute("alt", "Live step preview");
+      const stepPreviewCaption = document.createElement("span"); stepPreviewCaption.style.cssText = "font-size:10px;color:#7ee19d"; stepPreviewCaption.textContent = "";
+      stepPreviewSlot.append(stepPreviewMedia, stepPreviewCaption);
+      node.__dasiwaH3ShowStepPreview = (payload) => {
+        stepPreviewSlot.style.display = "flex";
+        stepPreviewSlot.parentElement.style.order = "-1";
+        const isVideo = payload.mime === "video/mp4";
+        const isAnimWebp = payload.mime === "image/webp" && (payload.frames > 1 || payload.fps);
+        let target = stepPreviewMedia;
+        if (isVideo || isAnimWebp) {
+          if (target.tagName !== "VIDEO") { const v = document.createElement("video"); v.muted = true; v.loop = true; v.playsInline = true; v.controls = isVideo; v.style.cssText = "display:block;width:100%;max-height:220px;object-fit:contain;background:#000"; target.replaceWith(v); target = v; }
+        } else if (target.tagName === "VIDEO") { const i = document.createElement("img"); i.alt = "Live step preview"; i.style.cssText = "display:block;width:100%;max-height:220px;object-fit:contain;background:#000"; target.replaceWith(i); target = i; }
+        target.src = `data:${payload.mime};base64,${payload.image}`;
+        if (target.tagName === "VIDEO") target.play?.();
+        stepPreviewCaption.textContent = payload.total ? `step ${payload.step}/${payload.total}` : `step ${payload.step}`;
+        stepPreviewSlot.parentElement?.appendChild(stepPreviewSlot);
+      };
+      saveNodePanel.append(saveHeader, saveHint, stepPreviewSlot);
+      if (savedPreview?.filename) { const isVideo = String(savedPreview.format || "").startsWith("video/") || savedPreview.container; const media = document.createElement(isVideo ? "video" : "img"); media.src = savedViewUrl(savedPreview); media.title = "Latest Director output"; media.style.cssText = "display:block;width:100%;max-height:180px;object-fit:contain;background:#000;cursor:pointer"; if (isVideo) { media.controls = true; media.muted = true; media.loop = true; media.playsInline = true; } else { media.alt = savedPreview.filename; } media.onclick = () => window.open(media.src, "_blank", "noopener,noreferrer"); const previewFrame = document.createElement("div"); previewFrame.className = "ds-h3-save-preview"; previewFrame.style.cssText = "min-height:220px;flex:1;display:grid;place-items:center;background:#080d11;border:1px solid #2d4658;border-radius:4px;overflow:hidden"; previewFrame.append(media); saveNodePanel.append(previewFrame); } else if (!savedPreview) { const previewFrame = document.createElement("div"); previewFrame.className = "ds-h3-save-preview"; previewFrame.style.cssText = "min-height:220px;flex:1;display:grid;place-items:center;background:#080d11;border:1px solid #2d4658;border-radius:4px;overflow:hidden"; const empty = document.createElement("span"); empty.textContent = "Preview appears after the Director publishes an image or video"; empty.style.cssText = "padding:8px;text-align:center;font-size:11px;color:#9fb3c2"; previewFrame.append(empty); saveNodePanel.append(previewFrame); }
+      controlRow.append(modeGroup, saveNodePanel);
+      timeline.append(controlRow);
+    }
+
+    const resolutionPanel = document.createElement("div"); resolutionPanel.className = "ds-h3-resolution-panel"; resolutionPanel.style.cssText = "width:100%;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:end;gap:6px;padding:2px 0 0;border-top:1px solid #344452;margin-top:2px";
     const settings = resolutionState(); const externalCanvas = hasExternalCanvas(); const currentCanvas = externalCanvas ? ["external", "external"] : (resolveCanvas(settings) || [Number(widthWidget?.value) || 1344, Number(heightWidget?.value) || 768]);
     const updateResolution = patch => mutate(s => { s.resolution = { ...resolutionState(), ...patch }; });
     const closeAllMenus = () => resolutionPanel.querySelectorAll(".ds-h3-res-menu.open").forEach(menu => menu.classList.remove("open"));
@@ -827,10 +1136,27 @@ function install(node) {
       { title: "MP", items: resNames.filter(n => /MP/.test(n)).sort((a, b) => mpVal(a) - mpVal(b)).map(n => [n, n]) },
     ]);
     addDropdown("INPUT SCALING", settings.input_scaling, [["Off", "Off"], ["Auto", "Native (ShortEdge 2048px)"], ["Target", "Target · Selected Aspect & Resolution"], ["Fit", "Fit"], ["Fill and crop", "Fill and crop"], ["Fit and pad", "Fit and pad"], ["Long side with divisible crop", "Long side with divisible crop"]], input_scaling => updateResolution({ input_scaling }), false, true);
+    const seedControl = document.createElement("div"); seedControl.className = "ds-h3-seed-control"; seedControl.style.cssText = "display:flex;align-items:flex-end;gap:5px;margin-left:8px;padding-left:10px;border-left:1px solid #344452";
+    const externalSeed = hasExternalSeed();
+    if (externalSeed) { const external = document.createElement("span"); external.textContent = "External seed connected"; external.style.cssText = "font-size:11px;color:#9fb3c2;white-space:nowrap;padding-bottom:4px"; seedControl.append(external); } else {
+      const seed = seedWidget(); const controlState = state.seed_control = { mode: "random", last_seed: null, recent: [], ...(state.seed_control || {}) }; const maxSeed = 0xffffffffffffffffn;
+      const setSeed = raw => { let value; try { value = BigInt(String(raw).trim()); } catch { return false; } if (value < 0n || value > maxSeed) return false; const text = value.toString(); if (seed) { seed.value = text; seed.callback?.(text); } node.setDirtyCanvas?.(true, true); return text; };
+      const currentSeed = () => String(seed?.value ?? 0); if (controlState.mode === "random" && currentSeed() === "0") { const words = crypto.getRandomValues(new Uint32Array(2)); setSeed((BigInt(words[0]) << 32n) | BigInt(words[1])); } const remember = value => { controlState.last_seed = value; controlState.recent = [value, ...controlState.recent.filter(entry => entry !== value)].slice(0, 10); };
+      const toggle = document.createElement("div"); toggle.style.cssText = "display:flex;gap:2px";
+      for (const modeName of [["random", "Random"], ["fixed", "Fixed"]]) { const button = document.createElement("button"); button.type = "button"; button.className = "ds-h3-res-btn"; button.textContent = modeName[1]; button.style.cssText = `width:58px;padding:3px 0;justify-content:center;gap:0;text-align:center;${controlState.mode === modeName[0] ? "border-color:#7ee19d;color:#7ee19d" : ""}`; button.onclick = () => { controlState.mode = modeName[0]; emit(); render(); }; toggle.append(button); }
+      const seedField = document.createElement("label"); seedField.style.cssText = "display:flex;flex-direction:column;gap:3px;min-width:150px;font-size:10px;font-weight:600;letter-spacing:.4px;color:#8fb3d6;text-transform:uppercase"; seedField.textContent = "SEED";
+      const input = document.createElement("input"); input.type = "text"; input.inputMode = "numeric"; input.className = "ds-h3-res-num"; input.style.textAlign = "center"; input.value = currentSeed(); input.title = "Unsigned 64-bit Director seed";
+      input.onchange = event => { if (!setSeed(event.target.value)) event.target.value = currentSeed(); else { event.target.value = currentSeed(); emit(); } }; seedField.append(input);
+      const roll = document.createElement("button"); roll.type = "button"; roll.className = "ds-h3-res-btn"; roll.textContent = "New"; roll.title = "Roll a new seed and retain the selected mode"; roll.style.cssText = "width:68px;padding:3px 0;justify-content:center;gap:0;text-align:center;white-space:nowrap"; roll.onclick = () => { const words = crypto.getRandomValues(new Uint32Array(2)); const value = ((BigInt(words[0]) << 32n) | BigInt(words[1])).toString(); setSeed(value); remember(value); emit(); render(); };
+      const last = document.createElement("button"); last.type = "button"; last.className = "ds-h3-res-btn"; last.textContent = "Use Last"; last.disabled = !controlState.last_seed; last.style.cssText = "width:68px;padding:3px 0;justify-content:center;gap:0;text-align:center;white-space:nowrap"; last.onclick = () => { if (setSeed(controlState.last_seed)) { controlState.mode = "fixed"; emit(); render(); } };
+      const history = document.createElement("details"); history.style.cssText = "position:relative"; const summary = document.createElement("summary"); summary.className = "ds-h3-res-btn"; summary.textContent = "Last 10 seeds"; summary.style.cssText = "padding:3px 6px;justify-content:center;gap:0;text-align:center;white-space:nowrap;cursor:pointer"; history.append(summary); const list = document.createElement("div"); list.style.cssText = "position:absolute;z-index:10;right:0;top:24px;min-width:160px;max-height:180px;overflow:auto;padding:5px;background:#111b23;border:1px solid #344452;border-radius:4px"; for (const value of controlState.recent) { const row = document.createElement("div"); row.style.cssText = "display:flex;gap:4px;align-items:center"; const item = document.createElement("button"); item.type = "button"; item.textContent = value; item.style.cssText = "flex:1;padding:3px 5px;border:0;background:transparent;color:#d5e6f2;text-align:right;cursor:pointer"; item.onclick = () => { if (setSeed(value)) { controlState.mode = "fixed"; emit(); render(); } }; const copy = document.createElement("button"); copy.type = "button"; copy.textContent = "Copy"; copy.title = "Copy seed"; copy.style.cssText = "padding:2px 5px;font-size:10px"; copy.onclick = event => { event.stopPropagation(); navigator.clipboard.writeText(value).then(() => { copy.textContent = "✓"; setTimeout(() => { copy.textContent = "Copy"; }, 900); }); }; row.append(item, copy); list.append(row); } if (!controlState.recent.length) list.textContent = "No previous seeds"; history.append(list);
+      seedControl.append(seedField, toggle, roll, last, history);
+    }
+    resolutionPanel.append(seedControl);
     if (settings.aspect === "custom") { for (const [name, key] of [["W", "custom_aspect_w"], ["H", "custom_aspect_h"]]) { const field = document.createElement("label"); field.style.cssText = "display:flex;flex-direction:column;gap:3px;font-size:10px;color:#9fb3c2;width:56px"; field.textContent = `RATIO ${name}`; const input = document.createElement("input"); input.type = "number"; input.min = "1"; input.step = "1"; input.className = "ds-h3-res-num"; input.value = settings[key]; input.onchange = event => updateResolution({ [key]: Math.max(1, Number(event.target.value) || 1) }); field.append(input); resolutionPanel.append(field); } }
     if (settings.resolution === "custom") { addDropdown("CUSTOM", settings.custom_mode || "mp", [["mp", "Megapixels"], ["fixed", "Fixed pixels"]], custom_mode => updateResolution({ custom_mode })); const customKey = (settings.custom_mode || "mp") === "mp" ? "custom_mp" : "custom_width"; if (customKey === "custom_mp") { const field = document.createElement("label"); field.style.cssText = "display:flex;flex-direction:column;gap:3px;font-size:10px;color:#9fb3c2;width:76px"; field.textContent = "MP"; const input = document.createElement("input"); input.type = "number"; input.min = ".01"; input.step = ".01"; input.className = "ds-h3-res-num"; input.value = settings.custom_mp; input.onchange = event => updateResolution({ custom_mp: Number(event.target.value) || settings.custom_mp }); field.append(input); resolutionPanel.append(field); } else { const dimensions = document.createElement("div"); dimensions.className = "ds-h3-fixed-dimensions"; dimensions.style.cssText = "display:flex;gap:6px;align-items:end"; const dimensionField = (label, value, onChange) => { const field = document.createElement("label"); field.style.cssText = "display:flex;flex-direction:column;gap:3px;font-size:10px;color:#9fb3c2;width:76px"; field.textContent = label; const input = document.createElement("input"); input.type = "number"; input.min = "16"; input.step = "16"; input.className = "ds-h3-res-num"; input.value = value; input.onchange = event => onChange(Number(event.target.value) || value); field.append(input); return field; }; const widthField = dimensionField("WIDTH", settings.custom_width, custom_width => updateResolution({ custom_width })); const heightField = dimensionField("HEIGHT", settings.custom_height, custom_height => updateResolution({ custom_height })); dimensions.append(widthField, heightField); resolutionPanel.append(dimensions); } }
     disableWhenExternal();
-    const readout = document.createElement("span"); readout.style.cssText = "margin-left:auto;font-size:11px;color:#7ee19d;white-space:nowrap"; readout.textContent = externalCanvas ? "External width/height overwrite · Director sizing and input scaling disabled" : `${settings.aspect === "auto" ? "Auto 768px" : settings.aspect} · ${settings.resolution === "auto" ? "Auto 768px" : settings.resolution} · ${currentCanvas[0]} × ${currentCanvas[1]} · 32px H3 grid`; resolutionPanel.append(readout); timeline.append(resolutionPanel);
+    const readout = document.createElement("span"); readout.style.cssText = "font-size:11px;color:#7ee19d;white-space:normal"; readout.textContent = externalCanvas ? "External width/height overwrite · Director sizing and input scaling disabled" : `${settings.aspect === "auto" ? "Auto 768px" : settings.aspect} · ${settings.resolution === "auto" ? "Auto 768px" : settings.resolution} · ${currentCanvas[0]} × ${currentCanvas[1]} · 32px H3 grid`; modeGroup.append(resolutionPanel, postprocessPanel, optimizationPanel); const infoFeed = document.createElement("div"); infoFeed.className = "ds-h3-info-feed"; infoFeed.style.cssText = "width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:5px;padding:8px;background:#0d1217;border:1px solid #344452;border-radius:6px"; infoFeed.append(readout, postprocessInfo); timeline.append(infoFeed);
 
     const lengthWidget = node.widgets?.find(w => w.name === "duration"); const timelineSeconds = Math.max(1, Number(lengthWidget?.value) || 5); lastTimelineLength = timelineSeconds;
 
@@ -838,8 +1164,8 @@ function install(node) {
     const track = document.createElement("div"); track.className = "ds-h3-track"; track.addEventListener("pointerdown", () => timeline.focus());
     const trackInner = document.createElement("div"); trackInner.className = "ds-h3-track-inner";
     trackInner.onclick = event => { if (event.target !== trackInner) return; const rect = trackInner.getBoundingClientRect(); insertAt = Math.max(0, Math.round(((event.clientX - rect.left) / scale) * 4) / 4); status.textContent = `Insert cursor: ${insertAt.toFixed(2)}s · choose + image, + video, + audio, or + text.`; trackInner.style.setProperty("--insert-x", `${insertAt * scale}px`); };
-    const laneTypes = ["Image/Video", "audio"]; const laneHeight = 120; const trackEntries = displayedItems(); const scale = 48; const audioSlotWidth = sourceDuration => Math.round(Math.max(180, Math.min(420, 96 * Math.log2(Math.max(2, sourceDuration) + 1)))); const slotWidthFor = item => item && (item.type === "audio" || item.type === "video") ? audioSlotWidth(Number(item.source_duration) || item.duration) : 112; const laneNameFor = item => laneForItem(item) === "audio" ? "audio" : "Image/Video"; const slotItem = (lane, slot) => trackEntries.find(item => laneNameFor(item) === lane && item.slot === slot); const slotLeft = (lane, slot) => { let left = 6; for (let index = 0; index < slot; index += 1) left += slotWidthFor(slotItem(lane, index)) + 8; return left; }; const acceptLaneDrop = async (event, targetLane) => { event.preventDefault(); event.stopPropagation(); trackInner.classList.remove("over"); const rect = trackInner.getBoundingClientRect(); insertAt = Math.max(0, Math.round(((event.clientX - rect.left) / scale) * 4) / 4); trackInner.style.setProperty("--insert-x", `${insertAt * scale}px`); for (const file of event.dataTransfer.files || []) await acceptFile(file, targetLane); }; const visualSlotCount = () => mode() === "T2VA" ? 0 : mode() === "I2VA" ? 1 : mode() === "L2VA" ? 2 : mode() === "FL2VA" ? 2 : MAX.image + MAX.video; const slotExtent = lane => Array.from({ length: lane === "audio" ? MAX.audio : visualSlotCount() }, (_, index) => slotWidthFor(slotItem(lane === "audio" ? "audio" : "Image/Video", index)) + 8).reduce((sum, width) => sum + width, 6); trackInner.style.width = `${Math.max(240, slotExtent("Image/Video"), slotExtent("audio"))}px`; trackInner.style.height = `${laneTypes.length * laneHeight}px`; trackInner.style.background = `repeating-linear-gradient(0deg, transparent 0, transparent ${laneHeight - 1}px, #344452 ${laneHeight - 1}px, #344452 ${laneHeight}px), repeating-linear-gradient(90deg,#111a21 0,#111a21 49px,#1b2933 50px)`; const ruler = document.createElement("div"); ruler.className = "ds-h3-ruler"; for (let second = 0; second <= timelineSeconds; second++) { if (second % 2 !== 0) continue; const mark = document.createElement("div"); mark.style.position = "absolute"; mark.style.left = `${second * scale}px`; mark.style.bottom = "0"; mark.style.fontSize = "9px"; mark.style.color = "#8fa3b2"; mark.textContent = `${second}s`; ruler.appendChild(mark); } track.append(ruler);
-    const lanes = new Map(); laneTypes.forEach((type, index) => { const lane = document.createElement("div"); const targetLane = type === "audio" ? "audio" : "visual"; const m = mode(); const audioDisabledByMode = m === "T2VA" || m === "I2VA" || m === "FL2VA" || m === "L2VA"; const supported = !(targetLane === "audio" && audioDisabledByMode); const slotCount = targetLane === "audio" ? MAX.audio : visualSlotCount(); lane.className = `ds-h3-timeline-lane ${targetLane}${selectedLane === targetLane ? " selected" : ""}${supported ? "" : " disabled"}`; lane.style.top = `${index * laneHeight}px`; lane.onclick = () => { if (!supported) { setStatus(m === "T2VA" ? "T2VA has no input lanes." : audioDisabledByMode ? "This mode does not support audio references." : "", true); return; } selectedLane = targetLane; setStatus(`${type === "audio" ? "Audio" : "Image/Video"} lane selected. Paste files here with Ctrl+V.`); render(); }; lane.ondragover = event => { if ([...event.dataTransfer.items].some(item => item.kind === "file")) { event.preventDefault(); if (supported) trackInner.classList.add("over"); } }; lane.ondragleave = () => trackInner.classList.remove("over"); lane.ondrop = event => { if (!supported) { event.preventDefault(); event.stopPropagation(); setStatus(audioDisabledByMode ? "This mode does not support audio references." : "", true); return; } selectedLane = targetLane; acceptLaneDrop(event, targetLane); }; const label = document.createElement("span"); label.className = "ds-h3-lane-label"; label.textContent = `${type}${selectedLane === targetLane ? " · selected" : ""}`; label.style.display = hiddenLanes.has(type) ? "none" : "block"; lane.append(label); for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) { if (slotItem(type, slotIndex)) continue; const slot = document.createElement("span"); slot.className = "ds-h3-empty-slot"; slot.textContent = "+"; slot.style.left = `${slotLeft(type, slotIndex)}px`; slot.style.width = `${slotWidthFor(null)}px`; if (m === "L2VA" && targetLane === "visual" && slotIndex === 0) { const lockIcon = document.createElement("span"); lockIcon.className = "ds-h3-lock-icon"; lockIcon.textContent = "🔒"; lockIcon.style.position = "absolute"; lockIcon.style.right = "4px"; lockIcon.style.top = "4px"; lockIcon.style.fontSize = "12px"; slot.style.position = "relative"; slot.appendChild(lockIcon); } if (!m.includes("T2VA") && supported) { slot.onclick = event => { event.stopPropagation(); selectedLane = targetLane; const acceptTypes = targetLane === "audio" ? ["audio"] : ["image","video"]; const accepts = acceptTypes.map(t => t === "image" ? "image/*" : t === "video" ? "video/*" : "audio/*").join(","); fileInput.accept = accepts; fileInput.click(); }; } lane.append(slot); } lanes.set(type, lane); trackInner.append(lane); });
+    const laneTypes = ["Image/Video", "audio"]; const laneHeight = 120; const trackEntries = displayedItems(); const scale = 48; const audioSlotWidth = sourceDuration => Math.round(Math.max(180, Math.min(420, 96 * Math.log2(Math.max(2, sourceDuration) + 1)))); const slotWidthFor = item => item && (item.type === "audio" || item.type === "video") ? audioSlotWidth(Number(item.source_duration) || item.duration) : 112; const laneNameFor = item => laneForItem(item) === "audio" ? "audio" : "Image/Video"; const slotItem = (lane, slot) => trackEntries.find(item => laneNameFor(item) === lane && item.slot === slot); const slotLeft = (lane, slot) => { let left = 6; for (let index = 0; index < slot; index += 1) left += slotWidthFor(slotItem(lane, index)) + 8; return left; }; const acceptLaneDrop = async (event, targetLane) => { event.preventDefault(); event.stopPropagation(); trackInner.classList.remove("over"); const rect = trackInner.getBoundingClientRect(); insertAt = Math.max(0, Math.round(((event.clientX - rect.left) / scale) * 4) / 4); trackInner.style.setProperty("--insert-x", `${insertAt * scale}px`); for (const file of event.dataTransfer.files || []) await acceptFile(file, targetLane); }; const visualSlotCount = () => mode() === "T2VA" ? 0 : (mode() === "I2VA" || mode() === "Image Inpaint") ? 1 : mode() === "L2VA" ? 2 : mode() === "FL2VA" ? 2 : MAX.image + MAX.video; const slotExtent = lane => Array.from({ length: lane === "audio" ? MAX.audio : visualSlotCount() }, (_, index) => slotWidthFor(slotItem(lane === "audio" ? "audio" : "Image/Video", index)) + 8).reduce((sum, width) => sum + width, 6); trackInner.style.width = `${Math.max(240, slotExtent("Image/Video"), slotExtent("audio"))}px`; trackInner.style.height = `${laneTypes.length * laneHeight}px`; trackInner.style.background = `repeating-linear-gradient(0deg, transparent 0, transparent ${laneHeight - 1}px, #344452 ${laneHeight - 1}px, #344452 ${laneHeight}px), repeating-linear-gradient(90deg,#111a21 0,#111a21 49px,#1b2933 50px)`; const ruler = document.createElement("div"); ruler.className = "ds-h3-ruler"; for (let second = 0; second <= timelineSeconds; second++) { if (second % 2 !== 0) continue; const mark = document.createElement("div"); mark.style.position = "absolute"; mark.style.left = `${second * scale}px`; mark.style.bottom = "0"; mark.style.fontSize = "9px"; mark.style.color = "#8fa3b2"; mark.textContent = `${second}s`; ruler.appendChild(mark); } track.append(ruler);
+    const lanes = new Map(); laneTypes.forEach((type, index) => { const lane = document.createElement("div"); const targetLane = type === "audio" ? "audio" : "visual"; const m = mode(); const audioDisabledByMode = m === "T2VA" || m === "I2VA" || m === "FL2VA" || m === "L2VA" || m === "Image Inpaint"; const supported = !(targetLane === "audio" && audioDisabledByMode); const slotCount = targetLane === "audio" ? MAX.audio : visualSlotCount(); lane.className = `ds-h3-timeline-lane ${targetLane}${selectedLane === targetLane ? " selected" : ""}${supported ? "" : " disabled"}`; lane.style.top = `${index * laneHeight}px`; lane.onclick = () => { if (!supported) { setStatus(m === "T2VA" ? "T2VA has no input lanes." : audioDisabledByMode ? "This mode does not support audio references." : "", true); return; } selectedLane = targetLane; setStatus(`${type === "audio" ? "Audio" : "Image/Video"} lane selected. Paste files here with Ctrl+V.`); render(); }; lane.ondragover = event => { if ([...event.dataTransfer.items].some(item => item.kind === "file")) { event.preventDefault(); if (supported) trackInner.classList.add("over"); } }; lane.ondragleave = () => trackInner.classList.remove("over"); lane.ondrop = event => { if (!supported) { event.preventDefault(); event.stopPropagation(); setStatus(audioDisabledByMode ? "This mode does not support audio references." : "", true); return; } selectedLane = targetLane; acceptLaneDrop(event, targetLane); }; const label = document.createElement("span"); label.className = "ds-h3-lane-label"; label.textContent = `${type}${selectedLane === targetLane ? " · selected" : ""}`; label.style.display = hiddenLanes.has(type) ? "none" : "block"; lane.append(label); for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) { if (slotItem(type, slotIndex)) continue; const slot = document.createElement("span"); slot.className = "ds-h3-empty-slot"; slot.textContent = "+"; slot.style.left = `${slotLeft(type, slotIndex)}px`; slot.style.width = `${slotWidthFor(null)}px`; if (m === "L2VA" && targetLane === "visual" && slotIndex === 0) { const lockIcon = document.createElement("span"); lockIcon.className = "ds-h3-lock-icon"; lockIcon.textContent = "🔒"; lockIcon.style.position = "absolute"; lockIcon.style.right = "4px"; lockIcon.style.top = "4px"; lockIcon.style.fontSize = "12px"; slot.style.position = "relative"; slot.appendChild(lockIcon); } if (!m.includes("T2VA") && supported) { slot.onclick = event => { event.stopPropagation(); selectedLane = targetLane; const acceptTypes = targetLane === "audio" ? ["audio"] : ["image","video"]; const accepts = acceptTypes.map(t => t === "image" ? "image/*" : t === "video" ? "video/*" : "audio/*").join(","); fileInput.accept = accepts; fileInput.click(); }; } lane.append(slot); } lanes.set(type, lane); trackInner.append(lane); });
     trackEntries.forEach(item => { const clip = document.createElement("div"); clip.className = `ds-h3-clip ${item.type} ${selectedId === item.id ? "selected" : ""}${isLockedSlot(item) ? " locked" : ""}`; clip.textContent = mediaLabel(item); clip.title = item.type === "text" ? String(item.value || "") : String(item.value || ""); clip.style.display = "block"; const bgSrc = item.type === "image" ? viewUrl(item.value) : item.thumbnail || null; if (bgSrc) { clip.style.backgroundImage = `linear-gradient(90deg, rgba(20,35,45,.78), rgba(20,35,45,.5)), url("${bgSrc}")`; clip.style.backgroundSize = "cover"; clip.style.backgroundPosition = "center"; } item.slot = Number.isInteger(item.slot) ? item.slot : trackEntries.filter(x => laneNameFor(x) === laneNameFor(item)).indexOf(item); item.start = item.slot; item.duration = Number.isFinite(item.duration) ? item.duration : 1; const visualStart = item.start; const sourceDuration = Number(item.source_duration) || item.duration; const clipWidth = slotWidthFor(item); clip.style.left = `${slotLeft(laneNameFor(item), item.slot)}px`; clip.style.top = "7px"; clip.style.width = `${clipWidth}px`; clip.style.setProperty("--clip-width", `${clipWidth}px`); clip.dataset.slot = String(item.slot); const identity = document.createElement("span"); identity.className = "ds-h3-clip-identity"; const typePosition = trackEntries.filter(entry => entry.type === item.type).sort((a, b) => a.slot - b.slot).indexOf(item) + 1; identity.textContent = `${mediaReferenceName(item.type)} ${typePosition}`; clip.append(identity); if (isLockedSlot(item)) { const lockIcon = document.createElement("span"); lockIcon.className = "ds-h3-lock-icon"; lockIcon.textContent = "🔒"; clip.append(lockIcon); } if (item.type === "video") { const streamControls = document.createElement("span"); streamControls.className = "ds-h3-video-stream-controls"; const currentMediaMode = ["video", "audio", "video_audio"].includes(item.media_mode) ? item.media_mode : "video"; [["video", "V", "Video only"], ["audio", "A", "Audio only"], ["video_audio", "V+A", "Video + embedded audio"]].forEach(([value, label, title]) => { const button = document.createElement("button"); button.textContent = label; button.title = title; button.classList.toggle("active", value === currentMediaMode); button.onpointerdown = event => event.stopPropagation(); button.onclick = event => { event.stopPropagation(); mutate(s => { const target = s.items.find(x => x.id === item.id); if (target) target.media_mode = value; }); }; streamControls.append(button); }); clip.append(streamControls); const videoScale = document.createElement("span"); videoScale.className = "ds-h3-video-scale"; videoScale.title = "Full source-duration scale"; clip.append(videoScale); } if (selectedId === item.id) { const close = document.createElement("button"); close.className = "ds-h3-clip-close"; close.textContent = "×"; close.title = `Remove selected ${item.type}`; close.onclick = event => { event.stopPropagation(); remove(item.id); }; clip.append(close); }
       const cropReadout = document.createElement("span"); cropReadout.className = "ds-h3-crop-readout"; if (item.type === "video" || item.type === "audio") { cropReadout.textContent = `crop ${Number(item.trim_start || 0).toFixed(2)}s–${item.trim_end == null ? "end" : Number(item.trim_end).toFixed(2) + "s"}`; clip.append(cropReadout); } if (item.type === "video") { for (const edge of ["start", "end"]) { const marker = document.createElement("span"); marker.className = `ds-h3-crop-marker ${edge}`; marker.style.left = `${(Number(edge === "start" ? item.trim_start || 0 : item.trim_end ?? sourceDuration) / sourceDuration) * 100}%`; clip.append(marker); } } if (item.type === "audio") { const peaks = Array.isArray(item.waveform_peaks) ? item.waveform_peaks : []; const waveform = document.createElement("canvas"); waveform.className = "ds-h3-waveform"; waveform.width = 720; waveform.height = 160; waveform.title = peaks.length ? "Full audio waveform; crop markers show the selected reference window" : "Decoding audio waveform…"; const context = waveform.getContext("2d"); if (context && peaks.length) { const center = waveform.height / 2; context.fillStyle = "rgba(126, 225, 157, .8)"; for (let x = 0; x < waveform.width; x += 1) { const peakIndex = Math.min(peaks.length - 1, Math.floor((x / waveform.width) * peaks.length)); const amplitude = (Math.log1p(9 * peaks[peakIndex]) / Math.log(10)) * (waveform.height - 16) * .45; context.fillRect(x, center - amplitude, 1, amplitude * 2); } } const cropStartMarker = document.createElement("span"); cropStartMarker.className = "ds-h3-audio-crop-marker start"; const cropEndMarker = document.createElement("span"); cropEndMarker.className = "ds-h3-audio-crop-marker end"; const updateAudioCropMarkers = () => { const startPercent = Math.max(0, Math.min(100, (Number(item.trim_start || 0) / sourceDuration) * 100)); const endPercent = Math.max(startPercent, Math.min(100, (Number(item.trim_end ?? sourceDuration) / sourceDuration) * 100)); cropStartMarker.style.left = `${startPercent}%`; cropEndMarker.style.left = `${endPercent}%`; }; updateAudioCropMarkers(); clip.append(waveform, cropStartMarker, cropEndMarker); }
       const resize = (edge, event) => { event.stopPropagation(); clip.setPointerCapture?.(event.pointerId); const origin = event.clientX; const start = item.start; const duration = item.duration; const sourceDuration = Number(item.source_duration) || duration; const minimumReferenceDuration = Math.min(2, sourceDuration); const cropStartAtDrag = Number(item.trim_start) || 0; const cropEndAtDrag = Number(item.trim_end) || sourceDuration; const onMove = moveEvent => { const delta = (item.type === "audio" || item.type === "video") ? ((moveEvent.clientX - origin) / clipWidth) * sourceDuration : (moveEvent.clientX - origin) / scale; if (edge === "left") { if (item.type === "video" || item.type === "audio") { item.trim_start = Math.min(cropEndAtDrag - minimumReferenceDuration, Math.max(0, Math.round((cropStartAtDrag + delta) * 4) / 4)); item.duration = Math.min(15, Math.max(minimumReferenceDuration, Math.round((cropEndAtDrag - item.trim_start) * 4) / 4)); item.trim_end = cropEndAtDrag; } else { const nextStart = Math.max(0, Math.round((start + delta) * 4) / 4); const end = start + duration; item.start = Math.min(nextStart, end - 0.25); item.duration = Math.max(0.25, Math.round((end - item.start) * 4) / 4); item.trim_start = item.start; } } else if (item.type === "video" || item.type === "audio") { item.trim_end = Math.min(sourceDuration, Math.max(cropStartAtDrag + minimumReferenceDuration, Math.round((cropEndAtDrag + delta) * 4) / 4)); item.duration = Math.min(15, Math.max(minimumReferenceDuration, Math.round((item.trim_end - cropStartAtDrag) * 4) / 4)); item.trim_end = cropStartAtDrag + item.duration; } else { item.duration = Math.max(0.25, Math.round((duration + delta) * 4) / 4); item.trim_end = item.start + item.duration; } if (item.type === "video" || item.type === "audio") { cropReadout.textContent = `crop ${Number(item.trim_start || 0).toFixed(2)}s–${Number(item.trim_end).toFixed(2)}s / ${sourceDuration.toFixed(2)}s`; setStatus(`${edge === "left" ? "Crop start" : "Crop end"}: ${cropReadout.textContent}`); } if (item.type === "video" || item.type === "audio") { const startPercent = Math.max(0, Math.min(100, (Number(item.trim_start || 0) / sourceDuration) * 100)); const endPercent = Math.max(startPercent, Math.min(100, (Number(item.trim_end ?? sourceDuration) / sourceDuration) * 100)); const [cropStartMarker, cropEndMarker] = clip.querySelectorAll(".ds-h3-crop-marker, .ds-h3-audio-crop-marker"); if (cropStartMarker) cropStartMarker.style.left = `${startPercent}%`; if (cropEndMarker) cropEndMarker.style.left = `${endPercent}%`; } clip.style.left = `${slotLeft(laneNameFor(item), item.slot)}px`; clip.style.width = `${clipWidth}px`; }; const onUp = () => { clip.removeEventListener("pointermove", onMove); clip.removeEventListener("pointerup", onUp); if (item._block) { item._block.start = item.start; item._block.duration = item.duration; } mutate(() => {}); }; clip.addEventListener("pointermove", onMove); clip.addEventListener("pointerup", onUp); };
@@ -863,6 +1189,10 @@ function install(node) {
       promptPanel.prepend(note);
     }
     timeline.append(promptPanel);
+    // Keep the authoring surface in a left column while Preview & Output stays beside it.
+    saveNodePanel.remove(); controlRow.style.display = "block";
+    const leftColumn = document.createElement("div"); leftColumn.className = "ds-h3-authoring-column"; leftColumn.style.cssText = "min-width:0;display:flex;flex-direction:column;gap:6px"; leftColumn.append(controlRow, infoFeed, track, promptPanel);
+    const contentLayout = document.createElement("div"); contentLayout.className = "ds-h3-content-layout"; contentLayout.style.cssText = "width:100%;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:8px;align-items:stretch"; contentLayout.append(leftColumn, saveNodePanel); timeline.append(contentLayout);
     // Prompt text is edited on the corresponding media row and synchronized to prompt_blocks.
     timeline.append(status); if (domWidget) domWidget.computeSize = () => [Math.max(420, node.size?.[0] || 520), uiHeight()];
   };
@@ -897,6 +1227,10 @@ function install(node) {
       const height = Number(value);
       if (Number.isFinite(height) && height >= 60) fieldHeights[key] = height;
     }
+    state.postprocess_recipe = Array.isArray(state.postprocess_recipe) ? state.postprocess_recipe : DEFAULT_POSTPROCESS_RECIPE;
+    state.internal_execution = { sampler: "res_multistep", scheduler: "simple", steps: 25, shift_video: 11, shift_audio: 4, comfy_kitchen_attention: false, cache: { enabled: false, reuse_threshold: 0.05, start_percent: 0.15, end_percent: 0.90, max_steps: 2, device: "auto", verbose: false }, ...(state.internal_execution && typeof state.internal_execution === "object" ? state.internal_execution : {}) };
+    state.internal_execution.cache = { enabled: false, reuse_threshold: 0.05, start_percent: 0.15, end_percent: 0.90, max_steps: 2, device: "auto", verbose: false, ...(state.internal_execution.cache && typeof state.internal_execution.cache === "object" ? state.internal_execution.cache : {}) };
+    state.internal_execution.save = { output_kind: "image", filename_prefix: "DaSiWa_MiniMaxH3_%date:yyyyMMdd%_%seed%", file_format: "webp", compression: 15, save_output: true, save_workflow: true, codec: "Auto", container: "Auto", bit_depth: "Auto", quality: 20, pingpong: false, crop_to_audio: false, audio_codec: "Auto", audio_bitrate: "192k", save_first_frame: false, save_last_frame: false, model_hash: "", text_positive: "", text_negative: "", text_steps: 0, text_cfg: 0, text_sampler: "", text_scheduler: "", text_seed: 0, text_model: "", ...(state.internal_execution.save || {}) };
     selectedId = null;
     const m = mode();
     const baseDefaults = DEFAULT_BUILDER_STATE(m);
@@ -946,14 +1280,35 @@ function install(node) {
       lastExternalCanvasLinked = externalCanvasLinked;
       requestAnimationFrame(render);
     }
+    const externalSeedLinked = hasExternalSeed();
+    if (externalSeedLinked !== lastExternalSeedLinked) {
+      lastExternalSeedLinked = externalSeedLinked;
+      requestAnimationFrame(render);
+    }
+    const externalSamplingLinked = hasExternalSampling();
+    if (externalSamplingLinked !== lastExternalSamplingLinked) {
+      lastExternalSamplingLinked = externalSamplingLinked;
+      requestAnimationFrame(render);
+    }
+  };
+  const oldOnExecuted = node.onExecuted;
+  node.onExecuted = function (message) {
+    const result = oldOnExecuted?.apply(this, arguments);
+    const asset = message?.gifs?.[0] ?? message?.videos?.[0] ?? message?.images?.[0];
+    if (asset?.filename) {
+      this.__dasiwaH3SavedPreview = asset;
+      render();
+    }
+    return result;
   };
   node.__dasiwaH3RestorePersistedState = () => requestAnimationFrame(restorePersistedState);
   node.__dasiwaH3State = () => state; node.__dasiwaH3Render = render;
-  if (modeWidget) { const old = modeWidget.callback; modeWidget.callback = value => { old?.(value); render(); }; }
+  node.__dasiwaH3PrepareSeed = () => { if (hasExternalSeed() || state.seed_control?.mode !== "random") return; const words = crypto.getRandomValues(new Uint32Array(2)); const value = ((BigInt(words[0]) << 32n) | BigInt(words[1])).toString(); const widget = seedWidget(); if (widget) { widget.value = value; widget.callback?.(value); } state.seed_control.last_seed = value; state.seed_control.recent = [value, ...(state.seed_control.recent || []).filter(entry => entry !== value)].slice(0, 10); emit(); };
+  if (modeWidget) { const old = modeWidget.callback; modeWidget.callback = value => { selectedModeOverride = value; old?.(value); render(); }; }
   const extWidget = externalPromptWidget();
   if (extWidget) { const old = extWidget.callback; extWidget.callback = value => { old?.(value); render(); }; }
   const lengthWidget = node.widgets?.find(w => w.name === "duration");
-  if (lengthWidget) { const old = lengthWidget.callback; lengthWidget.callback = value => { old?.(value); render(); }; }
+  if (lengthWidget) { const old = lengthWidget.callback; lengthWidget.callback = value => { old?.call(lengthWidget, value); render(); }; }
   const oldDrawForeground = node.onDrawForeground;
   node.onDrawForeground = function (...args) { oldDrawForeground?.apply(this, args); const seconds = Math.max(1, Number(lengthWidget?.value) || 5); if (seconds !== lastTimelineLength) render(); };
   node.__dasiwaH3LengthPoll = window.setInterval(() => { const seconds = Math.max(1, Number(lengthWidget?.value) || 5); if (seconds !== lastTimelineLength) render(); }, 200);
@@ -968,24 +1323,17 @@ function install(node) {
       lastExternalCanvasLinked = externalCanvasLinked;
       render();
     }
+    const externalSamplingLinked = hasExternalSampling();
+    if (externalSamplingLinked !== lastExternalSamplingLinked) {
+      lastExternalSamplingLinked = externalSamplingLinked;
+      render();
+    }
   }, 300);
   syncNodeBounds();
   requestAnimationFrame(syncNodeBounds);
   render();
+
 }
 
-app.registerExtension({
-  name: "DaSiWa.MiniMaxH3Director",
-  beforeConfigureGraph(graphData) {
-    migrateLegacyDaSiWaDirectors(graphData);
-  },
-  nodeCreated(node) {
-    if (node.comfyClass === DIRECTOR_NODE_ID) install(node);
-  },
-  loadedGraphNode(node) {
-    if (node.comfyClass === DIRECTOR_NODE_ID) {
-      install(node);
-      node.__dasiwaH3RestorePersistedState?.();
-    }
-  },
-});
+const DIRECTOR_NODE_TYPES = new Set(["MiniMaxH3DirectorV2"]);
+app.registerExtension({ name: "DaSiWa.MiniMaxH3DirectorV2", nodeCreated(node) { if (DIRECTOR_NODE_TYPES.has(node.comfyClass)) install(node); }, loadedGraphNode(node) { if (DIRECTOR_NODE_TYPES.has(node.comfyClass)) { install(node); node.__dasiwaH3RestorePersistedState?.(); } }, beforeQueued() { for (const node of app.graph?._nodes || []) if (DIRECTOR_NODE_TYPES.has(node.comfyClass)) node.__dasiwaH3PrepareSeed?.(); } });

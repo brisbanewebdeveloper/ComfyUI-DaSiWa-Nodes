@@ -47,20 +47,14 @@ Check these settings first when users report degraded quality:
 | **divisible_by** | Use **8** for RTX-style image/video upscaling. Use **32** only when the next model in the workflow requires it. |
 | **resize_method** | When the source and target aspect ratios don't match: `Center Crop` fills the whole target frame by cutting edges; `Letterbox` fits the whole image inside and adds black bars. |
 | **device_id** | If you have multiple GPUs, set this to the index of your RTX card (usually `0`). |
-| **use_mmap** | **On** (default): permits the disk-backed (mmap) fallback. Preference is always VRAM -> RAM -> disk; disk is used only when free VRAM/RAM is still short after `auto_unload_models`. **Off**: never use disk — if memory stays short the output uses RAM (CPU) when possible, otherwise a clear error is raised. |
+| **use_mmap** | **Off** (default): disk is never used — the output is allocated lazily in memory (VRAM when it fits, otherwise RAM) and the kernel decides. **On**: opt-in disk-backed (mmap) fallback as the last tier of the VRAM -> RAM -> disk chain; it writes a multi-giB `.mmap` temp file to your temp drive for the whole run. Only enable it for very long video batches that genuinely exceed available RAM. |
 | **auto_unload_models** | **On** (default): when free VRAM/RAM is insufficient for the output, unloads ComfyUI-managed models (a full `unload_all_models`, like the manual empty-cache path but more thorough) and re-checks before falling back to disk. **Off**: fall back immediately without unloading. |
 
 ## 💾 Disk-Backed (mmap) Output — `use_mmap`
 
-`use_mmap` (on by default) *permits* the disk-backed (mmap) fallback; it is the last tier of the VRAM -> RAM -> disk chain and is only used when free VRAM/RAM is still insufficient after `auto_unload_models`. RAM/VRAM is always preferred when it fits; the file is deleted as soon as the output tensor is released. When `use_mmap` is **off**, disk is never used — the output uses RAM when possible, and otherwise the node raises a clear error telling you to enable `use_mmap` or reduce the batch/resolution.
+`use_mmap` is **off by default**: the output is allocated lazily in memory (VRAM when it fits, otherwise RAM) and the kernel decides — matching the reference NVIDIA RTX node, so reserving a large video batch never forces the full footprint up front and no temp file is ever created. When `use_mmap` is **enabled** (opt-in, only for very long video batches that genuinely exceed available RAM), it *permits* the disk-backed (mmap) fallback; it is the last tier of the VRAM -> RAM -> disk chain and is only used when free VRAM/RAM is still insufficient after `auto_unload_models`. The file is deleted as soon as the output tensor is released.
 
-> **Disk space (issue #29):** disk-backed files can be several GiB for long 4K
-> batches (8.99 GB was observed with Frame Interpolation). The node checks free
-> disk space before creating the file and raises a clear error when the temp
-> drive cannot hold output + 1 GiB reserve. On Windows, an unlinked mmap file
-> only releases its disk space when the last handle to it is closed — while a
-> downstream node still holds the output, the space stays charged. Process
-> batches in smaller chunks to cap simultaneous disk usage.
+> **Warning:** enabling `use_mmap` writes a temp file to your ComfyUI temp drive that can grow to the **full output size** (several GiB for long 4K batches; 8.99 GB was observed with Frame Interpolation) and stays on disk for the whole run. The node checks free disk space before creating the file and raises a clear error when the temp drive cannot hold output + 1 GiB reserve. On Windows, an unlinked mmap file only releases its disk space when the last handle to it is closed — while a downstream node still holds the output, the space stays charged.
 
 ## 💡 Pro-Tips
 
@@ -70,9 +64,9 @@ Check these settings first when users report degraded quality:
 
 ## CPU Batch Storage
 
-CPU output batches use the currently available RAM reported by `psutil`, not a fixed RAM cap. The node reserves 25% of total RAM on systems below 32 GiB (minimum 1 GiB), rising smoothly to an 8 GiB maximum reserve on larger systems. It uses disk-backed temporary storage only when allocating the complete output batch would cross that reserve. The check runs at allocation time rather than at ComfyUI startup, so it accounts for models and other workloads loaded after startup. GPU outputs retain their separate 8 GiB VRAM safety limit.
+CPU output batches use the currently available RAM reported by `psutil`, not a fixed RAM cap. The node reserves 25% of total RAM on systems below 32 GiB (minimum 1 GiB), rising smoothly to an 8 GiB maximum reserve on larger systems. The reserve is used to decide whether the opt-in disk-backed (`use_mmap`) fallback is needed; when `use_mmap` is off (default), the output is allocated lazily in RAM regardless and the kernel decides. The check runs at allocation time rather than at ComfyUI startup, so it accounts for models and other workloads loaded after startup. GPU outputs retain their separate 24 GiB VRAM safety limit.
 
-- **`use_mmap`** (on by default) *permits* the disk-backed path as the final tier of the VRAM -> RAM -> disk chain, taken only when free VRAM/RAM is still insufficient after auto-unload. **Off** disables disk entirely (the node uses RAM when possible and raises a clear error otherwise).
+- **`use_mmap`** (off by default) *permits* the disk-backed path as the final tier of the VRAM -> RAM -> disk chain, taken only when available RAM cannot back the batch and `auto_unload_models` did not make room. **Off** (default) disables disk entirely: the output is allocated lazily in memory and a genuine OOM surfaces naturally instead of being pre-empted by a temp file.
 - **`auto_unload_models`** (on by default) is the first remediation when the active tier (VRAM, or RAM on CPU) is short: it fully unloads ComfyUI-managed models, re-checks that tier, and only then drops to a lower tier.
 
 ---

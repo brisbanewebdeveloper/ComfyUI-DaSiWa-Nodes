@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 const sourcePath = new URL("../js/minimax_h3_director.js", import.meta.url);
 let source = await readFile(sourcePath, "utf8");
 source = source.replace(
-    'import { app } from "../../../scripts/app.js";\nimport { api } from "../../../scripts/api.js";',
+    'import { app } from "../../scripts/app.js";\nimport { api } from "../../scripts/api.js";',
     "const app = { registerExtension() {} }; const api = {};"
 );
 source += "\nexport { mediaTypeFor, wavDurationFromBuffer, REPOSITORY_URL, MINIMAX_MULTIPLE, ASPECT_OPTIONS, RESOLUTION_PRESETS };";
@@ -62,15 +62,15 @@ assert.match(source, /const hasContent = state\.items\.length \|\| state\.prompt
 assert.match(source, /function probeDimensions\(value, type\)/, "visual uploads must probe image and video source dimensions");
 assert.match(source, /source_width: width, source_height: height/, "source dimensions must persist with the media item");
 assert.match(source, /ds-h3-resolution-panel/, "the resolution controls must render in their own panel");
-assert.match(source, /Auto · short side 768 px/, "Auto resolution must describe the MiniMax 768px short-side default");
-assert.match(source, /MINIMAX_MULTIPLE = 16/, "MiniMax output dimensions must align to 16 pixels");
+assert.match(source, /Native \(ShortEdge 768px\)/, "Auto resolution must describe the MiniMax 768px short-side default");
+assert.match(source, /MINIMAX_MULTIPLE = 32/, "MiniMax output dimensions must align to the 32px H3 grid");
 assert.match(source, /source \? Number\(source\.source_width\) \/ Number\(source\.source_height\) : 4 \/ 3/, "Auto aspect must use the MiniMax T2VA 4:3 fallback without visual media");
 assert.match(source, /settings\.resolution === "custom" && settings\.custom_mode === "fixed"\) return \[snap16\(settings\.custom_width\), snap16\(settings\.custom_height\)\]/, "fixed custom pixels must resolve without a media-derived aspect");
 assert.match(source, /options\.forEach\([\s\S]*?select\.value = value; select\.oninput/, "resolution selects must set their value after options exist and react on input");
-assert.match(source, /Auto aspect" : settings\.aspect\} · \$\{settings\.resolution === "auto" \? "Auto 768px" : settings\.resolution\}/, "the readout must identify the actual selected aspect and resolution");
+assert.match(source, /\$\{settings\.aspect === "auto" \? "Auto 768px" : settings\.aspect\} · \$\{settings\.resolution === "auto" \? "Auto 768px" : settings\.resolution\}/, "the readout must identify the actual selected aspect and resolution");
 assert.match(source, /INPUT SCALING/, "the resolution panel must expose the third input-scaling dropdown");
 assert.match(source, /input_scaling: "Auto"/, "input scaling must default to Auto alongside Aspect and Resolution");
-assert.match(source, /\["Off", "Off"\], \["Auto", "Auto · short edge 2048 px"\], \["Target", "Target · Selected Aspect & Resolution"\], \["Fit", "Fit"\]/, "input scaling must expose the reused Torch Resize behaviours");
+assert.match(source, /\[\["Off", "Off"], \["Auto", "Native \(ShortEdge 2048px\)"], \["Target", "Target · Selected Aspect & Resolution"], \["Fit", "Fit"\]/, "input scaling must expose the reused Torch Resize behaviours");
 assert.match(source, /external_width_overwrite/, "the Director frontend must recognize the external width overwrite input");
 assert.match(source, /external_height_overwrite/, "the Director frontend must recognize the external height overwrite input");
 assert.match(source, /external_prompt_overwrite/, "the external prompt input must be named as an overwrite");
@@ -82,6 +82,8 @@ assert.match(source, /ds-h3-fixed-dimensions/, "fixed custom resolution must gro
 assert.match(source, /display:flex;gap:6px/, "fixed custom resolution dimensions must use a horizontal flex layout");
 assert.match(source, /dimensionField\("WIDTH", settings\.custom_width/, "fixed custom resolution must label the width field");
 assert.match(source, /dimensionField\("HEIGHT", settings\.custom_height/, "fixed custom resolution must label the height field");
+assert.match(source, /state\.field_heights = \{ \.\.\.fieldHeights \};/, "resized prompt fields must persist their height in the serialized timeline state");
+assert.match(source, /const key = opts\.fieldKey \|\| "";/, "prompt fields must record resized heights under stable per-field keys");
 
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const { mediaTypeFor, wavDurationFromBuffer, REPOSITORY_URL, MINIMAX_MULTIPLE, ASPECT_OPTIONS, RESOLUTION_PRESETS } = await import(moduleUrl);
@@ -107,7 +109,7 @@ for (const [name, type] of [
 assert.equal(mediaTypeFor({ name: "reference.bin", type: "" }), null, "unknown files must not be uploaded as media");
 assert.equal(mediaTypeFor({ name: "renamed.bin", type: "audio/ogg" }), "audio", "known MIME types take precedence over extensions");
 assert.equal(REPOSITORY_URL, "https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/blob/main/docs/minimax_h3_director.md");
-assert.equal(MINIMAX_MULTIPLE, 16);
+assert.equal(MINIMAX_MULTIPLE, 32);
 assert.equal(ASPECT_OPTIONS[0][0], "auto");
 assert.equal(ASPECT_OPTIONS.at(-1)[0], "custom");
 assert.equal(RESOLUTION_PRESETS["8.30 MP - UHD"], 8.30);
