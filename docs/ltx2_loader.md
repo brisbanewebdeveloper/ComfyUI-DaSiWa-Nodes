@@ -66,8 +66,8 @@ Each row represents one LoRA slot. Columns are:
 |---|---|
 | **✔ ON / ✖ OFF** | Toggle this slot on/off. When off, the LoRA is ignored. |
 | **LoRA Name** | Click to select a LoRA from your library. Search box appears for quick filtering. |
-| **STR** | Master strength. Click `<` / `>` to adjust by ±0.05, or click the middle to type a custom value. Range: −2.0 to +2.0. |
-| **V×** | Video multiplier. Left/right arrows adjust by ±0.05, middle click for custom input. Range: 0.0 to 2.0. |
+| **STR** | Master strength. Click `<` / `>` to adjust by ±0.05, or click the middle to open an inline editor (type a value, OK to apply / Esc to cancel). Range: −5.0 to +5.0. |
+| **V×** | Video multiplier. Left/right arrows adjust by ±0.05, middle click opens an inline editor. Range: 0.0 to 2.0. |
 | **A×** | Audio multiplier. Same controls as V×. Range: 0.0 to 2.0. |
 | **V:N A:N** | Key count indicator (right side). Shows how many video and audio keys this LoRA contains. Updates automatically. |
 
@@ -156,7 +156,7 @@ Disable unused slots or reduce the number of active LoRAs. Fewer slots = faster 
 | **Change slot on/off** | Click the ON/OFF column |
 | **Change LoRA** | Click the LoRA name, search to filter |
 | **Fine-tune STR/V×/A×** | Click `<` or `>` arrows (±0.05 per click) |
-| **Manual input** | Click the value pill directly to type |
+| **Manual input** | Click the value pill (middle) to open an inline editor; type the value and press OK / Enter (Esc cancels). The box stays pinned next to the pill and follows pan / zoom, like native ComfyUI value editors |
 | **Cycle theme** | Click the theme button |
 | **Add slot** | Click the `+` button |
 | **Remove slot** | Click the `−` button |

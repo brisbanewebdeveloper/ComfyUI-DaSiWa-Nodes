@@ -99,7 +99,7 @@ def test_node_schema_and_registration():
     assert "syncBooleanWidget" in preview_source
     assert 'syncBooleanWidget(this, "save_first_frame", saveFirstFrame.checked)' in preview_source
     assert 'syncBooleanWidget(this, "save_last_frame", saveLastFrame.checked)' in preview_source
-    assert "actions.append(saveFirstFrameLabel, saveLastFrameLabel, autoPlayLabel, download)" in preview_source
+    assert "actions.append(saveFirstFrameLabel, saveLastFrameLabel, muteLabel, autoPlayLabel, download)" in preview_source
     assert 'autoPlay.type = "checkbox"' in preview_source
     assert "this.properties ??= {};" in preview_source
     assert "autoPlay.checked = this.properties.autoplay ?? true;" in preview_source
@@ -111,7 +111,14 @@ def test_node_schema_and_registration():
     assert 'preview.addEventListener("mouseleave"' in preview_source
     assert 'preview.addEventListener("dblclick", (event) => event.preventDefault())' in preview_source
     assert "const controls = document.createElement" not in preview_source
-    assert "const mute = document.createElement" not in preview_source
+    assert 'mute.type = "checkbox"' in preview_source
+    assert "mute.checked = this.properties.muted ?? false;" in preview_source
+    assert "this.properties.muted = mute.checked;" in preview_source
+    assert 'muteLabel.append(mute, " Mute")' in preview_source
+    assert "if (!mute.checked) preview.muted = false;" in preview_source
+    assert "if (this.properties?.muted && !preview.muted) preview.muted = true;" in preview_source
+    assert "this.dasiwaMuteCheckbox = mute;" in preview_source
+    assert "this.dasiwaMuteCheckbox.checked = this.properties?.muted ?? false;" in preview_source
 
     assert 'preview.dataset.filename = video.filename' in preview_source
     assert "this.dasiwaVideoPreviewWidget = previewWidget;" in preview_source

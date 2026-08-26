@@ -66,11 +66,11 @@ Connect a ComfyUI `AUDIO` value to mux it with the video.
 - `audio_codec=Auto` uses Opus for WebM and AAC for MKV/MP4. You can instead select AAC, Opus, or MP3; the node falls back to a container-compatible audio encoder when necessary.
 - Select `audio_bitrate` from 64k through 320k (192k by default).
 - `crop_to_audio` ends video output at the connected audio duration.
-- Preview audio is muted by default, unmutes while the pointer is over the video, and mutes again when the pointer leaves.
+- Preview audio is muted by default, unmutes while the pointer is over the video, and mutes again when the pointer leaves. Check **Mute** to keep the preview permanently silent; the setting is saved with the node and the native player controls cannot un-mute it while it is on.
 
 ## Preview and frame controls
 
-The completed video is shown inside a compact framed preview with source-native aspect ratio. Its native canvas player controls appear only while the pointer is over the video, and hide again when it leaves; there is no duplicate play button or timeline. Preview audio follows the same hover behavior. The framed row below the video holds Autoplay and first/last-frame export controls.
+The completed video is shown inside a compact framed preview with source-native aspect ratio. Its native canvas player controls appear only while the pointer is over the video, and hide again when it leaves; there is no duplicate play button or timeline. Preview audio follows the same hover behavior. The framed row below the video holds Autoplay, Mute, and first/last-frame export controls. Autoplay and Mute are stored in the node properties, so both are saved with the workflow and restored on load.
 
 `save_first_frame` and `save_last_frame` write the selected source frame as a native-resolution PNG beside the encoded video. The names retain the complete video basename, including the counter and optional audio marker:
 

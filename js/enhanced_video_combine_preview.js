@@ -102,8 +102,8 @@ function showHelpDialog() {
             <dt><b>container</b></dt><dd>Auto selects compatible containers: WebM, MKV, then MP4 for AV1/VP9; MP4 then MKV for H.264/H.265.</dd>
             <dt><b>image animation</b></dt><dd>Animated WebP and Animated AVIF are manual image-animation outputs. They are excluded from Auto codec/container selection, ignore the codec choice, and omit connected audio.</dd>
             <dt><b>bit depth / quality</b></dt><dd>With an explicit codec, Auto bit depth detects 8- or 10-bit frame precision; codec Auto uses browser-compatible 8-bit output. Lower quality values retain more detail and create larger files.</dd>
-            <dt><b>audio</b></dt><dd>Connect AUDIO to mux it. Choose Auto, AAC, Opus, or MP3 plus a target bitrate; Auto uses Opus for WebM and AAC for MKV/MP4. Crop to audio ends video at the audio duration. Preview sound is on only while the pointer is over the video.</dd>
-            <dt><b>preview</b></dt><dd>The native output is used when the browser supports it. Unsupported outputs are transcoded to a temporary H.264 response while streaming; no preview sidecar is written.</dd>
+            <dt><b>audio</b></dt><dd>Connect AUDIO to mux it. Choose Auto, AAC, Opus, or MP3 plus a target bitrate; Auto uses Opus for WebM and AAC for MKV/MP4. Crop to audio ends video at the audio duration. Preview sound is on only while the pointer is over the video. Check <b>Mute</b> to keep the preview permanently silent; the choice is saved with the node.</dd>
+            <dt><b>preview</b></dt><dd>The native output is used when the browser supports it. Unsupported outputs are transcoded to a temporary H.264 response while streaming; no preview sidecar is written. Autoplay and Mute are also saved with the node.</dd>
             <dt><b>other</b></dt><dd>Ping-pong reverses interior frames for a loop. Save metadata embeds the ComfyUI workflow. Pass frames keeps frames available downstream.</dd>
         </dl>`;
     document.body.append(dialog);
@@ -206,6 +206,16 @@ app.registerExtension({
             const autoPlayLabel = document.createElement("label");
             autoPlayLabel.style.cssText = "display:flex;align-items:center;gap:3px;margin-left:auto;white-space:nowrap;cursor:pointer";
             autoPlayLabel.append(autoPlay, " Autoplay");
+            const mute = document.createElement("input");
+            mute.type = "checkbox";
+            mute.checked = this.properties.muted ?? false;
+            mute.addEventListener("change", () => {
+                this.properties.muted = mute.checked;
+                if (mute.checked) preview.muted = true;
+            });
+            const muteLabel = document.createElement("label");
+            muteLabel.style.cssText = "display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer";
+            muteLabel.append(mute, " Mute");
             const download = document.createElement("a");
             download.textContent = "Download";
             download.href = "#";
@@ -214,7 +224,7 @@ app.registerExtension({
             download.addEventListener("click", (event) => {
                 if (download.href.endsWith("#")) event.preventDefault();
             });
-            actions.append(saveFirstFrameLabel, saveLastFrameLabel, autoPlayLabel, download);
+            actions.append(saveFirstFrameLabel, saveLastFrameLabel, muteLabel, autoPlayLabel, download);
 
             preview.addEventListener("loadedmetadata", () => {
                 previewWidget.aspectRatio = preview.videoWidth / preview.videoHeight;
@@ -256,13 +266,18 @@ app.registerExtension({
                 }, 2500);
             });
             preview.addEventListener("mouseenter", () => {
-                preview.muted = false;
+                if (!mute.checked) preview.muted = false;
             });
             preview.addEventListener("mouseleave", () => {
                 preview.muted = true;
             });
+            preview.addEventListener("volumechange", () => {
+                // A checked Mute checkbox permanently silences the preview, even
+                // if the native player controls are used to un-mute it.
+                if (this.properties?.muted && !preview.muted) preview.muted = true;
+            });
             preview.addEventListener("dblclick", (event) => event.preventDefault());
-            [preview, info, actions, saveFirstFrame, saveFirstFrameLabel, saveLastFrame, saveLastFrameLabel, autoPlay, autoPlayLabel, download].forEach(stopNodeInteraction);
+            [preview, info, actions, saveFirstFrame, saveFirstFrameLabel, saveLastFrame, saveLastFrameLabel, autoPlay, autoPlayLabel, mute, muteLabel, download].forEach(stopNodeInteraction);
 
             root.append(preview, info, actions);
             const previewHeight = () => (previewNode.size[0] - 20) / (previewWidget?.aspectRatio ?? 16 / 9) + 110;
@@ -280,6 +295,7 @@ app.registerExtension({
             this.dasiwaVideoPreviewWidget = previewWidget;
             this.dasiwaFrameExportCheckboxes = { save_first_frame: saveFirstFrame, save_last_frame: saveLastFrame };
             this.dasiwaAutoPlayCheckbox = autoPlay;
+            this.dasiwaMuteCheckbox = mute;
             return result;
         };
 
@@ -293,6 +309,12 @@ app.registerExtension({
             }
             if (this.dasiwaAutoPlayCheckbox) {
                 this.dasiwaAutoPlayCheckbox.checked = this.properties?.autoplay ?? true;
+            }
+            if (this.dasiwaMuteCheckbox) {
+                this.dasiwaMuteCheckbox.checked = this.properties?.muted ?? false;
+            }
+            if (this.dasiwaMuteCheckbox?.checked && this.dasiwaVideoPreview) {
+                this.dasiwaVideoPreview.muted = true;
             }
             return result;
         };

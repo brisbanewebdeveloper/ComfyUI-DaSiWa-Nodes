@@ -77,6 +77,174 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const bump = (v, d) => Math.round(clamp((v ?? 1.0) + d, 0.0, 2.0) * 100) / 100;
 const bumpS = (v, d) => Math.round(clamp((v ?? 1.0) + d, -5.0, 5.0) * 100) / 100;
 
+// ── Inline value editor (ComfyUI-style) ──────────────────────────────────────
+// A DOM overlay anchored to the clicked pill in node space: a number input
+// pre-filled with the current value plus OK / Cancel. Replaces window.prompt()
+// on the STR / VIS / A pills. The box stays next to the pill, follows pan and
+// node drags, and scales with the canvas zoom (re-tracked every frame), like
+// the native ComfyUI widget value editors. Theme-colored, node-native look.
+let activeValueEditor = null;
+
+// Keep the editor pinned to its pill, mirroring the frontend's own widget
+// DOM layer. The core's zoom helper gives the view law for this build:
+//   graph = client/scale - ds.offset  =>  client = rect + scale*(graph + offset)
+// (rect = canvas element's page position). So:
+//   left/top    = rect + scale * (node.pos + anchor + gap + offset)   (client px)
+//   transform   = scale(z), transform-origin 0 0
+// The box corner stays glued to the pill through pan / zoom / node drags
+// (re-tracked every frame) and grows/shrinks with the zoom level. The
+// offset is always INSIDE the scale factor — adding it outside throws the
+// box off by (scale - 1) * offset on any pan.
+//
+// View state is looked up defensively (property names differ between
+// litegraph builds: canvas.ds / canvas.view / graph.view). The host element
+// is the graph canvas's own HTMLCanvasElement (canvas.canvas) — NOT a bare
+// document.querySelector("canvas"), which in a ComfyUI page grabs the first
+// media-preview <canvas> and throws the whole position off. If we can't
+// resolve a reliable host we bail to the click fallback rather than risk a
+// wrong-canvas position.
+function _viewState() {
+  const lg = app?.canvas || app?.graph?.canvas || window.litegraph?.canvas;
+  const view = lg?.ds || lg?.view || app?.graph?.view;
+  if (!view) return null;
+  const scale = view.scale;
+  const off = view.offset;
+  if (!(scale > 0) || typeof off?.[0] !== "number" || typeof off?.[1] !== "number") return null;
+  const host =
+    lg?.canvas ||
+    document.getElementById("graph-canvas");
+  if (!host?.getBoundingClientRect) return null;
+  const rect = host.getBoundingClientRect();
+  if (rect.width < 1) return null; // detached / hidden (view-mode switch)
+  return { scale, offset: off, left: rect.left, top: rect.top };
+}
+
+function positionValueEditor(overlay) {
+  const { node, anchor, clientX, clientY } = overlay._editorOpts;
+  const v = _viewState();
+  if (!node?.pos || !v) {
+    // View state unavailable: static placement at the original click.
+    overlay.style.transform = "";
+    overlay.style.left = Math.max(4, Math.min(clientX + 10, window.innerWidth - overlay._editorWidth - 8)) + "px";
+    overlay.style.top = Math.max(4, clientY + 10) + "px";
+    return;
+  }
+  const z = v.scale;
+  overlay.style.left =
+    (v.left + z * (node.pos[0] + anchor[0] + overlay._editorGap + v.offset[0])) + "px";
+  overlay.style.top = (v.top + z * (node.pos[1] + anchor[1] + v.offset[1])) + "px";
+  overlay.style.transform = "scale(" + z + ")";
+}
+
+function openValueEditor(opts) {
+  // opts: { node, anchor: [ax, ay] (local node px of the pill's top-right edge),
+  //         clientX, clientY (fallback when the view API is unavailable),
+  //         label, value, min, max, step, theme, onCommit }
+  closeValueEditor();
+  const t = opts.theme;
+  const width = 150;
+  const GAP = 6; // gap between the pill edge and the editor box, in node px
+
+  const overlay = document.createElement("div");
+  overlay.style.cssText = [
+    "position:fixed",
+    "transform-origin:0 0",
+    "z-index:10003",
+    "background:#0e1116",
+    "border:1px solid " + t.btnBorder,
+    "border-radius:4px",
+    "padding:6px 8px",
+    "display:flex",
+    "flex-direction:column",
+    "gap:5px",
+    "box-shadow:0 6px 18px #000",
+    "font:11px 'Courier New',monospace",
+    "color:" + t.btnText,
+  ].join(";");
+  const title = document.createElement("div");
+  title.textContent = opts.label;
+  title.style.cssText = "font-size:10px;opacity:.75;";
+  overlay.append(title);
+
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:6px;align-items:center;";
+
+  const inp = document.createElement("input");
+  inp.type = "number";
+  inp.step = String(opts.step ?? 0.01);
+  inp.min = String(opts.min);
+  inp.max = String(opts.max);
+  inp.value = String(opts.value);
+  inp.style.cssText =
+    "width:" + (width - 90) + "px;background:#1a1f27;border:1px solid " + t.btnBorder +
+    ";color:" + t.btnText + ";padding:3px 5px;font:11px 'Courier New',monospace;";
+  row.append(inp);
+
+  const okBtn = document.createElement("button");
+  okBtn.textContent = "OK";
+  okBtn.style.cssText =
+    "background:" + t.btnBg + ";border:1px solid " + t.btnBorder + ";color:" + t.btnText +
+    ";padding:3px 8px;border-radius:3px;cursor:pointer;font:11px 'Courier New',monospace;";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "✕";
+  cancelBtn.style.cssText =
+    "background:transparent;border:1px solid " + t.arrowColor + ";color:" + t.btnText +
+    ";padding:3px 6px;border-radius:3px;cursor:pointer;font:11px 'Courier New',monospace;";
+  row.append(okBtn, cancelBtn);
+  overlay.append(row);
+  document.body.append(overlay);
+
+  const commit = raw => {
+    const parsed = parseFloat(raw);
+    if (Number.isNaN(parsed)) { close(); return; }
+    const clamped = Math.min(opts.max, Math.max(opts.min, parsed));
+    opts.onCommit(clamped);
+    close();
+  };
+  const close = () => {
+    document.removeEventListener("mousedown", onDocDown, { capture: true });
+    overlay.remove();
+    if (activeValueEditor === overlay) activeValueEditor = null;
+  };
+  const onDocDown = ev => {
+    if (!overlay.contains(ev.target)) close();
+  };
+  document.addEventListener("mousedown", onDocDown, { capture: true });
+  overlay._docDown = onDocDown;
+
+  okBtn.onclick = () => commit(inp.value);
+  cancelBtn.onclick = close;
+  inp.onkeydown = ev => {
+    if (ev.key === "Enter") { ev.preventDefault(); commit(inp.value); }
+    else if (ev.key === "Escape") { ev.preventDefault(); close(); }
+  };
+
+  overlay._editorOpts = { node: opts.node, anchor: opts.anchor, clientX: opts.clientX, clientY: opts.clientY };
+  overlay._editorWidth = width;
+  overlay._editorGap = GAP;
+  activeValueEditor = overlay;
+  positionValueEditor(overlay);
+  requestAnimationFrame(() => {
+    inp.focus();
+    inp.select?.();
+    const track = () => {
+      if (!activeValueEditor || activeValueEditor !== overlay) return;
+      positionValueEditor(overlay);
+      requestAnimationFrame(track);
+    };
+    requestAnimationFrame(track);
+  });
+}
+
+function closeValueEditor() {
+  if (!activeValueEditor) return;
+  const el = activeValueEditor;
+  activeValueEditor = null;
+  if (el._docDown) document.removeEventListener("mousedown", el._docDown, { capture: true });
+  el.remove();
+}
+
 async function getCurrentLoraList(nodeData) {
   const fallback = nodeData?.input?.hidden?.available_loras?.[0] || ["None"];
 
@@ -463,6 +631,7 @@ app.registerExtension({
       const W = this.size[0];
       const H = this.size[1];
       const s = W / 1000;
+      const t = THEMES[this.properties.theme || "a"];
 
       const BTN_H = 16;
       const BTN_Y = 40;
@@ -569,22 +738,73 @@ app.registerExtension({
           if (x < C.stX + 14 * s) data[i].str = bumpS(data[i].str, -0.05);
           else if (x > C.stX + C.stW - 14 * s) data[i].str = bumpS(data[i].str, 0.05);
           else {
-            const v = prompt("LoRA Strength:", data[i].str ?? 1);
-            if (v !== null) data[i].str = clamp(parseFloat(v) || 0, -5, 5);
+            openValueEditor({
+              node: this,
+              anchor: [C.stX + C.stW, ry + 2],
+              clientX: e.clientX,
+              clientY: e.clientY,
+              label: "LoRA Strength (-5.0 to 5.0)",
+              value: data[i].str ?? 1,
+              min: -5,
+              max: 5,
+              step: 0.01,
+              theme: t,
+              onCommit: v => {
+                data[i].str = Math.round(v * 100) / 100;
+                this.properties.stack_data = JSON.stringify(data);
+                sync(this);
+                this.setDirtyCanvas(true);
+              },
+            });
+            return true;
           }
         } else if (x > C.vX && x < C.vX + C.vW) {
           if (x < C.vX + 10 * s) data[i].vs = bump(data[i].vs, -0.05);
           else if (x > C.vX + C.vW - 10 * s) data[i].vs = bump(data[i].vs, 0.05);
           else {
-            const v = prompt("V Multiplier (0–2):", data[i].vs ?? 1);
-            if (v !== null) data[i].vs = clamp(parseFloat(v) || 0, 0, 2);
+            openValueEditor({
+              node: this,
+              anchor: [C.vX + C.vW, ry + 2],
+              clientX: e.clientX,
+              clientY: e.clientY,
+              label: "Visual Multiplier (0.0 to 2.0)",
+              value: data[i].vs ?? 1,
+              min: 0,
+              max: 2,
+              step: 0.01,
+              theme: t,
+              onCommit: v => {
+                data[i].vs = Math.round(v * 100) / 100;
+                this.properties.stack_data = JSON.stringify(data);
+                sync(this);
+                this.setDirtyCanvas(true);
+              },
+            });
+            return true;
           }
         } else if (hasSeparatedAudio(this.properties.model_type) && x > C.aX && x < C.aX + C.aW) {
           if (x < C.aX + 10 * s) data[i].as = bump(data[i].as, -0.05);
           else if (x > C.aX + C.aW - 10 * s) data[i].as = bump(data[i].as, 0.05);
           else {
-            const v = prompt("A Multiplier (0–2):", data[i].as ?? 1);
-            if (v !== null) data[i].as = clamp(parseFloat(v) || 0, 0, 2);
+            openValueEditor({
+              node: this,
+              anchor: [C.aX + C.aW, ry + 2],
+              clientX: e.clientX,
+              clientY: e.clientY,
+              label: "Audio Multiplier (0.0 to 2.0)",
+              value: data[i].as ?? 1,
+              min: 0,
+              max: 2,
+              step: 0.01,
+              theme: t,
+              onCommit: v => {
+                data[i].as = Math.round(v * 100) / 100;
+                this.properties.stack_data = JSON.stringify(data);
+                sync(this);
+                this.setDirtyCanvas(true);
+              },
+            });
+            return true;
           }
         }
 

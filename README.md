@@ -172,7 +172,7 @@ Converts an `IMAGE` batch into a high-quality video with optional `AUDIO` muxing
 - **Animated images:** Animated AVIF (GPU AV1 or software) and Animated WebP (`libwebp_anim`). Looping, no audio.
 - **Bit depth & quality:** Auto-detects 8-bit vs 10-bit source precision; Auto codec forces 8-bit 4:2:0. CRF/CQ-based quality slider (default 20).
 - **Audio muxing:** Opus/AAC/MP3 selectable; Auto uses Opus (WebM) or AAC (MKV/MP4). Bitrates 64–320k. Optional crop-to-audio.
-- **In-node preview:** Framed player with native hover-reveal controls and hover-to-unmute audio. Streamed H.264 transcoding for AV1/H.265 where needed.
+- **In-node preview:** Framed player with native hover-reveal controls and hover-to-unmute audio; an optional Mute checkbox keeps the preview permanently silent, and both Autoplay and Mute are remembered with the node. Streamed H.264 transcoding for AV1/H.265 where needed.
 - **Frame exports:** Save first/last frame as PNG alongside the video; all assets published to ComfyUI Assets.
 - **Ping-pong mode:** Forward/reverse frame loop.
 - **Workflow metadata:** Embed prompt/workflow JSON where supported.
