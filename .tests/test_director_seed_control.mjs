@@ -12,7 +12,12 @@ assert.match(source, /textContent = "SEED"/, "seed control must use the same upp
 assert.match(source, /seedControl\.append\(seedField, toggle/, "seed controls must start with their left-aligned heading");
 assert.match(source, /Copy seed/, "each recent seed must expose a copy action");
 assert.match(source, /textContent = "Use Last"/, "the reuse action must stay compact");
-assert.match(source, /width:58px/, "Random and Fixed controls must have equal widths");
+assert.match(source, /ds-h3-res-switch-seg\{flex:1;min-width:56px/, "Random and Fixed must be one segmented switch with equal segments");
+assert.match(source, /ds-h3-res-spinbtn/, "the seed number field must carry an attached up/down spinner");
+assert.match(source, /lastSeedText/, "the seed panel must keep a lossless decimal string as the source of truth");
+assert.match(source, /writeSeedMirror/, "the native number widget must be written as a mirror, never read back");
+assert.match(source, /stepSeed/, "the spinner must step the seed in place via BigInt with 64-bit wrap");
+assert.match(source, /fitSeedFont/, "the seed field must shrink its font so full 64-bit digits stay visible");
 assert.match(source, /width:68px/, "New and Use Last controls must have equal widths");
 assert.match(source, /addWidget\("number", "seed"/, "the Director needs a hidden local seed widget when its external socket is not wired");
 assert.match(source, /align-items:flex-end/, "seed action controls must share a horizontal baseline");
@@ -24,9 +29,9 @@ assert.doesNotMatch(source, /history\.style\.cssText = "position:relative;paddin
 assert.match(source, /text-align:center/, "seed action labels must be centered in their buttons");
 assert.doesNotMatch(source, /state\.textContent = active \? "on" : "off"/, "optimization pills must not render redundant on/off labels");
 assert.doesNotMatch(source, /remember\(value\); controlState\.mode = "fixed"/, "New must preserve the selected Random or Fixed mode");
-assert.match(source, /remember\(value\); emit\(\); render\(\);/, "New must remember its rolled seed");
+assert.match(source, /remember\(value\); emit\(\); syncSwitch\(\);/, "New must remember its rolled seed and update the switch in place");
 assert.match(source, /justify-content:center/, "seed controls must center flex button contents");
-assert.match(source, /seedField\.style\.cssText = "display:flex;flex-direction:column;gap:3px;min-width:150px;font-size:10px;font-weight:600;letter-spacing:\.4px;color:#8fb3d6;text-transform:uppercase"/, "SEED must use the same label style as ASPECT");
+assert.match(source, /seedField\.style\.cssText = "display:flex;flex-direction:column;gap:3px;min-width:168px;font-size:10px;font-weight:600;letter-spacing:\.4px;color:#8fb3d6;text-transform:uppercase"/, "SEED must use the same label style as ASPECT");
 assert.match(source, /field\.style\.cssText = "display:flex;flex-direction:row;align-items:center;gap:6px;margin:7px 0;font-size:11px"/, "boolean stage settings must render as one checkbox-first row");
 assert.match(source, /field\.append\(input, title\)/, "boolean stage setting checkbox must appear before its option label");
 assert.match(source, /saveTitle\.textContent = "Preview & Output"/, "save panel must use the Preview & Output title");

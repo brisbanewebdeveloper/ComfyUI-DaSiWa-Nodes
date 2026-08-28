@@ -260,6 +260,24 @@ Bridge any string/text node through **DaSiWa Random String Picker** to randomize
 
 ---
 
+### 🎯 Seed Control
+
+**Seed Control** extracts the MiniMax H3 Director's seed panel into a standalone node — the same seed UX for any workflow, without a Director in the graph.
+
+- **Full 64-bit seeds:** unsigned `0..0xFFFFFFFFFFFFFFFF` seed field, matching the H3 seed space.
+- **Random|Fixed switch:** one segmented switch (a single control, Pixaroma style) — Random rolls a fresh seed on every queue, Fixed keeps the current seed for repeatable results; **New** rolls a fresh seed and keeps the selected mode, **Use Last** restores the previous seed and flips to Fixed. Stepping, typing, and the switch all lock the seed as Fixed.
+- **Stacked layout:** seed field with an attached ▲/▼ spinner (Pixaroma seed control style; hold to repeat, wraps at the 64-bit bounds) on its own row, then the Random|Fixed switch + New, then Use Last / Last 10 seeds. The panel column has a fixed width (~240 px) and every row is the same 42 px cell height, so resizing the node never stretches or reflows the fields. The seed number auto-fits its font (shrinks as needed) so a full 16-digit seed always displays without clipping.
+- **Lossless 64-bit seeds:** the panel keeps the seed as a decimal string and only *mirrors* it into the hidden INT widget (which coerces 16-digit values to a lossy JS number), so the spinner and display never desync at the top of the 64-bit range.
+- **Last 10 seeds:** collapsible history with per-entry copy actions.
+- **External override socket:** linking `seed` disables the local controls (showing an "External seed connected" note) and passes the connected value through — same semantics as the Director's external seed input.
+- **Downstream NOISE output:** the `seed` INT and a `NOISE`-compatible object are emitted, so the value can be passed straight to any node that accepts a `NOISE` input (e.g. the LTX sampler's `noise` socket).
+- **Headless-safe:** in Random mode without a local value the backend rolls a fresh seed on every queue, so API clients get the same behaviour without the DOM panel.
+- **Persists with the workflow:** mode, last seed and history live in a hidden state widget and survive save/reload.
+
+[Full documentation →](docs/seed_control.md)
+
+---
+
 ### 🎲 Wildcard & Preset Prompt Builder
 
 **DaSiWa Wildcard & Preset Prompt Builder** builds positive and negative `STRING` prompts directly from the bundled dual wildcard library—no downstream picker node needed.

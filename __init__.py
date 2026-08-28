@@ -7,6 +7,7 @@ if __package__:
     from .nodes.nodes_comfy_kitchen_attention import PathchComfyKitchenAttentionDaSiWa
     from .nodes.nodes_watermark import DaSiWa_Watermark
     from .nodes.nodes_random_string_picker import DaSiWa_RandomStringPicker
+    from .nodes.nodes_seed_control import DaSiWa_SeedControl
     from .nodes.nodes_wildcard_preset_prompt_builder import DaSiWa_WildcardPresetPromptBuilder
     from .nodes.nodes_llm import DaSiWa_LLMModelSelector, DaSiWa_LLMAnalyze
     from .nodes.nodes_inpaint import DaSiWa_InpaintCropPrep, DaSiWa_InpaintComposite
@@ -38,6 +39,7 @@ if __package__:
         "PathchComfyKitchenAttentionDaSiWa": PathchComfyKitchenAttentionDaSiWa,
         "DaSiWa_Watermark": DaSiWa_Watermark,
         "DaSiWa_RandomStringPicker": DaSiWa_RandomStringPicker,
+        "DaSiWa_SeedControl": DaSiWa_SeedControl,
         "DaSiWa_WildcardPresetPromptBuilder": DaSiWa_WildcardPresetPromptBuilder,
         "DaSiWa_LLMModelSelector": DaSiWa_LLMModelSelector,
         "DaSiWa_LLMAnalyze": DaSiWa_LLMAnalyze,
@@ -67,6 +69,7 @@ if __package__:
         "PathchComfyKitchenAttentionDaSiWa": "Patch Comfy Kitchen Attention",
         "DaSiWa_Watermark": "DaSiWa Watermark Overlay",
         "DaSiWa_RandomStringPicker": "DaSiWa Random String Picker",
+        "DaSiWa_SeedControl": "Seed Control",
         "DaSiWa_WildcardPresetPromptBuilder": "DaSiWa Wildcard & Preset Prompt Builder",
         "DaSiWa_LLMModelSelector": "DaSiWa LLM Model Selector",
         "DaSiWa_LLMAnalyze": "DaSiWa LLM Analyze",
