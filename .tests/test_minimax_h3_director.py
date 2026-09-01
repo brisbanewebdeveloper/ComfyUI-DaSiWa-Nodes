@@ -9,7 +9,7 @@ import pytest
 
 from nodes.helper_minimax_h3_director import (
     audio_duration, load_audio, load_embedded_video_audio, load_video,
-    scale_canvas_to_short_edge, scale_input_media,
+    normalize_guide, scale_canvas_to_short_edge, scale_input_media,
 )
 from nodes.helper_minimax_h3_prompt_builder import (
     PROMPT_MODES, build_base_prompt, build_prompt, build_ref_prompt, default_builder_state,
@@ -86,7 +86,7 @@ def test_director_emits_v2_consolidated_prompt_for_i2va_builder_state():
     builder = default_builder_state("I2VA")
     builder.update({"imd": "A bright room.", "soundscape": "birds", "music": "N/A"})
 
-    guide, _, resolved, _, _, _, fl2va_requested, ref2va_requested, _ = director.MiniMaxH3Director().build_guide(
+    guide, _, resolved, _, _, _, fl2va_requested, inpaint_requested, _ = director.MiniMaxH3Director().build_guide(
         "I2VA", "legacy", 1344, 768, 5, "match", json.dumps(state), json.dumps(builder)
     )
 
@@ -95,7 +95,7 @@ def test_director_emits_v2_consolidated_prompt_for_i2va_builder_state():
     assert guide["last_frame"] is None
     assert guide["prompt_payload"]["full_prompt"] == resolved
     assert "integrated_multimodal_description: A bright room." in resolved
-    assert fl2va_requested and not ref2va_requested
+    assert fl2va_requested and not inpaint_requested
 
 
 def test_director_blank_external_prompt_falls_back_to_builder():
@@ -729,3 +729,94 @@ def test_load_video_falls_back_to_container_duration_when_stream_duration_is_mis
     frames = load_video("durationless.mp4", str(tmp_path), target_fps=1)
 
     assert frames.shape[0] == 3
+
+
+def test_v1_normalizer_accepts_image_inpaint_with_single_first_frame():
+    state = normalize_guide({"mode": "Image Inpaint", "width": 1024, "height": 1024,
+                             "length": 5, "first_frame": "img", "last_frame": None})
+    assert state.mode == "Image Inpaint"
+    assert state.first_frame == "img"
+    assert state.last_frame is None
+    assert state.length == 5
+    assert state.ref_images == {} and state.ref_videos == {} and state.ref_audios == {}
+
+
+def test_v1_normalizer_rejects_image_inpaint_with_references():
+    with pytest.raises(ValueError, match="no video/audio references"):
+        normalize_guide({"mode": "Image Inpaint", "first_frame": "img",
+                         "ref_images": {"ref_image_1": "x"}})
+
+
+def test_v1_normalizer_rejects_image_inpaint_without_first_frame():
+    with pytest.raises(ValueError, match="requires one image keyframe"):
+        normalize_guide({"mode": "Image Inpaint", "first_frame": None})
+
+
+def test_director_builds_image_inpaint_guide():
+    timeline = json.dumps({"items": [{"id": "a", "type": "image", "slot": 0, "order": 0, "value": "in.png"}],
+                           "prompt_blocks": []})
+    guide, length, resolved, w, h, model, fl2va_req, inpaint_req, fps = director.MiniMaxH3Director().build_guide(
+        "Image Inpaint", "p", 768, 768, 5, "match", timeline, "", fl2va_model="M")
+    assert guide["mode"] == "Image Inpaint"
+    assert guide["length"] == 5
+    assert guide["first_frame"] == "in.png"
+    assert guide["last_frame"] is None
+    assert length == 5
+    assert fl2va_req is True and inpaint_req is True
+    assert model == "M"
+
+
+def test_director_rejects_image_inpaint_without_exactly_one_image():
+    timeline = json.dumps({"items": [{"id": "a", "type": "video", "slot": 0, "order": 0, "value": "v.mp4"}],
+                           "prompt_blocks": []})
+    with pytest.raises(ValueError, match="accepts image references only"):
+        director.MiniMaxH3Director().build_guide("Image Inpaint", "p", 768, 768, 5, "match", timeline, "")
+    with pytest.raises(ValueError, match="requires exactly one enabled image reference"):
+        director.MiniMaxH3Director().build_guide("Image Inpaint", "p", 768, 768, 5, "match",
+                                                  json.dumps({"items": [], "prompt_blocks": []}), "")
+
+
+def test_guider_routes_image_inpaint_to_5frame_image_to_video(monkeypatch):
+    calls = []
+
+    class NativeImageToVideo:
+        @staticmethod
+        def execute(*args):
+            calls.append(args)
+            return ["conditioning"], {"samples": np.zeros((1, 2, 3))}
+
+    monkeypatch.setattr(director_guide, "_native_node", lambda _name: NativeImageToVideo)
+    guide = {"version": 2, "mode": "Image Inpaint", "width": 768, "height": 768,
+             "length": 5, "first_frame": "img", "resolved_prompt": "p"}
+
+    positive, latent = director_guide.MiniMaxH3DirectorGuide().apply(object(), object(), guide)
+
+    assert positive == ["conditioning"]
+    assert latent["samples"].shape == (1, 2, 3)
+    # native call: (clip, vae, prompt, width, height, 5, first_frame, None)
+    assert calls[0][2:] == ("p", 768, 768, 5, "img", None)
+
+
+def test_director_v1_ui_exposes_image_inpaint_mode():
+    source = Path("js/minimax_h3_director.js").read_text()
+
+    assert '"T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA", "Image Inpaint"' in source
+    assert 'mode() === "Image Inpaint"' in source
+
+
+def test_director_exposes_inpaint_requested_instead_of_ref2va_requested():
+    node = director.MiniMaxH3Director()
+
+    assert node.RETURN_NAMES == (
+        "guide", "duration", "positive_prompt", "width", "height", "model",
+        "fl2va_requested", "inpaint_requested", "frame_rate",
+    )
+
+    inpaint = node.build_guide("Image Inpaint", "", 1024, 1024, 5, "match",
+                               json.dumps({"items": [{"type": "image", "value": "a.png", "slot": 0}]}))
+    base = node.build_guide("FL2VA", "", 1024, 1024, 5, "match", json.dumps({"items": []}))
+    ref = node.build_guide("REF2VA", "", 1024, 1024, 5, "match", json.dumps({"items": []}))
+
+    assert inpaint[7] is True
+    assert base[7] is False
+    assert ref[7] is False

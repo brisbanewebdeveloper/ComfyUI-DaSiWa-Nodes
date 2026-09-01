@@ -50,5 +50,7 @@ No AGPL-licensed source code from UtilsCollection was copied into this GPL-3.0 c
 
 - Requires ComfyUI's native `MiniMaxH3Model`; it rejects other model architectures.
 - Requires a ComfyUI version exposing `ModelPatcher.add_object_patch`, `set_model_patch_replace`, and `add_wrapper`.
+- Works with ComfyUI's PDD LoRA head bank (0.34+): the node detects the live `FinalLayer.forward` signature at patch time and passes the PDD sigma-schedule arguments automatically, so cache and PDD coexist with no extra setup.
+- Honors per-token denoise masks (video and audio): masked rows run at their own strength exactly like Core, so cached and region-masked generations match Core quality. Unmasked and all-generate masks are unaffected.
 - Is compatible with this collection's **Patch Comfy Kitchen Attention** model patch.
 - Do not characterize this cache as superior to another cache without matched benchmarks and quality comparisons.

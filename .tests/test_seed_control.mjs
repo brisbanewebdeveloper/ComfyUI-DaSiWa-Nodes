@@ -7,8 +7,17 @@ const source = await readFile(new URL("../js/dasiwa_seed_control.js", import.met
 assert.match(source, /DaSiWa_SeedControl/, "seed control frontend must install for the standalone node class");
 assert.match(source, /__dasiwaSeedRestorePersistedState/, "loaded graphs must re-read the persisted seed-control state");
 assert.match(source, /__dasiwaSeedPrepareSeed/, "queuing must roll a seed in Random mode, like the Director");
-assert.match(source, /beforeQueued/, "seed preparation must run before the graph is queued");
+assert.doesNotMatch(source, /beforeQueued/, "the dead extension-level queue hook must be gone (the Vue frontend never dispatches it)");
+assert.doesNotMatch(source, /app\.queuePrompt\s*=/, "the global queue entry point must not be the roll trigger (the Vue Run button never calls it)");
+assert.match(source, /app\.graphToPrompt/, "the roll must hook the prompt-build entry point, which every Run path serializes through");
+assert.match(source, /__dasiwaSeedGraphPromptPatched/, "the graphToPrompt wrapper must install exactly once");
+assert.match(source, /dasiwaSeedControlPatchGraphToPrompt\(\);/, "the wrapper must be patched at module load");
+assert.match(source, /dasiwaSeedControlPrepareAll\(\)/, "every Seed Control node must prepare its seed before the prompt is built");
+assert.match(source, /graph\._nodes \?\? graph\.nodes \?\? \[\]/, "node lookup must tolerate both LiteGraph graph shapes");
 assert.match(source, /addDOMWidget\("dasiwa_seed_control_ui"/, "the panel must attach as the node's DOM widget");
+assert.match(source, /dasiwaSeedControlRefreshPanel/, "a queue-time roll must refresh the panel in place (seed field + Last-10 + Use Last), not just the widget");
+assert.match(source, /panelHistoryRowBuilder\?\.\(\);/, "the Last-10 list must be repopulated in place after a roll without rebuilding the panel");
+assert.match(source, /__dasiwaSeedPrepareSeed = .+dasiwaSeedControlEmit\(\); dasiwaSeedControlRefreshPanel\(\)/, "the roll must sync the panel DOM before the prompt is built");
 
 // ---- External seed socket semantics (Director behaviour) ----
 assert.match(source, /i\.name === "seed"/, "external seed detection must target the seed input socket");

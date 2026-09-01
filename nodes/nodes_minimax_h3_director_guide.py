@@ -71,6 +71,27 @@ class MiniMaxH3DirectorGuide:
             )
             return positive, latent
 
+        if state.mode == "Image Inpaint":
+            if state.first_frame is None:
+                raise ValueError("Image Inpaint requires one image keyframe")
+            native = _native_node("MiniMaxH3ImageToVideo")
+            log_dasiwa(
+                "MiniMax H3 Director Guide",
+                f"mode=Image Inpaint; upstream=MiniMaxH3ImageToVideo; clip={type(clip).__name__}; "
+                f"vae={type(vae).__name__}; audio_vae=not-used; frames=5; "
+                f"first_frame={state.first_frame is not None}; last_frame=None",
+            )
+            positive, latent = native.execute(
+                clip, vae, state.resolved_prompt, state.width, state.height, 5,
+                state.first_frame, None,
+            )
+            log_dasiwa(
+                "MiniMax H3 Director Guide",
+                f"passed forward from MiniMaxH3ImageToVideo: conditioning={_describe_output(positive)}; "
+                f"latent={_describe_output(latent)}",
+            )
+            return positive, latent
+
         if audio_vae is None:
             raise ValueError("audio_vae is required for REF2VA")
         native = _native_node("MiniMaxH3ReferenceToVideo")

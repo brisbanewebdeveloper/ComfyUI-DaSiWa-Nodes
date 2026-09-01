@@ -27,7 +27,7 @@ class MiniMaxH3Director:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "mode": (["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA"], {"default": "FL2VA"}),
+                "mode": (["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA", "Image Inpaint"], {"default": "FL2VA"}),
                 "prompt": ("STRING", {"default": "", "multiline": True}),
                 "width": ("INT", {"default": 1344, "min": 16, "max": 8192, "step": 16}),
                 "height": ("INT", {"default": 768, "min": 16, "max": 8192, "step": 16}),
@@ -47,7 +47,7 @@ class MiniMaxH3Director:
         }
 
     RETURN_TYPES = ("MINIMAX_H3_DIRECTOR_GUIDE", "INT", "STRING", "INT", "INT", "MODEL", "BOOLEAN", "BOOLEAN", "FLOAT")
-    RETURN_NAMES = ("guide", "duration", "positive_prompt", "width", "height", "model", "fl2va_requested", "ref2va_requested", "frame_rate")
+    RETURN_NAMES = ("guide", "duration", "positive_prompt", "width", "height", "model", "fl2va_requested", "inpaint_requested", "frame_rate")
     FUNCTION = "build_guide"
     CATEGORY = "DaSiWa/MiniMax H3"
 
@@ -68,7 +68,7 @@ class MiniMaxH3Director:
                 builder_state = ""
             else:
                 raise ValueError("builder_state must be JSON text")
-        if mode not in BASE_MODES | {"REF2VA"}:
+        if mode not in BASE_MODES | {"REF2VA", "Image Inpaint"}:
             raise ValueError(f"unsupported MiniMax Director mode: {mode}")
         # A non-numeric frame_rate (e.g. a stale 9th widgets_value shifted in by an
         # older save, or an empty string) falls back to the default instead of crashing
@@ -119,6 +119,20 @@ class MiniMaxH3Director:
         except (ImportError, AttributeError):
             input_directory = None
 
+        if mode == "Image Inpaint":
+            image_items = [pair for pair in items if pair[1].get("type") == "image"]
+            incompatible_items = [pair[1].get("type") for pair in items if pair[1].get("type") != "image"]
+            if incompatible_items:
+                raise ValueError("Image Inpaint accepts image references only; video and audio references are not supported")
+            if len(image_items) != 1:
+                raise ValueError("Image Inpaint requires exactly one enabled image reference")
+            value = image_items[0][1].get("value", image_items[0][1].get("tensor"))
+            if isinstance(value, str) and input_directory:
+                value = load_image(value, input_directory)
+            first_frame = scale_input_media(value, input_scaling, width, height)
+            last_frame = None
+            length = 5
+
         if mode in BASE_MODES:
             image_items = sorted((pair for pair in items if pair[1].get("type") == "image"), key=lambda pair: (pair[1].get("slot", pair[0]), pair[0]))
             if mode == "T2VA":
@@ -138,7 +152,7 @@ class MiniMaxH3Director:
                     last_frame = value
                 else:
                     first_frame = value
-        else:
+        elif mode != "Image Inpaint":
             type_order = {"image": 0, "video": 1, "audio": 2}
             for _, item in sorted(items, key=lambda pair: (type_order.get(pair[1].get("type"), 3), pair[1].get("slot", pair[0]), pair[0])):
                 kind, value = item.get("type"), item.get("value", item.get("tensor"))
@@ -206,7 +220,7 @@ class MiniMaxH3Director:
         normalize_guide(guide)
         selected_model = ref2va_model if mode == "REF2VA" else fl2va_model
         log_dasiwa("MiniMax H3 Director", f"mode={mode}; requested_model={'ref2va_model' if mode == 'REF2VA' else 'fl2va_model'}; passed_model={_describe_model(selected_model)}; canvas={width}x{height}; frames={length}; fps={frame_rate}; refs=images:{len(ref_images)},videos:{len(ref_videos)},video_audio:{len(ref_video_audios)},audio:{len(ref_audios)}; timeline_items={len(items)}")
-        return guide, length, resolved, int(width), int(height), selected_model, mode in BASE_MODES, mode == "REF2VA", frame_rate
+        return guide, length, resolved, int(width), int(height), selected_model, mode in BASE_MODES or mode == "Image Inpaint", mode == "Image Inpaint", frame_rate
 
 
 NODE_CLASS_MAPPINGS = {"DaSiWaMiniMaxH3Director": MiniMaxH3Director}

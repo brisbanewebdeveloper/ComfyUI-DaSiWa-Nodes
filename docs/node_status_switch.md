@@ -59,6 +59,15 @@ If you had manually muted a target node and the switch is set to restore it, the
 **When does it apply?**  
 Changes are applied to the canvas immediately when the `enabled` toggle is changed. The state is also enforced right before every queue prompt, so the ComfyUI server always executes with the correct node modes.
 
+**Live booleans from logic nodes.** The switch's `enabled` input does not only follow Primitive toggles — it also follows the computed request outputs of the **MiniMax H3 Director**:
+
+| Director output | True when the Director mode is |
+|---|---|
+| `inpaint_requested` | `Image Inpaint` |
+| `fl2va_requested` | `T2VA`, `I2VA`, `FL2VA`, `L2VA` or `Image Inpaint` |
+
+These values are computed in the backend from the Director's `mode` widget, so the switch derives them from the mode pill instead: flipping the Director's mode live flips the switch (and its targets) instantly, and the state is re-enforced on every queue. This is how the MiniMax H3 workflows switch sampling paths by mode — for example, `inpaint_requested` driving a switch that mutes/bypasses the `Get Image from Batch` extract and its saver.
+
 **Mute vs bypass — which to use?**
 
 | | Mute (mode 2) | Bypass (mode 4) |

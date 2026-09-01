@@ -74,6 +74,52 @@ def test_windows_parser_detects_intel_and_amd_adapters_without_vendor_tools():
     assert gpus[1]["memory_total"] == 17179869184
 
 
+def _windows_gpu_entry(vendor="Intel"):
+    return {
+        "id": f"{vendor}:PCI\\VEN_8086", "index": 0, "vendor": vendor, "name": f"{vendor} Arc",
+        "uuid": "PCI\\VEN_8086", "utilization": None, "memory_used": None,
+        "memory_total": 8589934592, "memory_percent": None, "temperature": None,
+    }
+
+
+def test_gpu_info_caches_windows_cim_probe(monkeypatch):
+    monitor = system_monitor.DaSiWaSystemMonitor()
+    gpus = [_windows_gpu_entry()]
+    calls = []
+
+    def fake_windows_gpus():
+        calls.append(1)
+        return list(gpus)
+
+    monkeypatch.setattr(system_monitor.os, "name", "nt")
+    monkeypatch.setattr(system_monitor, "_nvidia_gpus", lambda: [])
+    monkeypatch.setattr(system_monitor, "_amd_gpus", lambda: [])
+    monkeypatch.setattr(system_monitor, "_windows_gpus", fake_windows_gpus)
+
+    first = monitor.gpu_info()
+    second = monitor.gpu_info()
+    third = monitor.gpu_info()
+
+    assert [gpu["vendor"] for gpu in first] == ["Intel"]
+    assert second == first
+    assert third == first
+    assert len(calls) == 1
+
+
+def test_gpu_info_retries_windows_cim_probe_when_empty(monkeypatch):
+    monitor = system_monitor.DaSiWaSystemMonitor()
+    gpus = [_windows_gpu_entry()]
+    results = iter([[], gpus])
+
+    monkeypatch.setattr(system_monitor.os, "name", "nt")
+    monkeypatch.setattr(system_monitor, "_nvidia_gpus", lambda: [])
+    monkeypatch.setattr(system_monitor, "_amd_gpus", lambda: [])
+    monkeypatch.setattr(system_monitor, "_windows_gpus", lambda: next(results))
+
+    assert monitor.gpu_info() == []
+    assert monitor.gpu_info() == gpus
+
+
 def test_snapshot_reports_partition_capacity_and_io_rates(monkeypatch):
     monitor = system_monitor.DaSiWaSystemMonitor()
     partition = types.SimpleNamespace(device="/dev/nvme0n1p2", mountpoint="/", fstype="ext4")

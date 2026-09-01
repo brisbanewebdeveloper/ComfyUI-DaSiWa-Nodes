@@ -70,10 +70,18 @@ def test_node_clones_and_registers_model_scoped_patches(monkeypatch):
     def patched_forward(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(module, "build_h3_block_loop_forward", lambda: patched_forward)
+    def builder_stub(with_pdd_args: bool = False):
+        return patched_forward
+
+    monkeypatch.setattr(module, "build_h3_block_loop_forward", builder_stub)
+
+    class _StubFinalLayer:
+        def forward(self, x, t_emb, video_seg, audio_seg):
+            return None
 
     class MiniMaxH3Model:
         blocks = [object()]
+        final_layer = _StubFinalLayer()
 
     class Clone:
         def __init__(self):
@@ -137,3 +145,105 @@ def test_package_registers_mini_max_h3_cache_node():
     assert "MiniMaxH3Cache" in source
     assert '"MiniMax H3 Cache"' in source
     assert module.MiniMaxH3Cache.CATEGORY == "DaSiWa/MiniMax H3"
+
+
+class _RecordingFinalLayer:
+    def __init__(self, arity: int):
+        self.arity = arity
+        self.calls = []
+
+    def __call__(self, *args):
+        assert len(args) == self.arity, f"expected {self.arity} args, got {len(args)}"
+        self.calls.append(args)
+        return ("video", "audio")
+
+
+def test_final_layer_call_helper_dispatches_by_pdd_arity():
+    module = load_module()
+
+    sigmas = torch.tensor([1.0, 0.5, 0.0])
+
+    layer4 = _RecordingFinalLayer(4)
+    result = module.final_layer_call(
+        layer4, "hidden", "t_emb", "vseg", "aseg",
+        torch.tensor(0.5), {"sample_sigmas": sigmas}, 12.0, 3.0, False,
+    )
+    assert result == ("video", "audio")
+    assert len(layer4.calls[0]) == 4
+
+    layer7 = _RecordingFinalLayer(7)
+    module.final_layer_call(
+        layer7, "hidden", "t_emb", "vseg", "aseg",
+        torch.tensor(0.5), {"sample_sigmas": sigmas}, 12.0, 3.0, True,
+    )
+    args7 = layer7.calls[0]
+    assert len(args7) == 7
+    assert args7[4] == torch.tensor(0.5)          # sigma
+    assert args7[5] is sigmas                      # sample_sigmas from transformer_options
+    assert args7[6] == (12.0, 3.0)                 # shifts tuple
+
+
+def _patch_fixture(monkeypatch, final_layer_arity: int):
+    module = load_module()
+    seen = {}
+
+    def capture_builder(*args, **kwargs):
+        if args:
+            seen["with_pdd_args"] = args[0]
+        else:
+            seen["with_pdd_args"] = kwargs.get("with_pdd_args", False)
+
+        def patched_forward(*_a, **_k):
+            return None
+
+        return patched_forward
+
+    monkeypatch.setattr(module, "build_h3_block_loop_forward", capture_builder)
+
+    if final_layer_arity == 7:
+        class FinalLayer:
+            def forward(self, x, t_emb, video_seg, audio_seg, sigma, sample_sigmas, shifts):
+                return None
+    else:
+        class FinalLayer:
+            def forward(self, x, t_emb, video_seg, audio_seg):
+                return None
+
+    class MiniMaxH3Model:
+        blocks = [object()]
+        final_layer = FinalLayer()
+
+    class Clone:
+        def __init__(self):
+            self.model = type("M", (), {"diffusion_model": MiniMaxH3Model()})()
+            self.model_options = {"transformer_options": {}}
+            self.object_patches = []
+            self.replacements = []
+            self.wrappers = []
+
+        def add_object_patch(self, name, value):
+            self.object_patches.append((name, value))
+
+        def set_model_patch_replace(self, patch, name, block_name, number):
+            self.replacements.append((patch, name, block_name, number))
+
+        def add_wrapper(self, wrapper_type, wrapper):
+            self.wrappers.append((wrapper_type, wrapper))
+
+    class Model:
+        def clone(self):
+            return Clone()
+
+    return module, Model(), seen
+
+
+def test_patch_detects_seven_arg_final_layer(monkeypatch):
+    module, model, seen = _patch_fixture(monkeypatch, final_layer_arity=7)
+    module.MiniMaxH3Cache().patch(model, 0.05, 0.15, 0.90, 2, "auto", False)
+    assert seen["with_pdd_args"] is True
+
+
+def test_patch_detects_four_arg_final_layer(monkeypatch):
+    module, model, seen = _patch_fixture(monkeypatch, final_layer_arity=4)
+    module.MiniMaxH3Cache().patch(model, 0.05, 0.15, 0.90, 2, "auto", False)
+    assert seen["with_pdd_args"] is False

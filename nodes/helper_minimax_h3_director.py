@@ -156,7 +156,7 @@ def normalize_guide(data: dict) -> NormalizedGuide:
     if not isinstance(data, dict):
         raise ValueError("MiniMax Director guide must be a dictionary")
     mode = data.get("mode", "FL2VA")
-    if mode not in {"T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA"}:
+    if mode not in {"T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA", "Image Inpaint"}:
         raise ValueError(f"unsupported MiniMax Director mode: {mode}")
     prompt = str(data.get("prompt", ""))
     resolved = str(data.get("resolved_prompt") or assemble_prompt(prompt, data.get("prompt_blocks")))
@@ -169,6 +169,12 @@ def normalize_guide(data: dict) -> NormalizedGuide:
         if data.get("ref_images") or data.get("ref_videos") or data.get("ref_audios") or data.get("ref_video_audios"):
             raise ValueError(f"{mode} accepts only its optional image keyframes")
         return NormalizedGuide(**common, first_frame=data.get("first_frame"), last_frame=data.get("last_frame"))
+    if mode == "Image Inpaint":
+        if data.get("ref_images") or data.get("ref_videos") or data.get("ref_audios") or data.get("ref_video_audios"):
+            raise ValueError("Image Inpaint accepts one image keyframe and no video/audio references")
+        if data.get("first_frame") is None:
+            raise ValueError("Image Inpaint requires one image keyframe")
+        return NormalizedGuide(**common, first_frame=data.get("first_frame"), last_frame=None)
     return NormalizedGuide(
         **common,
         ref_images=data.get("ref_images") or {}, ref_videos=data.get("ref_videos") or {},

@@ -113,6 +113,16 @@ function dasiwaSeedControlInstall(node) {
 
   const dasiwaSeedControlHasExternalSeed = () => node.inputs?.find(i => i.name === "seed")?.link != null;
   let lastExternalSeedLinked = dasiwaSeedControlHasExternalSeed();
+  // Persistent panel element references. The panel DOM is built once; a
+  // queue-time roll refreshes it in place instead of rebuilding, because a
+  // rebuild would collapse an expanded Last-10 list and flicker the
+  // controls while the user is on the Run button.
+  let panelInput = null;
+  let panelList = null;
+  let panelHistory = null;
+  let panelLastBtn = null;
+  let panelFitSeedFont = () => {};
+  let panelHistoryRowBuilder = null;
 
   const dasiwaSeedControlEmit = () => {
     const widget = dasiwaSeedControlStateWidget();
@@ -157,6 +167,7 @@ function dasiwaSeedControlInstall(node) {
     // Stepping edits the lossless `lastSeedText` in place (no rebuild) so
     // the spinner is never destroyed mid-hold.
     const input = document.createElement("input"); input.type = "text"; input.inputMode = "numeric"; input.className = "ds-seed-num"; input.style.cssText = "flex:1;min-width:0;text-align:center"; input.value = lastSeedText; input.title = "Unsigned 64-bit seed";
+    panelInput = input;
     input.onchange = event => { const digits = String(event.target.value ?? "").replace(/\D+/g, ""); const value = digits === "" ? "0" : BigInt(digits); if (value < 0n || value > maxSeed) { event.target.value = lastSeedText; return; } lastSeedText = value.toString(); dasiwaSeedControlWriteSeedMirror(lastSeedText); controlState.mode = "fixed"; dasiwaSeedControlRemember(lastSeedText); dasiwaSeedControlEmit(); dasiwaSeedControlRefitFont(); };
     const dasiwaSeedControlStepSeed = delta => { let value = BigInt(lastSeedText || "0") + delta; if (value < 0n) value = maxSeed; else if (value > maxSeed) value = 0n; lastSeedText = value.toString(); input.value = lastSeedText; dasiwaSeedControlWriteSeedMirror(lastSeedText); controlState.mode = "fixed"; dasiwaSeedControlRemember(lastSeedText); dasiwaSeedControlEmit(); dasiwaSeedControlSyncSwitch(); dasiwaSeedControlRefitFont(); };
     const numwrap = document.createElement("div"); numwrap.className = "ds-seed-numwrap";
@@ -165,6 +176,7 @@ function dasiwaSeedControlInstall(node) {
     // can overflow the input at the base size). Idempotent and cheap, like
     // Pixaroma's fitSeedFont; safe to call repeatedly.
     const dasiwaSeedControlFitSeedFont = () => { if (!input.isConnected) return; const MAX = 16, MIN = 11; input.style.fontSize = MAX + "px"; if (!input.clientWidth) return; let fs = MAX, guard = 0; while (fs > MIN && input.scrollWidth > input.clientWidth && guard++ < 24) { fs -= 1; input.style.fontSize = fs + "px"; } };
+    panelFitSeedFont = dasiwaSeedControlFitSeedFont;
     // Press-and-hold auto-repeat: one step on press, then repeats every 80 ms
     // after a 400 ms hold; self-cleans on pointerup / cancel / leave.
     const dasiwaSeedControlBindHoldRepeat = (button, step) => { button.addEventListener("pointerdown", event => { if (event.button != null && event.button !== 0) return; event.preventDefault(); event.stopPropagation(); step(); let interval = null; const timeout = setTimeout(() => { interval = setInterval(step, 80); }, 400); const end = () => { clearTimeout(timeout); if (interval) clearInterval(interval); window.removeEventListener("pointerup", end, true); window.removeEventListener("pointercancel", end, true); button.removeEventListener("pointerleave", end); }; window.addEventListener("pointerup", end, true); window.addEventListener("pointercancel", end, true); button.addEventListener("pointerleave", end); }); };
@@ -196,7 +208,20 @@ function dasiwaSeedControlInstall(node) {
     // Row 3: Use Last, Last 10 seeds.
     const last = document.createElement("button"); last.type = "button"; last.className = "ds-seed-btn"; last.textContent = "Use Last"; last.disabled = !controlState.last_seed; last.style.cssText = "width:68px;padding:3px 0;justify-content:center;gap:0;text-align:center;white-space:nowrap"; last.onclick = () => { if (!controlState.last_seed) return; lastSeedText = controlState.last_seed; dasiwaSeedControlWriteSeedMirror(lastSeedText); input.value = lastSeedText; controlState.mode = "fixed"; dasiwaSeedControlEmit(); dasiwaSeedControlSyncSwitch(); dasiwaSeedControlRefitFont(); };
     const lastBtn = last;
-    const history = document.createElement("details"); history.style.cssText = "position:relative;flex:1;min-width:0"; const summary = document.createElement("summary"); summary.className = "ds-seed-btn"; summary.textContent = "Last 10 seeds"; summary.style.cssText = "padding:3px 6px;justify-content:center;gap:0;text-align:center;white-space:nowrap;cursor:pointer"; history.append(summary); const list = document.createElement("div"); list.style.cssText = "position:absolute;z-index:10;right:0;top:24px;min-width:160px;max-height:180px;overflow:auto;padding:5px;background:var(--comfy-menu-bg,#353535);border:1px solid var(--border-color,#4e4e4e);border-radius:4px"; for (const value of controlState.recent) { const row = document.createElement("div"); row.style.cssText = "display:flex;gap:4px;align-items:center"; const item = document.createElement("button"); item.type = "button"; item.textContent = value; item.style.cssText = "flex:1;padding:3px 5px;border:0;background:transparent;color:#d5e6f2;text-align:right;cursor:pointer"; item.onclick = () => { lastSeedText = value; dasiwaSeedControlWriteSeedMirror(lastSeedText); input.value = lastSeedText; controlState.mode = "fixed"; controlState.last_seed = value; dasiwaSeedControlRemember(value); dasiwaSeedControlEmit(); dasiwaSeedControlSyncSwitch(); dasiwaSeedControlRefitFont(); }; const copy = document.createElement("button"); copy.type = "button"; copy.textContent = "Copy"; copy.title = "Copy seed"; copy.style.cssText = "padding:2px 5px;font-size:10px"; copy.onclick = event => { event.stopPropagation(); navigator.clipboard.writeText(value).then(() => { copy.textContent = "✓"; setTimeout(() => { copy.textContent = "Copy"; }, 900); }); }; row.append(item, copy); list.append(row); } if (!controlState.recent.length) list.textContent = "No previous seeds"; history.append(list);
+    panelLastBtn = last;
+    const history = document.createElement("details"); history.style.cssText = "position:relative;flex:1;min-width:0"; const summary = document.createElement("summary"); summary.className = "ds-seed-btn"; summary.textContent = "Last 10 seeds"; summary.style.cssText = "padding:3px 6px;justify-content:center;gap:0;text-align:center;white-space:nowrap;cursor:pointer"; history.append(summary); const list = document.createElement("div"); list.style.cssText = "position:absolute;z-index:10;right:0;top:24px;min-width:160px;max-height:180px;overflow:auto;padding:5px;background:var(--comfy-menu-bg,#353535);border:1px solid var(--border-color,#4e4e4e);border-radius:4px";
+    // Populates (or repopulates) the Last-10 list in place; used both at
+    // panel build and after a queue-time roll, so the list reflects the
+    // freshly rolled seed without rebuilding the whole panel.
+    panelHistoryRowBuilder = () => {
+      list.textContent = "";
+      for (const value of controlState.recent) { const row = document.createElement("div"); row.style.cssText = "display:flex;gap:4px;align-items:center"; const item = document.createElement("button"); item.type = "button"; item.textContent = value; item.style.cssText = "flex:1;padding:3px 5px;border:0;background:transparent;color:#d5e6f2;text-align:right;cursor:pointer"; item.onclick = () => { lastSeedText = value; dasiwaSeedControlWriteSeedMirror(lastSeedText); input.value = lastSeedText; controlState.mode = "fixed"; controlState.last_seed = value; dasiwaSeedControlRemember(value); dasiwaSeedControlEmit(); dasiwaSeedControlSyncSwitch(); dasiwaSeedControlRefitFont(); }; const copy = document.createElement("button"); copy.type = "button"; copy.textContent = "Copy"; copy.title = "Copy seed"; copy.style.cssText = "padding:2px 5px;font-size:10px"; copy.onclick = event => { event.stopPropagation(); navigator.clipboard.writeText(value).then(() => { copy.textContent = "✓"; setTimeout(() => { copy.textContent = "Copy"; }, 900); }); }; row.append(item, copy); list.append(row); }
+      if (!controlState.recent.length) list.textContent = "No previous seeds";
+    };
+    panelHistoryRowBuilder();
+    history.append(list);
+    panelHistory = history;
+    panelList = list;
     const historyRow = document.createElement("div"); historyRow.className = "ds-seed-row"; historyRow.append(last, history);
 
     seedControl.append(fieldRow, modeRow, historyRow);
@@ -205,6 +230,16 @@ function dasiwaSeedControlInstall(node) {
 
   const root = document.createElement("div"); root.className = "ds-seed"; root.style.cssText = `width:${DASIWASEED_PANEL_WIDTH}px`;
   const dasiwaSeedControlRender = () => { root.innerHTML = ""; root.append(dasiwaSeedControlBuildSeedPanel()); };
+
+  // In-place panel refresh after a queue-time roll: update the seed input,
+  // the Last-10 list, and the Use Last button without rebuilding the panel
+  // (a rebuild would collapse an open Last-10 list and flicker the
+  // controls while the user is on the Run button).
+  const dasiwaSeedControlRefreshPanel = () => {
+    if (panelInput?.isConnected) { panelInput.value = lastSeedText; panelFitSeedFont(); }
+    panelHistoryRowBuilder?.();
+    if (panelLastBtn) panelLastBtn.disabled = !controlState.last_seed;
+  };
 
   const dasiwaSeedControlUiHeight = () => 140;
   if (node.addDOMWidget) {
@@ -216,7 +251,7 @@ function dasiwaSeedControlInstall(node) {
   if (node.size?.[0] < DASIWASEED_COMPUTE_SIZE_WIDTH || !node.size?.[0]) node.setSize?.([DASIWASEED_COMPUTE_SIZE_WIDTH + 14, dasiwaSeedControlUiHeight()]);
 
   node.__dasiwaSeedRestorePersistedState = () => { const parsed = dasiwaSeedControlParseState(dasiwaSeedControlStateWidget().value); controlState = parsed; lastSeedText = parsed.last_seed || String(dasiwaSeedControlSeedWidget().value ?? 0); dasiwaSeedControlRender(); };
-  node.__dasiwaSeedPrepareSeed = () => { if (dasiwaSeedControlHasExternalSeed() || controlState?.mode !== "random") return; const value = dasiwaSeedControlRollSeed(); lastSeedText = value; const widget = dasiwaSeedControlSeedWidget(); if (widget) { widget.value = value; widget.callback?.(value); } controlState.last_seed = value; controlState.recent = [value, ...(controlState.recent || []).filter(entry => entry !== value)].slice(0, 10); dasiwaSeedControlEmit(); };
+  node.__dasiwaSeedPrepareSeed = () => { if (dasiwaSeedControlHasExternalSeed() || controlState?.mode !== "random") return; const value = dasiwaSeedControlRollSeed(); lastSeedText = value; const widget = dasiwaSeedControlSeedWidget(); if (widget) { widget.value = value; widget.callback?.(value); } controlState.last_seed = value; controlState.recent = [value, ...(controlState.recent || []).filter(entry => entry !== value)].slice(0, 10); dasiwaSeedControlEmit(); dasiwaSeedControlRefreshPanel(); };
   node.__dasiwaSeedExtPoll = window.setInterval(() => {
     const linked = dasiwaSeedControlHasExternalSeed();
     if (linked !== lastExternalSeedLinked) {
@@ -227,9 +262,48 @@ function dasiwaSeedControlInstall(node) {
   dasiwaSeedControlRender();
 }
 
+// ── Queue-time seed preparation ────────────────────────────────────────
+// The Vue-based ComfyUI frontend no longer dispatches the legacy extension
+// queue hook, and its Run button queues through an internal store path
+// that never calls the global app.queuePrompt — so the Random-mode roll is
+// triggered by wrapping the app's prompt-build entry point (graphToPrompt)
+// instead, the same approach Pixaroma's Seed node uses. That method is the
+// single choke point every Run routes through: the Run button, batch items,
+// and partial execution all serialize the graph via it. The pre-pass rolls
+// the seed BEFORE the graph is serialized, so the fresh seed is what lands
+// in the queued prompt body (and what H3 Cache keys on). One roll per
+// prompt build: a batch-queued run of N outputs rolls once, matching the
+// documented 'rolls a fresh seed on every queue' semantics. Fixed mode and
+// linked external seeds are left alone — __dasiwaSeedPrepareSeed
+// early-returns for both.
+
+function dasiwaSeedControlNodesInGraphTree(graph, visited = new Set()) {
+  if (!graph || visited.has(graph)) return [];
+  visited.add(graph);
+  const nodes = graph._nodes ?? graph.nodes ?? [];
+  return nodes.flatMap(node => [node, ...dasiwaSeedControlNodesInGraphTree(node.subgraph, visited)]);
+}
+
+function dasiwaSeedControlPrepareAll() {
+  for (const node of dasiwaSeedControlNodesInGraphTree(app.graph)) {
+    if (DASIWASEED_NODE_TYPES.has(node.comfyClass)) node.__dasiwaSeedPrepareSeed?.();
+  }
+}
+
+function dasiwaSeedControlPatchGraphToPrompt() {
+  if (app.__dasiwaSeedGraphPromptPatched || typeof app?.graphToPrompt !== "function") return;
+  const originalGraphToPrompt = app.graphToPrompt.bind(app);
+  app.graphToPrompt = async function (...args) {
+    dasiwaSeedControlPrepareAll();
+    return originalGraphToPrompt(...args);
+  };
+  app.__dasiwaSeedGraphPromptPatched = true;
+}
+
+dasiwaSeedControlPatchGraphToPrompt();
+
 app.registerExtension({
   name: "DaSiWa.SeedControl",
   nodeCreated(node) { if (DASIWASEED_NODE_TYPES.has(node.comfyClass)) dasiwaSeedControlInstall(node); },
   loadedGraphNode(node) { if (DASIWASEED_NODE_TYPES.has(node.comfyClass)) { dasiwaSeedControlInstall(node); node.__dasiwaSeedRestorePersistedState?.(); } },
-  beforeQueued() { for (const node of app.graph?._nodes || []) if (DASIWASEED_NODE_TYPES.has(node.comfyClass)) node.__dasiwaSeedPrepareSeed?.(); },
 });

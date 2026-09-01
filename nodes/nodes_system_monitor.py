@@ -213,12 +213,31 @@ class DaSiWaSystemMonitor:
         self._io_lock = threading.Lock()
         self._previous_disk_io = None
         self._previous_disk_io_time = None
+        # The Windows CIM query (Win32_VideoController) is expensive (a fresh
+        # powershell.exe per call) and its data (adapter name, PNPDeviceID,
+        # AdapterRAM) is static. Cache it after the first successful probe so
+        # we do not spawn a powershell process every second.
+        self._windows_gpus_cache = None
+        self._windows_gpus_lock = threading.Lock()
+
+    def _windows_gpus_cached(self):
+        if self._windows_gpus_cache:
+            return self._windows_gpus_cache
+        with self._windows_gpus_lock:
+            if self._windows_gpus_cache:
+                return self._windows_gpus_cache
+            gpus = _probe(_windows_gpus, [])
+            if gpus:
+                self._windows_gpus_cache = gpus
+            # An empty result is treated as "probe not available yet" and is
+            # retried on the next call.
+            return gpus
 
     def gpu_info(self):
         gpus = _probe(_nvidia_gpus, []) + _probe(_amd_gpus, [])
         if os.name == "nt":
             vendor_telemetry = {gpu["vendor"] for gpu in gpus}
-            gpus.extend(gpu for gpu in _probe(_windows_gpus, []) if gpu["vendor"] not in vendor_telemetry)
+            gpus.extend(gpu for gpu in self._windows_gpus_cached() if gpu["vendor"] not in vendor_telemetry)
         else:
             gpus.extend(_probe(_intel_gpus, []))
         return gpus

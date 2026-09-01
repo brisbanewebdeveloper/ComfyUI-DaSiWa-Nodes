@@ -4,9 +4,9 @@ import sys
 import types
 from pathlib import Path
 
-# Load the repo module by absolute file path under a synthetic package, the
-# same way test_minimax_h3_director_v2.py does: a live ComfyUI checkout puts
-# its own top-level `nodes` on sys.path and would shadow `nodes/nodes_*.py`.
+# Load the repo module by absolute file path under a synthetic package: a live
+# ComfyUI checkout puts its own top-level `nodes` on sys.path and would shadow
+# `nodes/nodes_*.py`.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _NODES_DIR = _REPO_ROOT / "nodes"
 _PKG = "dasiwa_seed_control_nodes_pkg"

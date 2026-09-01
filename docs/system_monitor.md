@@ -71,6 +71,8 @@ Hover over any metric chip to see detailed information:
 
 When multiple GPUs of the same vendor exist, each receives a sequential index starting at 0. If a specific GPU tool is unavailable, the system gracefully degrades to generic device enumeration.
 
+On Windows the CIM `Win32_VideoController` query is expensive (a fresh `powershell.exe` per call) and its data — adapter name, `PNPDeviceID`, `AdapterRAM` — is static, so it is probed **once** and cached for the lifetime of the monitor instance. A successful non-empty result is reused on every subsequent tick; an empty result is retried on the next tick until an adapter is found. This avoids spawning a powershell process on every telemetry interval.
+
 ## Responsive Behavior
 
 When toolbar width is insufficient to display all metrics, lower-priority chips are hidden first. The priority order (highest to lowest):

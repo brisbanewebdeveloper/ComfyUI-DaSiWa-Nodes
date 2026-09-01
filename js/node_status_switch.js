@@ -23,6 +23,7 @@ const MODE_ACTIVE   = 0;
 const MODE_MUTE     = 2;
 const MODE_BYPASS   = 4;
 const NODE_TYPE     = "DaSiWa_NodeStatusSwitch";
+const DIRECTOR_TYPE = "MiniMaxH3Director";
 const TARGET_PREFIX = "target_";
 const MAX_TARGETS   = 99;
 
@@ -202,6 +203,36 @@ function resolveSourceNode(startNode, graph) {
     return current;
 }
 
+// Modes that make the Director's fl2va_requested output true — mirrors
+// `mode in BASE_MODES or mode == "Image Inpaint"` in
+// nodes/nodes_minimax_h3_director.py.
+const FL2VA_FAMILY_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Image Inpaint"];
+
+/**
+ * Read the computed "request" boolean outputs of the MiniMax H3 Director.
+ *
+ * The Director's fl2va_requested / inpaint_requested outputs are computed
+ * in the backend from the mode combo (build_guide); the frontend node never
+ * stores them. A switch wired to one of these outputs therefore derives the
+ * value from the Director's mode widget instead.
+ *
+ * Returns a boolean, or null if the slot is not a known request output.
+ */
+function readDirectorRequest(director, slotIndex) {
+    if (!director) return null;
+    const name = director.outputs?.[slotIndex]?.name;
+    const mode = getWidget(director, "mode")?.value;
+    if (mode == null) return null;
+    switch (name) {
+        case "inpaint_requested":
+            return mode === "Image Inpaint";
+        case "fl2va_requested":
+            return FL2VA_FAMILY_MODES.includes(mode);
+        default:
+            return null;
+    }
+}
+
 /**
  * Read the effective "enabled" value at queue time.
  * If the "enabled" input is connected, follow the link to the source
@@ -238,10 +269,17 @@ function readEnabled(switchNode, visited) {
                 if (src.type === NODE_TYPE) {
                     const v = readEnabled(src, visited);
                     if (v != null) return v;
-                } else {
-                    const v = readBoolFromNode(src);
+                }
+                // The MiniMax H3 Director's request outputs (inpaint_requested,
+                // fl2va_requested) are computed in the backend from its mode
+                // combo; derive them from the mode widget so the switch follows
+                // the mode pill live.
+                if (src.type === DIRECTOR_TYPE) {
+                    const v = readDirectorRequest(src, link.origin_slot);
                     if (v != null) return v;
                 }
+                const v = readBoolFromNode(src);
+                if (v != null) return v;
             }
         }
     }

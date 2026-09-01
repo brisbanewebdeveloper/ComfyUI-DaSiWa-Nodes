@@ -2,15 +2,18 @@
 
 A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control.
 
+[📰 News & Changelog — release notes and complete change history across the collection →](docs/news_and_changelog.md)
+
 ## Included Nodes
 
 ### 🎬 MiniMax H3 Director
 
-Timeline-based authoring for MiniMax H3 text/image/video generation and reference-to-video workflows, integrated with ComfyUI's native H3 implementation. Two lanes (Image/Video + Audio), slot-based layout, drag-and-drop / paste / upload, per-clip trims, and structured prompt builders per mode.
+Timeline-based authoring for MiniMax H3 text/image/video generation, reference-to-video, and single-image inpainting workflows, integrated with ComfyUI's native H3 implementation. Two lanes (Image/Video + Audio), slot-based layout, drag-and-drop / paste / upload, per-clip trims, and structured prompt builders per mode.
 
 ![MiniMax H3 Director](assets/DaSiWa-MiniMaxH3-Director.png)
 
 - **FL2VA mode:** text-to-video (T2VA), first-frame (I2VA), or first+last frame interpolation; up to 2 image slots; automatic alignment-line insertion in the prompt.
+- **IMAGE INPAINT mode:** exactly one image reference, no video/audio; a 5-frame image-to-video pass through the native `MiniMaxH3ImageToVideo` node with the single image as keyframe — the output is a one-frame batch you extract your single result from with a **Get Image from Batch**. The mode emits an `inpaint_requested` output so you can switch sampling paths by mode, and the Guide node routes it to the native image-to-video call with the image as first frame and no last frame.
 - **REF2VA mode:** up to 9 images, 3 videos, 3 audio clips, 12 files total; each video has a compact V / A / V+A switch (Video only / Audio only / Video+embedded-audio) using the same trim range for both streams; standalone audio also supports left/right trim handles.
 - **REFERENCE VIDEO THUMBNAILS:** uploaded videos show their actual first frame as a background preview behind each clip tile, making it easy to identify references at a glance.
 - **REFERENCE HANDLING:** reorder clips by dragging between slots, attach external soundtracks to videos, crop references visually via draggable markers, preserve incompatible media when toggling FL2VA ↔ REF2VA instead of losing assets.
@@ -19,7 +22,7 @@ Timeline-based authoring for MiniMax H3 text/image/video generation and referenc
   - FL2VA/I2VA/L2VA/T2VA: guided fields for integrated_multimodal_description, overall_soundscape, and non_diegetic_music with automatic alignment headers.
   - REF2VA: simplified six-section free-text builder (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music) with helper buttons: **Insert [Shot N]** places shot markers at cursor, **Prefill Labels & Summary** auto-generates Picture/Video/Audio labels from your inserted media, and **Preview Prompt** shows the exact assembled prompt in a popup with copy-to-clipboard.
 - **VALIDATED LIMITS:** 2–15 second reference windows; max 15s combined visual and audio duration each; strict path-safety under ComfyUI's input directory.
-- **NATIVE ROUTING & LAZY LOADING:** hands validated data to ComfyUI's built-in MiniMaxH3ImageToVideo / MiniMaxH3ReferenceToVideo nodes; only the selected FL2VA or REF2VA model is requested.
+- **NATIVE ROUTING & LAZY LOADING:** hands validated data to ComfyUI's built-in MiniMaxH3ImageToVideo / MiniMaxH3ReferenceToVideo nodes (Image Inpaint uses the image-to-video node); only the selected FL2VA or REF2VA model is requested.
 - **OPTIONAL EXECUTOR:** connect the Director guide to **DaSiWa MiniMax H3 Director Executor** for an integrated SigmaShift, sampling, video decode, and audio decode path; keep using **MiniMax H3 Director Guide** with standard sampler nodes for custom graphs.
 - **SEQUENCE EXECUTION:** wrap guides with **Sequence Segment**, combine them through the autogrowing **Sequence Plan**, then execute mixed FL2VA/REF2VA runs with run selection, source passthrough, disk resume, CPU-offloaded AV continuity, and concatenated image/audio outputs.
 - **SAFE COEXISTENCE:** the Director uses the unique node ID `DaSiWaMiniMaxH3Director`, so it can be installed beside other MiniMax H3 Director packages. Saved DaSiWa workflows using the former shared ID migrate when opened.
@@ -40,6 +43,8 @@ An approximate, model-scoped whole-block-stack residual cache for ComfyUI's nati
 - **CONTROLLED REUSE:** sampled audio/video-token relative-L1 threshold, 15–90% sampling window, and a bounded number of consecutive cache hits.
 - **STORAGE:** auto / CUDA / CPU cached-residual storage with CPU fallback if automatic storage runs out of VRAM.
 - **COMPATIBILITY:** preserves ComfyUI block replacements and transformer options; can be chained with **Patch Comfy Kitchen Attention**.
+- **PDD HEAD BANK:** works with ComfyUI's PDD LoRA head bank (0.34+). The node passes the PDD sigma-schedule arguments automatically, so cache and PDD coexist with no extra setup.
+- **PER-TOKEN MASKS:** honors per-token video and audio denoise masks, running masked rows at their own strength exactly like Core, so cached and region-masked generations match Core quality.
 - **QUALITY:** approximate optimization—higher cache thresholds trade fidelity for more skipped block-stack evaluations.
 
 [Full documentation, usage, compatibility, and provenance →](docs/minimax_h3_cache.md)
@@ -128,7 +133,7 @@ The **DaSiWa Node Status Switch** lets you mute or bypass any node in your workf
 
 ### 🎬 Advanced LoRA Loader
 
-The **DaSiWa Advanced LoRA Loader** is a 10-slot stacker for ordinary image/video LoRAs and LTX-2.3. In **Basic mode**, it loads the complete LoRA map, so it is compatible with standard image and video models. Its `VIS` control means **visual strength**: it affects the whole LoRA map in Basic mode, including image models. LTX-2.3 additionally supports independent audio separation.
+The **Advanced LoRA Loader** is a 10-slot stacker for ordinary image/video LoRAs and LTX-2.3. In **Basic mode**, it loads the complete LoRA map, so it is compatible with standard image and video models. Its `VIS` control means **visual strength**: it affects the whole LoRA map in Basic mode, including image models. LTX-2.3 additionally supports independent audio separation.
 
 - **Model Modes:** Select Basic for universal image/video compatibility or LTX-2.3 for separate visual/audio branches. MiniMax H3 uses Basic mode because its transformer blocks are shared between video and audio.
 - **Visual Control:** `STR × VIS` is the effective visual strength. In Basic mode, `VIS` controls the complete LoRA map; it is not video-only.
@@ -138,10 +143,14 @@ The **DaSiWa Advanced LoRA Loader** is a 10-slot stacker for ordinary image/vide
 - **Key Count Indicator:** Auto-scans each LoRA to show video/audio key counts before generation.
 - **6 Themes:** Switch between Jade, Neon, Studio, Chrome, OLED, and Wood color schemes.
 - **Searchable UI:** Quick LoRA search with live filtering in the node itself.
+- **LoRA Info Button (ⓘ):** an info button at the right edge of each slot row (drawn as a circle with an "i") opens an info panel with the LoRA's Civitai link (looked up by the file's SHA-256, cached in `lorainfo/`), trigger/trained words from the safetensors header and Civitai (click-select, copy), and preview images (Civitai plus a local sidecar image next to the LoRA if present).
+- **Trash Button (v0.4.29):** a small ASCII-drawn trash button sits directly right of the info button. It resets that slot's LoRA back to **None** (STR / V× / A× kept — same as picking None in the picker) so you can unstack a LoRA without reopening the picker. The info button shifted slightly left to make room.
+- **PDD/ACC Metadata (v0.4.27):** LoRA files are read with their metadata and it is forwarded to Core's `load_lora_for_models` like the native `LoraLoader`, so PDD/ACC head banks activate; older ComfyUI builds fall back automatically.
+- **Opt-in LoRA Cache (v0.4.27):** a cache button in the control strip keeps each unique LoRA file in a small LRU cache so a LoRA reused across slots is read once — **off by default**.
 
-![DaSiWa Advanced LoRA Loader](assets/DaSiWa-Advanced-LoraLoader.png)
+![Advanced LoRA Loader](assets/DaSiWa-Advanced-LoraLoader.png)
 
-[Full documentation →](docs/ltx2_loader.md)
+[Full documentation →](docs/advanced_lora_loader.md)
 
 ---
 
