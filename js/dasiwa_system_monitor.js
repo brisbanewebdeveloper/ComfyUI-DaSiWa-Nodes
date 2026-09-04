@@ -199,11 +199,18 @@ function bytes(value) {
 }
 
 function mbPerSec(value) {
-    return value === null || value === undefined ? "n/a" : `${value.toFixed(1)} MB/s`;
+    if (value === null || value === undefined) return "n/a";
+    const rounded = Math.round(value * 10) / 10;
+    if (rounded >= 1000) return `${(rounded / 1000).toFixed(1)} GB/s`;
+    return `${rounded.toFixed(1).padStart(4, "\u00A0")} MB/s`;
 }
 
 function percent(value) {
-    return value === null || value === undefined ? "n/a" : `${Math.round(value)}%`;
+    return value === null || value === undefined ? "n/a" : `${String(Math.round(value)).padStart(3, "\u00A0")}%`;
+}
+
+function celsius(value) {
+    return value === null || value === undefined ? "n/a" : `${String(Math.round(value)).padStart(3, "\u00A0")}°`;
 }
 
 function meterFill(value) {
@@ -231,7 +238,7 @@ function allSnapshotMetrics(snapshot) {
         ...snapshot.gpus.flatMap((gpu) => [
             { id: `gpu-util:${gpu.id}`, kind: "gpu-util", label: `GPU${gpu.index} Util`, value: gpu.utilization, text: percent(gpu.utilization), detail: `${gpu.id} — ${gpu.name}; GPU utilization` },
             { id: `gpu-vram:${gpu.id}`, kind: "gpu-vram", label: `GPU${gpu.index} VRAM`, value: gpu.memory_percent, text: percent(gpu.memory_percent), detail: `${gpu.id} — ${gpu.name}; VRAM ${bytes(gpu.memory_used)} / ${bytes(gpu.memory_total)}` },
-            { id: `gpu-temp:${gpu.id}`, kind: "gpu-temp", label: `GPU${gpu.index} Temp`, value: gpu.temperature, text: gpu.temperature === null ? "n/a" : `${Math.round(gpu.temperature)}°`, detail: `${gpu.id} — ${gpu.name}; GPU temperature` },
+            { id: `gpu-temp:${gpu.id}`, kind: "gpu-temp", label: `GPU${gpu.index} Temp`, value: gpu.temperature, text: celsius(gpu.temperature), detail: `${gpu.id} — ${gpu.name}; GPU temperature` },
         ]),
     ];
 }

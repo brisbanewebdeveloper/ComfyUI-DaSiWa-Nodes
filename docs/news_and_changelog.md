@@ -25,6 +25,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.4.33 | 09-04 | System Monitor chips: stable fixed-width formatting; fast disks switch to GB/s (#36) |
 | 0.4.30 | 08-29 | Seed Control: Random-mode roll via the graphToPrompt choke point; panel DOM syncs after a run |
 | 0.4.29 | 08-29 | Advanced LoRA Loader trash button (per-row, resets the slot to None) |
 | 0.4.28 | 08-29 | LoRA info button in the Advanced LoRA Loader (Civitai link, trigger words, images) |
@@ -114,6 +115,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### DaSiWa System Monitor
 
+- **09-04:** stable chip width — % and °C values pad to 3 digits and disk throughput to one decimal, so the toolbar stops reflowing as values tick; values ≥ 1000 MB/s switch to `x.x GB/s` so fast (M2-class) disks don't overflow the chip (issue #36).
 - **08-28:** Windows CIM probe now cached — no more per-second PowerShell spawns.
 - **08-15:** content-sized chips (no more LITE text clipping at 4K); real disable flag + container-safe probes (`DASWA_SYSTEM_MONITOR=0`).
 - **08-01:** disk telemetry + docking.
