@@ -259,6 +259,48 @@ def test_guider_routes_l2va_to_image_to_video_with_only_last_frame(monkeypatch):
     assert calls[0][-2:] == (None, "closing")
 
 
+def test_guider_routes_ref2va_with_int_dimensions_in_their_correct_slots(monkeypatch):
+    """Regression: ComfyUI re-ordered MiniMaxH3ReferenceToVideo.execute to
+    (clip, prompt, width, height, length, ref_image_size, vae, audio_vae, ...).
+    The guider once still passed the old (clip, vae, audio_vae, prompt, ...) order,
+    which bound the string prompt into `height` and crashed `height // 16`.
+    """
+    calls = []
+
+    class NativeReferenceToVideo:
+        @staticmethod
+        def execute(*args, **kwargs):
+            calls.append((args, kwargs))
+            return ["conditioning"], {"samples": np.zeros((1, 2, 3))}
+
+    monkeypatch.setattr(director_guide, "_native_node", lambda _name: NativeReferenceToVideo)
+    guide = {
+        "version": 2, "mode": "REF2VA", "width": 1344, "height": 768, "length": 124,
+        "resolved_prompt": "A red fox walks through a quiet forest.",
+        "ref_image_size": "match",
+        "ref_images": {"ref_image_1": "fox.png"}, "ref_videos": {},
+        "ref_video_audios": {}, "ref_audios": {},
+    }
+    clip, vae, audio_vae = object(), object(), object()
+
+    positive, latent = director_guide.MiniMaxH3DirectorGuide().apply(clip, vae, guide, audio_vae)
+
+    assert positive == ["conditioning"]
+    assert latent["samples"].shape == (1, 2, 3)
+    args, kwargs = calls[0]
+    # width/height must reach their native slots as ints, and the string prompt
+    # must NOT be misbound into a dimension slot.
+    assert args[0] is clip
+    assert args[1] == "A red fox walks through a quiet forest."
+    assert args[2] == 1344 and isinstance(args[2], int)
+    assert args[3] == 768 and isinstance(args[3], int)
+    assert args[4] == 124 and isinstance(args[4], int)
+    assert args[5] == "match"
+    assert kwargs.get("vae") is vae
+    assert kwargs.get("audio_vae") is audio_vae
+    assert kwargs.get("ref_images") == {"ref_image_1": "fox.png"}
+
+
 def test_director_ui_exposes_the_derived_frame_slots():
     source = Path("js/minimax_h3_director.js").read_text()
 
