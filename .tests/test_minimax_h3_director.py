@@ -657,7 +657,7 @@ def test_embedded_video_media_modes_select_requested_streams(monkeypatch, tmp_pa
     video_guide = node.build_guide("REF2VA", "", 1344, 768, 5, "match", json.dumps({"items": [{**common, "media_mode": "video"}]}))[0]
     assert list(video_guide["ref_videos"]) == ["ref_video_1"]
     assert video_guide["ref_video_audios"] == {}
-    assert calls == [("video", {"trim_start": 2.0, "trim_end": 12.0})]
+    assert calls == [("video", {"trim_start": 2.0, "trim_end": 12.0, "target_fps": 24.0})]
 
     calls.clear()
     audio_guide = node.build_guide("REF2VA", "", 1344, 768, 5, "match", json.dumps({"items": [
@@ -672,7 +672,7 @@ def test_embedded_video_media_modes_select_requested_streams(monkeypatch, tmp_pa
     assert list(combined_guide["ref_videos"]) == ["ref_video_1"]
     assert list(combined_guide["ref_video_audios"]) == ["ref_video_audio_1"]
     assert calls == [
-        ("video", {"trim_start": 2.0, "trim_end": 12.0}),
+        ("video", {"trim_start": 2.0, "trim_end": 12.0, "target_fps": 24.0}),
         ("audio", {"trim_start": 2.0, "trim_end": 12.0}),
     ]
 

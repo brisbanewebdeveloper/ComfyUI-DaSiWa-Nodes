@@ -321,8 +321,15 @@ def load_embedded_video_audio(path: str, input_directory: str, *, trim_start: fl
 
 
 def load_video(path: str, input_directory: str, *, trim_start: float = 0.0,
-               trim_end: float | None = None, target_fps: int = FPS):
+               trim_end: float | None = None, target_fps: float = FPS):
     """Decode a trimmed video to ComfyUI IMAGE frames at a fixed FPS.
+
+    Output frames are chosen by presentation time, not by source index: for
+    every 1/target_fps-second tick inside [trim_start, trim_end) the source
+    frame with the nearest PTS is emitted (VHS-style force_rate). A 60 fps
+    clip therefore fills a 24 fps batch across the whole trim window instead
+    of taking the first few seconds of source frames and stretching them.
+    Sources slower than the target rate repeat frames (nearest neighbor).
 
     PyAV is intentionally imported lazily because image-only workflows must not
     require a video dependency at node import time.
@@ -348,16 +355,32 @@ def load_video(path: str, input_directory: str, *, trim_start: float = 0.0,
         if end <= trim_start:
             raise ValueError("video trim range is empty")
         timestamps = np.arange(float(trim_start), end, 1.0 / target_fps)
+        timestamps = timestamps[timestamps < end]
+        if timestamps.size == 0:
+            raise ValueError("video trim range produced no frames")
         frames = []
+        source_times = []
         for frame in container.decode(stream):
             timestamp = float(frame.pts * frame.time_base) if frame.pts is not None else None
             if timestamp is None or timestamp < trim_start or timestamp >= end:
                 continue
             frames.append(torch.from_numpy(frame.to_rgb().to_ndarray()).float() / 255.0)
+            source_times.append(timestamp)
         if not frames:
             raise ValueError("video trim range produced no frames")
         source = torch.stack(frames)
-        indices = torch.clamp((torch.as_tensor(timestamps) * target_fps).round().long(), 0, len(source) - 1)
-        return source[indices]
+        # Sample by presentation time, not by source index: for each target
+        # tick pick the source frame with the nearest PTS (VHS-style
+        # force_rate). The former (timestamps * target_fps) index collapsed
+        # to 0, 1, 2, ..., so a 60 fps source played ~2.5x slow and its tail
+        # was never used. Nearest-match also repeats frames when the source
+        # runs slower than the target rate.
+        ticks = torch.as_tensor(timestamps, dtype=torch.float64)
+        times = torch.as_tensor(source_times, dtype=torch.float64)
+        pos = torch.searchsorted(times, ticks)
+        right = pos.clamp(max=len(times) - 1)
+        left = (pos - 1).clamp(min=0)
+        nearest = torch.where((ticks - times[left]).abs() <= (times[right] - ticks).abs(), left, right)
+        return source[nearest]
     finally:
         container.close()
