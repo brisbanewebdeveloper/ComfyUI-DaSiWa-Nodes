@@ -115,7 +115,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### DaSiWa System Monitor
 
-- **09-04:** stable chip width — % and °C values pad to 3 digits and disk throughput to one decimal, so the toolbar stops reflowing as values tick; values ≥ 1000 MB/s switch to `x.x GB/s` so fast (M2-class) disks don't overflow the chip (issue #36).
+- **09-04:** stable chip width — values render in a fixed-width monospace cell (percent/°C pad to 3 digits, disk throughput to one decimal), so the chip width no longer shifts as digits tick; values ≥ 1000 MB/s switch to `x.x GB/s` so fast (M2-class) disks don't overflow the chip (issue #36).
 - **08-28:** Windows CIM probe now cached — no more per-second PowerShell spawns.
 - **08-15:** content-sized chips (no more LITE text clipping at 4K); real disable flag + container-safe probes (`DASWA_SYSTEM_MONITOR=0`).
 - **08-01:** disk telemetry + docking.

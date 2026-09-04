@@ -381,7 +381,8 @@ function addStyles() {
         #${ROOT_ID} .dasiwa-monitor-metric::before, #${ROOT_ID} .dasiwa-monitor-full-metric i { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--fill); opacity: .38; background: var(--meter); transition: width .35s ease; }
         #${ROOT_ID} span, #${ROOT_ID} strong { position: relative; z-index: 1; font-variant-numeric: tabular-nums; }
         #${ROOT_ID} .dasiwa-monitor-metric span { color: var(--input-text); font-size: 9px; letter-spacing: .01em; }
-        #${ROOT_ID} .dasiwa-monitor-metric strong { text-align: right; font-size: 11px; }
+        #${ROOT_ID} .dasiwa-monitor-metric strong { display: inline-block; width: 4ch; text-align: right; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace; }
+        #${ROOT_ID} .dasiwa-monitor-metric.disk-rd strong, #${ROOT_ID} .dasiwa-monitor-metric.disk-wr strong { width: 10ch; }
         #${ROOT_ID} .cpu { --meter: #38bdf8; } #${ROOT_ID} .ram { --meter: #a78bfa; } #${ROOT_ID} .swap { --meter: #f59e0b; } #${ROOT_ID} .disk { --meter: #fb7185; } #${ROOT_ID} .disk-rd { --meter: #34d399; } #${ROOT_ID} .disk-wr { --meter: #f472b6; }
         #${ROOT_ID} .gpu-util { --meter: #4ade80; } #${ROOT_ID} .gpu-vram { --meter: #22d3ee; } #${ROOT_ID} .gpu-temp { --meter: #fb923c; }
         #${ROOT_ID} [hidden] { display: none !important; }
