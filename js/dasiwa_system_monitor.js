@@ -199,11 +199,18 @@ function bytes(value) {
 }
 
 function mbPerSec(value) {
-    return value === null || value === undefined ? "n/a" : `${value.toFixed(1)} MB/s`;
+    if (value === null || value === undefined) return "n/a";
+    const rounded = Math.round(value * 10) / 10;
+    if (rounded >= 1000) return `${(rounded / 1000).toFixed(1)} GB/s`;
+    return `${rounded.toFixed(1).padStart(4, "\u00A0")} MB/s`;
 }
 
 function percent(value) {
-    return value === null || value === undefined ? "n/a" : `${Math.round(value)}%`;
+    return value === null || value === undefined ? "n/a" : `${String(Math.round(value)).padStart(3, "\u00A0")}%`;
+}
+
+function celsius(value) {
+    return value === null || value === undefined ? "n/a" : `${String(Math.round(value)).padStart(3, "\u00A0")}°`;
 }
 
 function meterFill(value) {
@@ -231,7 +238,7 @@ function allSnapshotMetrics(snapshot) {
         ...snapshot.gpus.flatMap((gpu) => [
             { id: `gpu-util:${gpu.id}`, kind: "gpu-util", label: `GPU${gpu.index} Util`, value: gpu.utilization, text: percent(gpu.utilization), detail: `${gpu.id} — ${gpu.name}; GPU utilization` },
             { id: `gpu-vram:${gpu.id}`, kind: "gpu-vram", label: `GPU${gpu.index} VRAM`, value: gpu.memory_percent, text: percent(gpu.memory_percent), detail: `${gpu.id} — ${gpu.name}; VRAM ${bytes(gpu.memory_used)} / ${bytes(gpu.memory_total)}` },
-            { id: `gpu-temp:${gpu.id}`, kind: "gpu-temp", label: `GPU${gpu.index} Temp`, value: gpu.temperature, text: gpu.temperature === null ? "n/a" : `${Math.round(gpu.temperature)}°`, detail: `${gpu.id} — ${gpu.name}; GPU temperature` },
+            { id: `gpu-temp:${gpu.id}`, kind: "gpu-temp", label: `GPU${gpu.index} Temp`, value: gpu.temperature, text: celsius(gpu.temperature), detail: `${gpu.id} — ${gpu.name}; GPU temperature` },
         ]),
     ];
 }
@@ -374,7 +381,8 @@ function addStyles() {
         #${ROOT_ID} .dasiwa-monitor-metric::before, #${ROOT_ID} .dasiwa-monitor-full-metric i { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--fill); opacity: .38; background: var(--meter); transition: width .35s ease; }
         #${ROOT_ID} span, #${ROOT_ID} strong { position: relative; z-index: 1; font-variant-numeric: tabular-nums; }
         #${ROOT_ID} .dasiwa-monitor-metric span { color: var(--input-text); font-size: 9px; letter-spacing: .01em; }
-        #${ROOT_ID} .dasiwa-monitor-metric strong { text-align: right; font-size: 11px; }
+        #${ROOT_ID} .dasiwa-monitor-metric strong { display: inline-block; width: 4ch; text-align: right; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace; }
+        #${ROOT_ID} .dasiwa-monitor-metric.disk-rd strong, #${ROOT_ID} .dasiwa-monitor-metric.disk-wr strong { width: 10ch; }
         #${ROOT_ID} .cpu { --meter: #38bdf8; } #${ROOT_ID} .ram { --meter: #a78bfa; } #${ROOT_ID} .swap { --meter: #f59e0b; } #${ROOT_ID} .disk { --meter: #fb7185; } #${ROOT_ID} .disk-rd { --meter: #34d399; } #${ROOT_ID} .disk-wr { --meter: #f472b6; }
         #${ROOT_ID} .gpu-util { --meter: #4ade80; } #${ROOT_ID} .gpu-vram { --meter: #22d3ee; } #${ROOT_ID} .gpu-temp { --meter: #fb923c; }
         #${ROOT_ID} [hidden] { display: none !important; }

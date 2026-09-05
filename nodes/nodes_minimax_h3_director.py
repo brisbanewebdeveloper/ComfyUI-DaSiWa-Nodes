@@ -175,10 +175,10 @@ class MiniMaxH3Director:
                     if video_mode not in {"video", "audio", "video_audio"}:
                         raise ValueError(f"unsupported video media mode: {video_mode}")
                     if video_mode in {"video", "video_audio"}:
-                        video = load_video(value, input_directory, trim_start=trim_start, trim_end=trim_end) if isinstance(value, str) and input_directory else value
+                        video = load_video(value, input_directory, trim_start=trim_start, trim_end=trim_end, target_fps=frame_rate) if isinstance(value, str) and input_directory else value
                         video = scale_input_media(video, input_scaling, width, height)
                         ref_videos[f"ref_video_{len(ref_videos) + 1}"] = video
-                        video_duration = float(video.shape[0]) / 24.0 if hasattr(video, "shape") else item.get("duration")
+                        video_duration = float(video.shape[0]) / frame_rate if hasattr(video, "shape") else item.get("duration")
                         videos.append({**item, "duration": video_duration})
                     if video_mode in {"audio", "video_audio"}:
                         audio = load_embedded_video_audio(value, input_directory, trim_start=trim_start, trim_end=trim_end) if isinstance(value, str) and input_directory else item.get("audio")

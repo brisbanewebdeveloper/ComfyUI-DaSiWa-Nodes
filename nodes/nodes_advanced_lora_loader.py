@@ -216,6 +216,10 @@ class DaSiWa_AdvancedLoRALoader:
                     "default": "Basic",
                     "description": "Basic loads all LoRA tensors universally; LTX-2.3 enables video/audio separation.",
                 }),
+            },
+            # Optional preserves workflows saved before the cache toggle existed:
+            # ComfyUI supplies the default when no value is present in the prompt.
+            "optional": {
                 "use_cache": ("BOOLEAN", {
                     "default": False,
                     "description": "Activate caching of the loaded LoRA file + metadata. Off by default; when on, each unique LoRA file is read once instead of once per slot.",

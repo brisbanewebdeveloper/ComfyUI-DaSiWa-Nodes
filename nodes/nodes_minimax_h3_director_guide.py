@@ -102,10 +102,17 @@ class MiniMaxH3DirectorGuide:
             f"refs=images:{len(state.ref_images)},videos:{len(state.ref_videos)},"
             f"video_audio:{len(state.ref_video_audios)},audio:{len(state.ref_audios)}",
         )
+        # Native signature (since ComfyUI's "Make VAE optional" change):
+        # execute(clip, prompt, width, height, length, ref_image_size, vae, audio_vae,
+        #          ref_images, ref_videos, ref_video_audios, ref_audios).
+        # The tail is bound by name so a future parameter reorder cannot re-silently
+        # misbind the positional slots (which previously put a string prompt into `height`).
         positive, latent = native.execute(
-            clip, vae, audio_vae, state.resolved_prompt, state.width, state.height, state.length,
-            state.ref_image_size, state.ref_images, state.ref_videos,
-            state.ref_video_audios, state.ref_audios,
+            clip, state.resolved_prompt, state.width, state.height, state.length,
+            state.ref_image_size,
+            vae=vae, audio_vae=audio_vae,
+            ref_images=state.ref_images, ref_videos=state.ref_videos,
+            ref_video_audios=state.ref_video_audios, ref_audios=state.ref_audios,
         )
         log_dasiwa(
             "MiniMax H3 Director Guide",

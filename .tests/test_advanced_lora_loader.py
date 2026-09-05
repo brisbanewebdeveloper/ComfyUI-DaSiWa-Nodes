@@ -175,10 +175,27 @@ def test_basic_mode_passes_lora_metadata_to_core_loader(loader_module, tmp_path,
     assert calls == [(weights, 1.0, 1.0, metadata)]
 
 
-def test_schema_default_is_cache_off(loader_module):
-    controls = loader_module.DaSiWa_AdvancedLoRALoader.INPUT_TYPES()["required"]
-    assert controls["use_cache"][0] == "BOOLEAN"
-    assert controls["use_cache"][1]["default"] is False
+def test_schema_keeps_cache_optional_and_off_by_default(loader_module):
+    schema = loader_module.DaSiWa_AdvancedLoRALoader.INPUT_TYPES()
+
+    assert "use_cache" not in schema["required"]
+    assert schema["optional"]["use_cache"][0] == "BOOLEAN"
+    assert schema["optional"]["use_cache"][1]["default"] is False
+
+
+def test_apply_stack_uses_cache_off_when_old_workflow_has_no_cache_input(loader_module, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        loader_module,
+        "_apply_slot",
+        lambda model, clip, *_args: calls.append(_args) or (model, clip),
+    )
+
+    loader_module.DaSiWa_AdvancedLoRALoader().apply_stack(
+        "model", "clip", '[{"on": true, "lora": "example.safetensors"}]', "Basic",
+    )
+
+    assert calls[0][-1] is False
 
 
 def test_cache_off_by_default_reads_every_slot(loader_module, tmp_path, monkeypatch):
