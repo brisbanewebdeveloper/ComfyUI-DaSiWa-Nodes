@@ -28,7 +28,10 @@ const info = {
     baseModel: "SDXL",
     imageLocal: "/dasiwa/ltx2/loraimg?lora=sub/cool_lora.safetensors",
     civitaiFound: true,
-    links: ["https://civitai.com/models/123?modelVersionId=456"],
+    links: [
+        "https://civitai.com/models/123?modelVersionId=456",
+        "https://civitai.red/models/123?modelVersionId=456",
+    ],
     trainedWords: [
         { word: "sks", count: 12, civitai: true },
         { word: "myword", count: 3 },
@@ -54,6 +57,12 @@ assert.match(html, /data-action="copy-words"/);
 assert.match(html, /data-action="copy-selected"/);
 assert.match(html, /seed 7/);
 assert.match(html, /abababab/);
+// Dual-link display: BLUE:/RED: labels sit OUTSIDE the anchors (plain colored
+// text), each anchor is tinted to match; no domain selector buttons.
+assert.match(html, /<span[^>]*color:#58a6ff[^>]*>BLUE:<\/span> <a href="https:\/\/civitai\.com\/models\/123\?modelVersionId=456"[^>]*color:#58a6ff[^>]*>https:\/\/civitai\.com\/models\/123\?modelVersionId=456<\/a>/);
+assert.match(html, /<span[^>]*color:#ff6b6b[^>]*>RED:<\/span> <a href="https:\/\/civitai\.red\/models\/123\?modelVersionId=456"[^>]*color:#ff6b6b[^>]*>https:\/\/civitai\.red\/models\/123\?modelVersionId=456<\/a>/);
+assert.doesNotMatch(html, /data-domain="com"/);
+assert.doesNotMatch(html, /data-domain="red"/);
 
 // civitai-missing state: error text, no model link, no word buttons
 const missing = buildLoraInfoPanelHtml(
@@ -84,10 +93,10 @@ assert.match(xss, /&lt;img src=x/);
 // ── Trash button: geometry + behavior (ASCII-drawn, no emoji) ──────────────
 const rawSource = await readFile(new URL("../js/advanced_lora_loader_ui.js", import.meta.url), "utf8");
 
-// The trash button cell lives right after the (shifted-left) info cell.
-assert.match(rawSource, /iX: 962 \* s, iW: 14 \* s/, "info button must shift left to x=962");
-assert.match(rawSource, /tX: 976 \* s, tW: 14 \* s/, "trash button must sit at the old info x=976");
-assert.doesNotMatch(rawSource, /iX: 976/, "the info cell must no longer occupy x=976");
+// The trash button cell lives right after the info cell (iX 952 w18 → tX 974 w18).
+assert.match(rawSource, /iX: 952 \* s, iW: 18 \* s/, "info button cell lives at x=952");
+assert.match(rawSource, /tX: 974 \* s, tW: 18 \* s/, "trash button sits at x=974");
+assert.doesNotMatch(rawSource, /iX: 974/, "the info cell must not occupy the trash cell x");
 
 // Behavior: a trash click resets the slot back to "None" (like selecting None).
 assert.match(rawSource, /if \(x > C\.tX && x < C\.tX \+ C\.tW && data\[i\]\.lora !== "None"\)/, "trash hit-test must guard against empty slots");

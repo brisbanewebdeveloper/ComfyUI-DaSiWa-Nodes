@@ -264,27 +264,41 @@ function buildLoraInfoPanelHtml(info, theme) {
     ";padding:2px 8px;border-radius:3px;cursor:pointer;font:11px 'Courier New',monospace;";
 
   const out = [];
+  // File name row (wraps independently) with the sha hint on its own row below.
   out.push(
-    '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">' +
-      '<span style="font:11px \'Courier New\',monospace;opacity:.8;overflow-wrap:anywhere;">' + esc(info.file) + "</span>" +
+    '<div style="font:11px \'Courier New\',monospace;opacity:.8;overflow-wrap:anywhere;">' + esc(info.file) +
+    "</div>" +
+    (info.sha256
+      ? '<div style="font:9px \'Courier New\',monospace;opacity:.5;user-select:all;">sha256 ' + esc(info.sha256.slice(0, 16)) + "</div>"
+      : "")
+  );
+  // Controls row: actions only.
+  out.push(
+    '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;">' +
       '<button data-action="refresh" title="Re-fetch from Civitai" style="' + btnStyle + '">Refresh</button>' +
       (words.length ? '<button data-action="copy-words" style="' + btnStyle + '">Copy all</button>' : "") +
       (words.length ? '<button data-action="copy-selected" style="' + btnStyle + '">Copy selected</button>' : "") +
       '<button data-action="close" title="Close" style="' + btnStyle + ';margin-left:auto;">×</button>' +
     "</div>"
   );
-  if (info.sha256) {
-    out.push('<div style="font:9px \'Courier New\',monospace;opacity:.5;">sha256 ' + esc(info.sha256.slice(0, 16)) + "</div>");
-  }
   if (info.civitaiFound) {
-    const link = (info.links || []).find(l => typeof l === "string" && l.includes("civitai.com")) || "";
+    // The backend returns both mirror links (.com + .red, same modelId/versionId
+    // on each). Both are always shown; each is preceded by a colored label
+    // (BLUE: for .com, RED: for .red) and the anchor itself is tinted to match.
+    const comLink = (info.links || []).find(l => typeof l === "string" && l.includes("civitai.com")) || "";
+    const redLink = (info.links || []).find(l => typeof l === "string" && l.includes("civitai.red")) || "";
+    const linkRow = (label, color, url) => url
+      ? '<span style="display:block;overflow-wrap:anywhere;"><span style="color:' + color + ';font-weight:bold;">' + label + '</span> ' +
+        '<a href="' + esc(url) + '" target="_blank" rel="noreferrer" style="color:' + color + ';">' + esc(url) + "</a></span>"
+      : "";
+    const linksHtml = linkRow("BLUE:", "#58a6ff", comLink) + linkRow("RED:", "#ff6b6b", redLink);
     out.push(
       '<div style="margin-top:6px;font:12px \'Courier New\',monospace;">' +
         '<div style="font-weight:bold;">' + esc(info.name || info.file) + "</div>" +
         (info.type || info.baseModel
           ? '<div style="opacity:.6;">' + esc([info.type, info.baseModel].filter(Boolean).join(" · ")) + "</div>"
           : "") +
-        (link ? '<a href="' + esc(link) + '" target="_blank" rel="noreferrer" style="color:' + t.btnText + ';">' + esc(link) + "</a>" : "") +
+        (linksHtml ? '<div style="margin-top:4px;">' + linksHtml + "</div>" : "") +
       "</div>"
     );
   } else {
@@ -424,6 +438,7 @@ const CONTROL_DESCRIPTIONS = {
   toggleAll: "Enable every slot, or disable every slot when they are already enabled.",
   add: "Add one LoRA slot to the stack.",
   remove: "Remove the last LoRA slot from the stack.",
+  clear: "Reset every current slot to None with STR/VIS/A at 1.00, without changing how many slots are showing.",
   enabled: "Enable or disable this LoRA slot.",
   lora: "Choose the LoRA file for this slot.",
   str: "Master LoRA strength. This is multiplied by VIS and, for LTX-2.3, A. Range: -5.0 to 5.0.",
@@ -586,6 +601,8 @@ app.registerExtension({
         if (x > btnX && x < btnX + btnW) return CONTROL_DESCRIPTIONS.theme;
         if (x > plusX && x < plusX + BTN_H) return CONTROL_DESCRIPTIONS.add;
         if (data.length > 1 && x > minusX && x < minusX + BTN_H) return CONTROL_DESCRIPTIONS.remove;
+        const clearX = (data.length > 1 ? minusX + BTN_H : plusX + BTN_H) + 4;
+        if (x > clearX && x < clearX + 36) return CONTROL_DESCRIPTIONS.clear;
       }
 
       const C = {
@@ -744,6 +761,22 @@ app.registerExtension({
         ctx.fillText("−", minusX + BTN_H / 2, BTN_Y + 11);
         ctx.textAlign = "left";
       }
+
+      // Clear button -- resets every current row to None / 1.00, keeps row count
+      const clearW = 36;
+      const clearX = (data.length > 1 ? plusX + BTN_H + 2 + BTN_H : plusX + BTN_H) + 4;
+      ctx.fillStyle = "#f4433622";
+      ctx.beginPath();
+      ctx.roundRect(clearX, BTN_Y, clearW, BTN_H, 3);
+      ctx.fill();
+      ctx.strokeStyle = "#f44336aa";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+      ctx.fillStyle = "#ffb3adcc";
+      ctx.font = "bold 8px 'Courier New',monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("Clear", clearX + clearW / 2, BTN_Y + 11);
+      ctx.textAlign = "left";
 
       // Divider
       ctx.strokeStyle = t.divider;
@@ -934,6 +967,18 @@ app.registerExtension({
         data.pop();
         this.properties.stack_data = JSON.stringify(data);
         this.size[1] = 40 + 16 + 3 + data.length * 28 + 2;
+        sync(this);
+        this.setDirtyCanvas(true);
+        return true;
+      }
+
+      // Clear all rows: keeps however many slots are currently showing, resets
+      // each one back to None / 1.00 (the same shape a freshly-added row gets).
+      const clearW = 36;
+      const clearX = (data.length > 1 ? minusX + BTN_H : plusX + BTN_H) + 4;
+      if (y > BTN_Y && y < BTN_Y + BTN_H && x > clearX && x < clearX + clearW) {
+        const cleared = data.map(() => ({ on: true, lora: "None", str: 1.0, vs: 1.0, as: 1.0 }));
+        this.properties.stack_data = JSON.stringify(cleared);
         sync(this);
         this.setDirtyCanvas(true);
         return true;

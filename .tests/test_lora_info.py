@@ -123,7 +123,10 @@ def test_merge_civitai_words_images_link(info_module):
     assert info["name"] == "Version B"
     assert info["type"] == "LoRA"
     assert info["baseModel"] == "SDXL"
-    assert info["links"] == ["https://civitai.com/models/123?modelVersionId=456"]
+    assert info["links"] == [
+        "https://civitai.com/models/123?modelVersionId=456",
+        "https://civitai.red/models/123?modelVersionId=456",
+    ]
     assert info["images"][0]["url"].endswith("1.png") and info["images"][0]["seed"] == 7
     assert info["images"][1]["type"] == "video"
     assert info["trainedWords"][0]["word"] == "w1"  # sorted desc by count
@@ -207,7 +210,10 @@ def test_lorainfo_civitai_data_merged(info_module, monkeypatch, tmp_path):
     monkeypatch.setattr(info_module, "CACHE_DIR", str(tmp_path / "cache"))
     resp = _run(info_module.lora_info(_fake_request(lora="cool.safetensors")))
     assert resp["civitaiFound"] is True
-    assert resp["links"] == ["https://civitai.com/models/123?modelVersionId=456"]
+    assert resp["links"] == [
+        "https://civitai.com/models/123?modelVersionId=456",
+        "https://civitai.red/models/123?modelVersionId=456",
+    ]
     assert any(i["url"].endswith("1.png") for i in resp["images"])
 
 
@@ -225,7 +231,58 @@ def test_lorainfo_refresh_refetches_civitai(info_module, monkeypatch, tmp_path):
     first = _run(info_module.lora_info(_fake_request(lora="cool.safetensors")))
     second = _run(info_module.lora_info(_fake_request(lora="cool.safetensors", refresh="1")))
     assert len(calls) == 2  # cached on first call, refetched on refresh=1
-    assert second["name"] == "Fresh" and second["links"] == ["https://civitai.com/models/3?modelVersionId=7"]
+    assert second["name"] == "Fresh" and second["links"] == [
+        "https://civitai.com/models/3?modelVersionId=7",
+        "https://civitai.red/models/3?modelVersionId=7",
+    ]
+
+
+def test_lorainfo_red_fallback_when_com_missing(info_module, monkeypatch, tmp_path):
+    """A LoRA 404 on .com is still found via the .red mirror (same by-hash API)."""
+    lora = tmp_path / "cool.safetensors"; lora.write_bytes(b"0" * 8 + b"{}" + b"pad")
+    _point_lora_at(lora, monkeypatch, info_module)
+    monkeypatch.setattr(info_module, "fetch_civitai",
+                        lambda url: {"id": 9, "name": "RedOnly", "modelId": 5, "images": [], "triggerWords": []}
+                        if "civitai.red" in url else None)
+    monkeypatch.setattr(info_module, "CACHE_DIR", str(tmp_path / "cache"))
+    resp = _run(info_module.lora_info(_fake_request(lora="cool.safetensors")))
+    assert resp["civitaiFound"] is True
+    assert resp["name"] == "RedOnly"
+    # links are domain-agnostic (dual-domain), the hit itself is tagged .red
+    assert resp["links"] == [
+        "https://civitai.com/models/5?modelVersionId=9",
+        "https://civitai.red/models/5?modelVersionId=9",
+    ]
+
+
+def test_lorainfo_negative_lookup_is_memoized(info_module, monkeypatch, tmp_path):
+    """A "not found" is cached, so a second open doesn't re-hit the API."""
+    lora = tmp_path / "cool.safetensors"; lora.write_bytes(b"0" * 8 + b"{}" + b"pad")
+    _point_lora_at(lora, monkeypatch, info_module)
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        return None
+
+    monkeypatch.setattr(info_module, "fetch_civitai", fake_fetch)
+    monkeypatch.setattr(info_module, "CACHE_DIR", str(tmp_path / "cache"))
+    first = _run(info_module.lora_info(_fake_request(lora="cool.safetensors")))
+    assert first["civitaiFound"] is False
+    assert len(calls) == 2  # .com + .red fallback, one pass
+    _run(info_module.lora_info(_fake_request(lora="cool.safetensors")))
+    assert len(calls) == 2  # cached negative result, no re-fetch
+    # refresh=1 still forces a re-lookup
+    _run(info_module.lora_info(_fake_request(lora="cool.safetensors", refresh="1")))
+    assert len(calls) == 4
+    cached = json.loads((tmp_path / "cache" / f"{first['sha256']}.json").read_text())
+    assert cached["civitaiLooked"] is True and cached["civitai"] is None
+
+
+def test_civitai_base_url(info_module):
+    assert info_module.civitai_base_url("red") == "https://civitai.red"
+    assert info_module.civitai_base_url("com") == "https://civitai.com"
+    assert info_module.civitai_base_url("anything-else") == "https://civitai.com"
 
 
 def test_lorainfo_sidecar_image_url(info_module, monkeypatch, tmp_path):

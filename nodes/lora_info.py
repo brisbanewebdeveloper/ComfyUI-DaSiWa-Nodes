@@ -16,6 +16,14 @@ from server import PromptServer
 CHUNK_SIZE = 128 * 1024
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lorainfo")
 CIVITAI_BY_HASH_URL = "https://civitai.com/api/v1/model-versions/by-hash/{}"
+CIVITAI_BY_HASH_URL_RED = "https://civitai.red/api/v1/model-versions/by-hash/{}"
+CIVITAI_BASE_COM = "https://civitai.com"
+CIVITAI_BASE_RED = "https://civitai.red"
+
+
+def civitai_base_url(domain: str) -> str:
+    """Canonical base URL for a Civitai domain ("red" -> .red, anything else -> .com)."""
+    return CIVITAI_BASE_RED if domain == "red" else CIVITAI_BASE_COM
 
 
 def sha256_file(path: str) -> str:
@@ -112,10 +120,15 @@ def merge_civitai(info: dict, civ) -> bool:
         info["trainedWords"] = sorted(word_map.values(), key=lambda w: -w["count"])
         changed = True
     if civ.get("modelId") or civ.get("id"):
-        link = f"https://civitai.com/models/{civ.get('modelId', '')}"
-        if civ.get("id"):
-            link += f"?modelVersionId={civ['id']}"
-        info["links"] = info.get("links", []) + [link]
+        # A model version exists on both mirrors with the same id/modelId
+        # (confirmed byte-identical by-hash responses), so one lookup yields a
+        # valid link for each domain. The panel shows both side by side.
+        tail = f"?modelVersionId={civ['id']}" if civ.get("id") else ""
+        link_tail = f"/models/{civ.get('modelId', '')}{tail}"
+        info["links"] = info.get("links", []) + [
+            f"{CIVITAI_BASE_COM}{link_tail}",
+            f"{CIVITAI_BASE_RED}{link_tail}",
+        ]
         changed = True
     if civ.get("images"):
         existing_urls = {im.get("url") for im in info.get("images", []) if isinstance(im, dict)}
@@ -216,12 +229,23 @@ async def lora_info(request):
 
     civitai = None if refresh else cached.get("civitai")
     civitai_error = None
-    if civitai is None:
-        url = CIVITAI_BY_HASH_URL.format(sha)
-        civitai = await asyncio.to_thread(fetch_civitai, url)
-        civitai_error = "model not found on civitai" if civitai is None else None
-        if civitai is not None:
-            civitai["_sha256"] = sha
+    # Memoize *negative* results too: a "not found" is a valid outcome, so once
+    # we've looked it up we must not re-hit the Civitai API on every (i) open.
+    already = (not refresh) and bool(cached.get("civitaiLooked"))
+    if civitai is None and not already:
+        # .com first, then the .red mirror — a model published only to one of
+        # them is still found (both expose the same by-hash API).
+        for url in (CIVITAI_BY_HASH_URL.format(sha), CIVITAI_BY_HASH_URL_RED.format(sha)):
+            civitai = await asyncio.to_thread(fetch_civitai, url)
+            if civitai is not None:
+                civitai["_sha256"] = sha
+                civitai["_domain"] = "red" if "civitai.red" in url else "com"
+                break
+        civitai_error = "model not found on civitai (.com and .red)" if civitai is None else None
+    elif civitai is None:
+        # Memoized negative result: reuse the stored error message so re-opens
+        # don't fall back to the generic "lookup unavailable".
+        civitai_error = cached.get("civitaiError")
 
     merge_civitai(info, civitai)
     info["civitaiFound"] = bool(civitai)
@@ -236,7 +260,9 @@ async def lora_info(request):
         info["trainedWords"] = sorted(info["trainedWords"], key=lambda w: -w.get("count", 0))
 
     # Rebuild the cache entry: fresh civitai response + merged display fields.
-    cache_write(sha, {**info, "civitai": civitai, "raw": {}})
+    # civitaiLooked flags that a by-hash lookup happened (found or not) so a
+    # negative result isn't re-fetched on the next open.
+    cache_write(sha, {**info, "civitai": civitai, "civitaiLooked": True, "raw": {}})
     return aiohttp.web.json_response({**info, "status": 200})
 
 

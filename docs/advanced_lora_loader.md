@@ -72,7 +72,7 @@ Each row represents one LoRA slot. Columns are:
 | **V×** | Video multiplier. Left/right arrows adjust by ±0.05, middle click opens an inline editor. Range: 0.0 to 2.0. |
 | **A×** | Audio multiplier. Same controls as V×. Range: 0.0 to 2.0. |
 | **V:N A:N** | Key count indicator (right side). Shows how many video and audio keys this LoRA contains. Updates automatically. |
-| **ⓘ** | Info button (row right edge, dimmed for empty slots). Drawn as a circle with an "i" (ASCII, no emoji). Opens the LoRA info panel: Civitai link (looked up by the file's SHA-256), trigger/trained words, and preview images. |
+| **ⓘ** | Info button (row right edge, dimmed for empty slots). Drawn as a circle with an "i" (ASCII, no emoji). Opens the LoRA info panel: both Civitai mirror links (`.com` + `.red`, looked up by the file's SHA-256), trigger/trained words, and preview images. |
 | **Trash** | Trash button (directly right of the info button, dimmed for empty slots). Drawn as an ASCII trash-can (no emoji). Clicking it sets this slot's LoRA back to **None** — the STR / V× / A× values are kept, exactly like picking "None" in the slot picker. Use it to unstack a LoRA without reopening the picker. (v0.4.29) |
 
 ### Buttons
@@ -98,11 +98,13 @@ If **A:0**, the LoRA was trained on silent data and audio mode won't have any ef
 
 Click the ⓘ glyph at the right edge of a slot's row (v0.4.28) to open an info panel for that LoRA. It shows:
 
-- **Civitai link** — the file's SHA-256 is looked up on Civitai's `model-versions/by-hash` API. The result is cached in `lorainfo/<sha256>.json` next to the nodepack, so subsequent opens are instant (the **Refresh** button forces a re-fetch).
+- **Civitai mirror links** — the file's SHA-256 is looked up on Civitai's `model-versions/by-hash` API and the panel shows **both** mirrors, `.com` (labeled `BLUE:` in blue) and `.red` (labeled `RED:` in red); the labels are plain text, only the URL is clickable (v0.4.35). The lookup runs on `.com` first and **falls back to the `.red` mirror** on a 404, so a working mirror still yields a link when the other is down. Results are cached in `lorainfo/<sha256>.json` next to the nodepack — **misses included**, so a LoRA with no Civitai page no longer re-hits the API on every open (the **Refresh** button forces a re-lookup via `refresh=true`).
 - **Trigger / trained words** — collected from the LoRA's safetensors `ss_tag_frequency` metadata and from Civitai when available. Click words to select them, then **Copy all** / **Copy selected** to put them on the clipboard for your prompt.
 - **Images** — Civitai preview images (first six), plus a local sidecar image (`.png` / `.jpg` / `.jpeg` / `.webp` with the same basename as the LoRA) if one sits next to the file.
 
-If the LoRA is not on Civitai, the panel says so and still shows the metadata-based words and any local image. No internet access is required for the metadata/local-image parts; only the Civitai lookup touches the network.
+The panel's **file name** and **sha256** sit on their own rows at the top (above the control buttons), so a long folder path can't stretch the button row (v0.4.35).
+
+If the LoRA is not on either Civitai mirror, the panel says so and still shows the metadata-based words and any local image. No internet access is required for the metadata/local-image parts; only the Civitai lookup touches the network.
 
 ---
 
@@ -153,6 +155,7 @@ STR: −0.5, V×: 1.0, A×: 0.0   (Reduce specific video features)
 - **Branch separation:** The node scans each LoRA's weights, filters by key name, and applies them separately.
 - **Strength multiplication:** Effective strengths are computed as `STR × multiplier`, allowing negative STR to invert effects.
 - **Safe fallback:** If a LoRA file is missing or corrupted, the node logs a warning and continues with the remaining LoRAs.
+- **Civitai mirror links + panel rework (v0.4.35):** the (i) panel now always shows both Civitai mirrors (`.com` labeled `BLUE:` in blue, `.red` labeled `RED:` in red, labels plain text outside the links); the backend by-hash lookup runs on `.com` first and falls back to the `.red` mirror on a 404, and results are memoized including misses (a missing LoRA no longer re-hits the Civitai API on every panel open — **Refresh** forces a re-lookup). The file name and sha256 moved to their own rows above the controls so long folder paths can't stretch the button row; the earlier `.com`/`.red` domain selector buttons were removed.
 - **Renamed (v0.4.27):** the loader was renamed from the LTX-2-only `DaSiWa LTX-2 Master Loader` to the universal **Advanced LoRA Loader**. The *serialized* node ID `DaSiWa_LTX2LoraLoader` is unchanged, so saved workflows load untouched; only the module, class, JS, docs, and display name changed internally.
 - **LoRA info button (v0.4.28):** the per-row ⓘ glyph opens a panel served by two new GET routes, `/dasiwa/ltx2/lorainfo` (sha256 of the file + safetensors header metadata + cached Civitai by-hash lookup) and `/dasiwa/ltx2/loraimg` (a sidecar image next to the LoRA file). Both live in `nodes/lora_info.py`; lookup results are cached as `lorainfo/<sha256>.json` next to the nodepack.
 - **PDD/ACC metadata (v0.4.27):** the LoRA file is now read with `return_metadata=True` and the metadata is forwarded to Core's `load_lora_for_models`, matching the native `LoraLoader`. This is what activates PDD / ACC LoRA head banks. Older ComfyUI builds that don't accept the metadata are still supported via a `TypeError` fallback.
