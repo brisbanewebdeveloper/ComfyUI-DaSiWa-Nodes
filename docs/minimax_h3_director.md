@@ -12,9 +12,20 @@ The Director's full change history now lives in the collection-wide [News & Chan
 
 - One node holds all your references, trims, ordering, endpoint frames, and prompts.
 - Five endpoint modes — T2VA, I2VA, L2VA, FL2VA (text/image endpoints, up to 2 frame slots) and REF2VA (multi-image/video/audio references) — plus **Image Inpaint** (exactly one image, single-frame output).
-- Two timeline lanes: Image/Video + Audio. Click a lane to select it; paste / drop media there.
+- Separate Image, Video, and Audio lanes. Click a lane to select it; paste / drop compatible media there.
 - Per-video stream switch: choose Video only, Audio only, or Video+embedded-audio with identical trim ranges.
 - Standalone audio clips can be trimmed with left/right handles just like video.
+- REF2VA shows a **REFMOD** button directly after **INPUT SCALING**. It opens a separate overlay without changing the Director node's size. The overlay loads saved standalone and v5 bundle references only when opened and explains every setting.
+
+## RefMods in REF2VA
+
+Place `.safetensors` RefMod files in `ComfyUI/models/refmods/` or any subfolder, for example `models/refmods/people/alice.safetensors`. The Director reads standalone image, video, and audio files plus upstream v5 bundle files directly, with no runtime dependency on another custom-node pack. You may optionally install [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod) to create RefMod files.
+
+**Credit:** The saved person RefMod concept, `.safetensors` latent file format, and strength scaling design are based on the upstream work in [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod). This standalone DaSiWa implementation reads and writes the same file format, so RefMods created with either pack are interchangeable. Both packs can be installed side-by-side without conflict — they register different node names and categories, and both use ComfyUI's shared `models/refmods/` folder type via `folder_paths`.
+
+Each selected row stores its editable description in the workflow. That workflow description takes precedence over the description embedded in the file. The overlay and prompt-builder **Insert RefMod #** buttons write the full expanded native text at the cursor, such as `<Video 1>: digital animation, slime girl`; `<RefMod N>` aliases remain supported in saved workflows and are translated when queued.
+
+Upstream v5 bundles are expanded into their image, video, and audio members. A single `<RefMod N>` tag resolves to every native reference label contained by that bundle, in member order. Strength uses direct latent scaling (`latent * strength`), not the upstream pack's blur-mix behavior; use full strength if low-strength scaling does not suit a particular file.
 - Video thumbnails: each uploaded video shows its first frame as a background preview behind the clip tile.
 - Simple / Structured prompt mode: toggle how builder fields assemble into the final prompt (persisted per workflow).
 - Frame rate: `frame_rate` input (0.1–240, default 24) sets the output FPS and is re-emitted as an output.
@@ -23,7 +34,7 @@ The Director's full change history now lives in the collection-wide [News & Chan
 - Mode-specific prompt builders:
   - FL2VA/I2VA/L2VA/T2VA: guided fields for description and audio sections with automatic alignment headers.
   - REF2VA: six free-text sections (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music) with helper buttons — Insert Shot, Prefill Labels & Summary, and Preview Prompt.
-- Only the selected model is loaded: `ref2va_model` for REF2VA, `fl2va_model` for all image-to-video modes (FL2VA family + Image Inpaint); the Guide node calls ComfyUI's built-in H3 nodes.
+- Only the selected model is loaded: `ref2va_model` for REF2VA, `fl2va_model` for all image-to-video modes (FL2VA family + Image Inpaint); the Guide node calls ComfyUI's built-in H3 nodes. REF2VA passes native inputs by name, preserving compatibility if Core reorders them (v0.4.36).
 
 ## Installation and graph setup
 
@@ -120,7 +131,7 @@ All guides in one plan must use the same canvas. `cache_key` is deliberately exp
 
 Important: the Guide node replaces and wraps ComfyUI's native `MiniMaxH3ImageToVideo` and `MiniMaxH3ReferenceToVideo` nodes. You do not add or wire those native nodes yourself — the Guide calls them internally based on the chosen mode.
 
-The Director has optional model sockets (`fl2va_model`, `ref2va_model`) for lazy loading: connect whichever model matches your active mode. The Guide refuses REF2VA without an audio VAE connected.
+The Director has optional model sockets (`fl2va_model`, `ref2va_model`) for lazy loading: connect whichever model matches your active mode. The Guide refuses REF2VA without an audio VAE and detects a swapped MiniMax H3 video/audio VAE before native execution (v0.4.37).
 
 The registered Director node ID is `DaSiWaMiniMaxH3Director`. Workflows opened in the ComfyUI frontend are automatically migrated from the former DaSiWa `MiniMaxH3Director` ID; API prompt JSON should use the new ID directly.
 
@@ -192,21 +203,22 @@ Open the node and read top-to-bottom.
   - Going to REF2VA restores all previously added media.
   - Going to Image Inpaint requires exactly one image; video/audio are blocked and the audio lane is disabled.
 - **Prompt Mode toggle:** a **Simple** / **Structured** pair next to the mode buttons switches how builder fields assemble into the final prompt (Structured keeps the labelled sections, Simple renders one flat block). The selection is persisted and restored on load.
+- **Load / Save:** save Reference Files, Prompts, or All as a pack; load the same scope by append or overwrite. Loading validates target-mode limits and missing files before changing the timeline, and restores the saved model mode.
 - **Clear button:** always visible; removes all media and prompts from the timeline. With no content it is dimmed and reports "Nothing to clear." instead of clearing.
 - **Remove button:** appears when a clip is selected; deletes that item.
 - **? button:** opens the online documentation on GitHub.
 
 ### Timeline area
 
-The main workspace has two horizontal lanes stacked vertically.
+The main workspace has separate Image, Video, and Audio lanes stacked vertically.
 
 #### Lane selection
 
 - Click anywhere on a lane to select it. The selected lane gets a highlight and displays "· selected".
 - Selection determines where pasted media goes:
-  - Select **Image/Video** lane, then Ctrl+V or drop files → images/videos land here.
-  - Select **Audio** lane, then Ctrl+V or drop files → audio lands here.
-- FL2VA disables the Audio lane entirely.
+  - Select **Image**, **Video**, or **Audio**, then Ctrl+V or drop a compatible file into that lane.
+  - In REF2VA, a video set to **A** occupies the Audio lane; **V+A** presents linked video and audio references while retaining their shared trim.
+- FL2VA disables the Video and Audio lanes entirely.
 
 #### Adding media
 

@@ -16,34 +16,21 @@ ComfyUI/models/llm/
 
 For the `transformers` backend, the folder must include `config.json`, tokenizer files, processor files for vision models, and `.safetensors` weights. A single `.safetensors` file is not enough for LLM chat inference.
 
-For the `llama_cpp` backend, select a local `.gguf` file. This requires a CUDA-enabled `llama-cpp-python` installation in the ComfyUI Python environment; it is intentionally optional so a generic dependency install does not replace a GPU build with a CPU-only wheel. Install it with `CMAKE_ARGS="-DGGML_CUDA=on" /path/to/ComfyUI/venv/bin/pip install --force-reinstall --no-cache-dir llama-cpp-python`. The `ollama` backend instead sends requests to the configured Ollama server and uses `ollama_model` as its model name. Loopback URLs work by default. Set `allow_remote_ollama` only when intentionally sending prompts to a trusted non-loopback server.
+For the `llama_cpp` backend, select a local `.gguf` file. This requires a CUDA-enabled `llama-cpp-python` installation in the ComfyUI Python environment; it is intentionally optional so a generic dependency install does not replace a GPU build with a CPU-only wheel. Install it with `CMAKE_ARGS="-DGGML_CUDA=on" /path/to/ComfyUI/venv/bin/pip install --force-reinstall --no-cache-dir llama-cpp-python`. The `ollama` backend sends requests only to the local Ollama API at `http://127.0.0.1:11434/api/chat` and uses `ollama_model` as its model name.
 
-You can also enter a Hugging Face repo id in `hf_repo_id`, such as:
-
-```text
-Qwen/Qwen2.5-VL-7B-Instruct
-```
-
-When `download_if_missing` is enabled, the node downloads the repo snapshot into `ComfyUI/models/llm` and reuses that local folder on later runs. The local folder name uses `owner--repo`, plus the revision when it is not `main`.
-
-For gated or private repos, set `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` in the ComfyUI environment. The node does not expose a token widget, so secrets are not stored in workflow JSON.
+Models must already be present on disk before the node runs. Download Hugging Face models with the official tooling, review their provenance, and place the complete folder in `ComfyUI/models/llm`, or set `custom_path` to an existing local folder. Runtime downloads, Hugging Face token reads, and custom remote model code are deliberately unsupported: values supplied through ComfyUI's `/prompt` API must never choose code for the server to download or execute.
 
 Important controls:
 
 - `task`: use `auto` for most workflows. Connect images to use a vision-language model.
-- `hf_repo_id`: optional Hugging Face repo id. Overrides the model dropdown when set.
-- `hf_revision`: branch, tag, or commit, defaulting to `main`.
-- `download_if_missing`: fetch the repo into `models/llm` when it is not already available locally.
 - `device`: `auto`, `cuda`, or `cpu`.
 - `dtype`: `auto`, `float16`, `bfloat16`, or `float32`.
 - `quantization`: optional Transformers model-weight `8bit` or `4bit`, requiring `bitsandbytes`.
 - `kv_cache_implementation`: Transformers generation cache strategy. `quantized` reduces long-generation VRAM use; use only with a compatible Transformers cache backend.
 - `kv_cache_quant_backend`, `kv_cache_nbits`, and `kv_cache_residual_length`: controls used only for a quantized Transformers KV cache.
 - `cache_mode`: `cached` keeps the DaSiWa backend loaded. `unload_after_run` unloads DaSiWa models, requests ComfyUI to unload its managed models, garbage-collects Python objects, and clears the device allocator after each response. For Ollama it additionally sends `keep_alive: 0` so the separate Ollama server releases its model.
-- `trust_remote_code`: enable only for models that require trusted custom model code.
 - `llama_n_ctx`, `llama_n_gpu_layers`, `llama_n_threads`, and `llama_chat_format`: llama.cpp GGUF controls. `-1` GPU layers requests full offload; `0` uses CPU only.
-- `ollama_model`, `ollama_url`, and `ollama_timeout`: Ollama API controls.
-- `allow_remote_ollama`: permits prompt requests to a non-loopback Ollama host. It is off by default; URLs containing credentials, query strings, or fragments are rejected.
+- `ollama_model` and `ollama_timeout`: local Ollama API controls. The endpoint is fixed to loopback.
 
 ### DaSiWa LLM Analyze
 

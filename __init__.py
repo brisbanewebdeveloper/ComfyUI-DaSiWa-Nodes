@@ -23,6 +23,8 @@ if __package__:
     )
     from .nodes import nodes_system_monitor
     from .nodes import input_images  # registers /dasiwa/input-images route
+    from .nodes import refmod_library
+    refmod_library.register_routes(__import__("server").PromptServer.instance)
     from .nodes import lora_info  # registers /dasiwa/ltx2/lorainfo + /dasiwa/ltx2/loraimg
     from .nodes.helper_logging import log_startup_summary
 

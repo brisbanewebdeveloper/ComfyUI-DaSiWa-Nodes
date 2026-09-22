@@ -1,13 +1,8 @@
 import asyncio
 import datetime
-import json
+import hashlib
 import os
 import re
-import shutil
-import subprocess
-import tempfile
-import threading
-import time
 
 import torch
 from PIL import Image
@@ -21,8 +16,10 @@ except ImportError:
     PromptServer = None
 try:
     from .helper_logging import log_dasiwa
+    from . import helper_pyav_video
 except ImportError:
     from helper_logging import log_dasiwa
+    import helper_pyav_video
 
 
 _CODEC_OPTIONS = ["Auto", "AV1", "VP9", "H.265 (HEVC)", "H.264"]
@@ -51,23 +48,11 @@ def _log(message):
     log_dasiwa("Enhanced Video Combine", message)
 
 
-def find_ffmpeg():
-    path_ffmpeg = shutil.which("ffmpeg")
-    if path_ffmpeg:
-        return path_ffmpeg
-    try:
-        import imageio_ffmpeg
-
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        return None
-
-
 def _preview_source_path(filename, subfolder, output_type):
-    """Resolve a ComfyUI asset without allowing traversal outside its asset root."""
-    if not filename or filename != os.path.basename(filename) or ".." in subfolder:
+    """Resolve an output asset without allowing traversal or alternate roots."""
+    if output_type != "output" or not filename or filename != os.path.basename(filename) or ".." in subfolder:
         return None
-    output_dir = folder_paths.get_directory_by_type(output_type)
+    output_dir = folder_paths.get_directory_by_type("output")
     if not output_dir:
         return None
     root = os.path.abspath(output_dir)
@@ -75,6 +60,14 @@ def _preview_source_path(filename, subfolder, output_type):
     if os.path.commonpath((candidate, root)) != root or not os.path.isfile(candidate):
         return None
     return candidate
+
+
+def _preview_cache_path(source):
+    stat = os.stat(source)
+    identity = f"{os.path.realpath(source)}:{stat.st_size}:{stat.st_mtime_ns}".encode()
+    cache_dir = os.path.join(folder_paths.get_temp_directory(), "dasiwa-video-previews")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, hashlib.sha256(identity).hexdigest() + ".mp4")
 
 
 if PromptServer is not None:
@@ -86,30 +79,18 @@ if PromptServer is not None:
             request.rel_url.query.get("subfolder", ""),
             request.rel_url.query.get("type", "output"),
         )
-        ffmpeg = find_ffmpeg()
         if source is None:
             return web.Response(status=404)
-        if ffmpeg is None:
-            return web.Response(status=503, text="FFmpeg is unavailable")
-        process = await asyncio.create_subprocess_exec(
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-i", source,
-            "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264",
-            "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            "-f", "mp4", "pipe:1", stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        response = web.StreamResponse(headers={"Content-Type": "video/mp4", "Cache-Control": "no-store"})
-        await response.prepare(request)
         try:
-            while chunk := await process.stdout.read(256 * 1024):
-                await response.write(chunk)
-        except (ConnectionResetError, asyncio.CancelledError):
-            if process.returncode is None:
-                process.kill()
-        finally:
-            await process.wait()
-        return response
+            preview_path = _preview_cache_path(source)
+            if not os.path.isfile(preview_path):
+                await asyncio.to_thread(helper_pyav_video.transcode_preview, source, preview_path)
+        except Exception as error:
+            return web.Response(status=503, text=f"Preview transcode failed: {error}")
+        return web.FileResponse(
+            preview_path,
+            headers={"Content-Type": "video/mp4", "Cache-Control": "private, max-age=3600"},
+        )
 
 
 def detect_bit_depth(images):
@@ -168,30 +149,18 @@ def _animated_image_encoder_candidates(container):
     return (settings[1],) if settings else ()
 
 
-def _available_encoders(ffmpeg):
-    result = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=15)
-    if result.returncode != 0:
-        return set()
-    return {line.split()[1] for line in result.stdout.splitlines() if line.startswith(" V")}
+def _available_encoders(_backend=None):
+    return helper_pyav_video.available_encoders()
 
 
-def _encoder_arguments(codec, encoder, bit_depth, cq, crf):
-    pixel_format = "yuv420p10le" if bit_depth == 10 else "yuv420p"
-    if encoder.endswith("_nvenc"):
-        return ["-c:v", encoder, "-preset", "p5", "-cq", str(cq), "-pix_fmt", pixel_format]
-    if encoder.endswith("_qsv"):
-        return ["-c:v", encoder, "-global_quality", str(cq), "-pix_fmt", pixel_format]
-    if encoder.endswith("_amf"):
-        return ["-c:v", encoder, "-quality", "quality", "-qp_i", str(cq), "-qp_p", str(cq), "-pix_fmt", pixel_format]
-    if encoder.endswith("_vaapi"):
-        return ["-c:v", encoder, "-qp", str(cq), "-pix_fmt", pixel_format]
-    if codec in {"H.264", "H.265 (HEVC)"}:
-        return ["-c:v", encoder, "-crf", str(crf), "-preset", "medium", "-pix_fmt", pixel_format]
-    if encoder == "libsvtav1":
-        return ["-c:v", encoder, "-crf", str(crf), "-preset", "6", "-pix_fmt", pixel_format]
-    if codec == "AV1":
-        return ["-c:v", encoder, "-crf", str(crf), "-b:v", "0", "-cpu-used", "6", "-pix_fmt", pixel_format]
-    return ["-c:v", encoder, "-crf", str(crf), "-b:v", "0", "-deadline", "good", "-pix_fmt", pixel_format]
+def _frame_arrays(images, bit_depth, pingpong):
+    frames = _pingpong_frames(images, pingpong)
+    for image in frames:
+        pixels = image[..., :3].detach().to(device="cpu", dtype=torch.float32).clamp(0, 1)
+        if bit_depth == 10:
+            yield torch.round(pixels * 1023).to(torch.int32).mul_(64).to(torch.uint16).numpy()
+        else:
+            yield torch.round(pixels * 255).to(torch.uint8).numpy()
 
 
 def _frame_bytes(images, bit_depth):
@@ -247,8 +216,8 @@ def _pingpong_frames(images, pingpong):
     return torch.cat((images, images[1:-1].flip(0)), dim=0)
 
 
-def _format_filename_prefix(filename_prefix):
-    """Expand ComfyUI-style date placeholders before requesting an output path."""
+def _format_filename_prefix(filename_prefix, seed=None):
+    """Expand supported output-name placeholders without changing unknown tokens."""
     now = datetime.datetime.now()
 
     def replace_date(match):
@@ -259,7 +228,8 @@ def _format_filename_prefix(filename_prefix):
         fmt = fmt.replace("mm", "%M").replace("ss", "%S")
         return now.strftime(fmt)
 
-    return re.sub(r"%date(?::([^%]+))?%", replace_date, filename_prefix)
+    formatted = re.sub(r"%date(?::([^%]+))?%", replace_date, filename_prefix)
+    return formatted.replace("%seed%", str(int(seed))) if seed is not None else formatted
 
 
 def _output_filename(filename, counter, extension, has_audio):
@@ -272,26 +242,12 @@ def _output_filename(filename, counter, extension, has_audio):
 
 
 def _metadata_file(prompt, extra_pnginfo):
-    if prompt is None and not extra_pnginfo:
-        return None
-
     metadata = {}
     if prompt is not None:
         metadata["prompt"] = prompt
     if extra_pnginfo:
         metadata.update(extra_pnginfo)
-
-    handle = tempfile.NamedTemporaryFile(mode="w", suffix=".ffmeta", delete=False, encoding="utf-8")
-    try:
-        handle.write(";FFMETADATA1\n")
-        for key, value in metadata.items():
-            escaped = json.dumps(value, separators=(",", ":"))
-            escaped = escaped.replace("\\", "\\\\").replace(";", "\\;")
-            escaped = escaped.replace("#", "\\#").replace("=", "\\=").replace("\n", "\\\n")
-            handle.write(f"{key}={escaped}\n")
-    finally:
-        handle.close()
-    return handle.name
+    return metadata or None
 
 
 def _audio_file(audio):
@@ -315,13 +271,8 @@ def _audio_file(audio):
     if sample_rate <= 0 or waveform.shape[-1] == 0:
         raise ValueError("audio must have a positive sample rate and at least one sample.")
     channels = waveform.shape[1]
-    interleaved = waveform.transpose(1, 2).reshape(-1, channels).clamp_(-1, 1).numpy()
-    handle = tempfile.NamedTemporaryFile(suffix=".f32le", delete=False)
-    try:
-        handle.write(interleaved.tobytes())
-    finally:
-        handle.close()
-    return (handle.name, sample_rate, channels), len(interleaved) / sample_rate
+    planar = waveform.permute(1, 0, 2).reshape(channels, -1).contiguous().clamp_(-1, 1).numpy()
+    return (planar, sample_rate), planar.shape[1] / sample_rate
 
 
 def _audio_encoder(audio_codec, container):
@@ -342,139 +293,54 @@ def _audio_encoder_candidates(audio_codec, container):
     return tuple(dict.fromkeys((requested, *fallback)))
 
 
-def _run_ffmpeg(command, frame_chunks, progress_callback=None):
-    """Run FFmpeg and translate its throttled progress stream into frame progress."""
-    if isinstance(frame_chunks, bytes):
-        if progress_callback is None:
-            return subprocess.run(command, input=frame_chunks, capture_output=True, timeout=3600)
-        frame_chunks = lambda: (frame_chunks,)
-    if progress_callback is None:
-        progress_callback = lambda _encoded_seconds: None
-
-    process = subprocess.Popen(
-        [*command[:-1], "-progress", "pipe:2", "-nostats", command[-1]],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    stderr_tail = bytearray()
-    last_report = 0.0
-
-    def read_stderr():
-        nonlocal last_report
-        for raw_line in iter(process.stderr.readline, b""):
-            stderr_tail.extend(raw_line)
-            if len(stderr_tail) > _MAX_FFMPEG_STDERR_BYTES:
-                del stderr_tail[:-_MAX_FFMPEG_STDERR_BYTES]
-            try:
-                key, value = raw_line.decode(errors="replace").strip().split("=", 1)
-                if key == "out_time_us":
-                    now = time.monotonic()
-                    if now - last_report >= 0.5:
-                        progress_callback(int(value) / 1_000_000)
-                        last_report = now
-            except ValueError:
-                pass
-
-    stderr_thread = threading.Thread(target=read_stderr, name="dasiwa-ffmpeg-progress", daemon=True)
-    stderr_thread.start()
-    stdin = process.stdin
-    if stdin is None:
-        process.kill()
-        process.wait()
-        stderr_thread.join()
-        raise RuntimeError("Could not open FFmpeg stdin.")
-    try:
-        for chunk in frame_chunks():
-            stdin.write(chunk)
-        stdin.close()
-        returncode = process.wait(timeout=3600)
-    except BrokenPipeError:
-        try:
-            stdin.close()
-        except BrokenPipeError:
-            pass
-        returncode = process.wait(timeout=3600)
-    except BaseException:
-        process.kill()
-        process.wait()
-        raise
-    finally:
-        stderr_thread.join()
-    return subprocess.CompletedProcess(command, returncode, stderr=bytes(stderr_tail))
-
-
 def _encode_with_available_encoder(
-    ffmpeg, codec, bit_depth, width, height, frame_rate, frame_chunks, output_path,
-    container, cq, crf, metadata_path, audio_path=None, audio_duration=None, crop_to_audio=False,
+    _backend, codec, bit_depth, width, height, frame_rate, frames, output_path,
+    container, cq, crf, metadata, audio=None, audio_duration=None, crop_to_audio=False,
     audio_codec="Auto", audio_bitrate="192k", progress_callback=None,
 ):
-    available = _available_encoders(ffmpeg)
+    available = _available_encoders()
     attempts = []
     for encoder in _ENCODER_NAMES[codec]:
         if encoder not in available:
             continue
-        audio_encoders = _audio_encoder_candidates(audio_codec, container) if audio_path else (None,)
+        audio_encoders = _audio_encoder_candidates(audio_codec, container) if audio else (None,)
         for selected_audio_encoder in audio_encoders:
-            command = [ffmpeg, "-y", "-v", "error"]
-            if metadata_path:
-                command.extend(["-f", "ffmetadata", "-i", metadata_path])
-            command.extend([
-                "-f", "rawvideo", "-pix_fmt", "rgb48le" if bit_depth == 10 else "rgb24",
-                "-s", f"{width}x{height}", "-framerate", str(frame_rate), "-i", "-",
-            ])
-            video_input_index = 1 if metadata_path else 0
-            if audio_path:
-                command.extend(["-f", "f32le", "-ar", str(audio_path[1]), "-ac", str(audio_path[2]), "-i", audio_path[0]])
-            if metadata_path:
-                command.extend(["-map", f"{video_input_index}:v:0", "-map_metadata", "0"])
-            elif audio_path:
-                command.extend(["-map", f"{video_input_index}:v:0"])
-            if audio_path:
-                command.extend(["-map", f"{video_input_index + 1}:a:0", "-c:a", selected_audio_encoder, "-b:a", audio_bitrate])
-            command.extend(_encoder_arguments(codec, encoder, bit_depth, cq, crf))
-            if crop_to_audio and audio_duration is not None:
-                command.extend(["-t", f"{audio_duration:.9f}"])
-            if container == "MP4":
-                command.extend(["-movflags", "+use_metadata_tags"])
-            result = _run_ffmpeg(command + [output_path], frame_chunks, progress_callback)
-            if result.returncode == 0:
+            if selected_audio_encoder and selected_audio_encoder not in available:
+                continue
+            try:
+                helper_pyav_video.encode_attempt(
+                    output_path, container, encoder, width, height, frame_rate, bit_depth, cq,
+                    frames, metadata, audio, selected_audio_encoder, audio_bitrate,
+                    crop_to_audio, progress_callback,
+                )
                 if selected_audio_encoder and selected_audio_encoder != _audio_encoder(audio_codec, container):
                     _log(f"Audio fallback: {selected_audio_encoder}.")
                 audio_details = f"; audio={selected_audio_encoder}/{audio_bitrate}" if selected_audio_encoder else ""
                 _log(f"Encoded {codec}/{container} via {encoder}{audio_details} -> {os.path.basename(output_path)}.")
                 return encoder
-            error_lines = result.stderr.decode(errors="replace").splitlines()
-            error = error_lines[0][:180] if error_lines else "unknown FFmpeg error"
-            attempts.append(f"{encoder}/{selected_audio_encoder or 'no-audio'}: {error}")
+            except Exception as error:
+                attempts.append(f"{encoder}/{selected_audio_encoder or 'no-audio'}: {str(error)[:180]}")
     raise RuntimeError("No usable encoder was found. " + " | ".join(attempts))
 
 
-def _encode_animated_image(ffmpeg, container, bit_depth, width, height, frame_rate, frame_chunks, output_path, quality, progress_callback=None):
-    available = _available_encoders(ffmpeg)
+def _encode_animated_image(_backend, container, bit_depth, width, height, frame_rate, frames, output_path, quality, progress_callback=None):
+    available = _available_encoders()
     attempts = []
     for encoder in _animated_image_encoder_candidates(container):
         if encoder not in available:
             continue
-        command = [
-            ffmpeg, "-y", "-v", "error", "-f", "rawvideo",
-            "-pix_fmt", "rgb48le" if bit_depth == 10 else "rgb24",
-            "-s", f"{width}x{height}", "-framerate", str(frame_rate), "-i", "-",
-        ]
-        if container == "Animated WebP":
-            command.extend(["-c:v", encoder, "-loop", "0", "-q:v", str(quality)])
-        else:
-            command.extend(_encoder_arguments("AV1", encoder, bit_depth, quality, quality))
-            command.extend(["-still-picture", "0", "-f", "avif"])
-        result = _run_ffmpeg(command + [output_path], frame_chunks, progress_callback)
-        if result.returncode == 0:
+        try:
+            helper_pyav_video.encode_attempt(
+                output_path, container, encoder, width, height, frame_rate,
+                8 if container == "Animated WebP" else bit_depth, quality,
+                frames, progress_callback=progress_callback,
+            )
             _log(f"Encoded {container} via {encoder} -> {os.path.basename(output_path)}.")
             return encoder
-        error_lines = result.stderr.decode(errors="replace").splitlines()
-        error = error_lines[0][:180] if error_lines else "unknown FFmpeg error"
-        attempts.append(f"{encoder}: {error}")
+        except Exception as error:
+            attempts.append(f"{encoder}: {str(error)[:180]}")
     if not attempts:
-        raise RuntimeError(f"FFmpeg does not provide a usable encoder for {container}.")
+        raise RuntimeError(f"PyAV does not provide a usable encoder for {container}.")
     raise RuntimeError(f"{container} encode failed. " + " | ".join(attempts))
 
 
@@ -497,7 +363,7 @@ class DaSiWa_EnhancedVideoCombine:
                 "log_level": (["Standard", "Verbose"], {"default": "Standard", "description": "Legacy workflow compatibility; logging is always concise."}),
                 "pingpong": ("BOOLEAN", {"default": False, "description": "Append the interior frames in reverse order for seamless forward/reverse playback."}),
                 "save_metadata": ("BOOLEAN", {"default": True, "description": "Embed ComfyUI prompt and workflow metadata for workflow-aware video loaders."}),
-                "filename_prefix": ("STRING", {"default": "video_%date:hhmmss%", "description": "Output path/name prefix. Supports %date% and formatted dates such as video/%date:yyyy-MM-dd%/%date:hhmmss%."}),
+                "filename_prefix": ("STRING", {"default": "video_%date:hhmmss%", "description": "Output path/name prefix. Supports %seed%, %date%, and formatted dates such as video/%date:yyyy-MM-dd%/%date:hhmmss%. Connect the optional seed input to expand %seed%."}),
                 "save_output": ("BOOLEAN", {"default": True}),
                 "pass_frames": ("BOOLEAN", {"default": False, "description": "Return the encoded frame sequence for downstream processing."}),
                 "crop_to_audio": ("BOOLEAN", {"default": False, "description": "When audio is connected, end the output video at the audio duration."}),
@@ -508,6 +374,7 @@ class DaSiWa_EnhancedVideoCombine:
             },
             "optional": {
                 "audio": ("AUDIO", {"description": "Optional ComfyUI audio to mux into the encoded video."}),
+                "seed": ("INT", {"forceInput": True, "description": "Optional generation seed used to expand %seed% in filename_prefix."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -533,8 +400,8 @@ class DaSiWa_EnhancedVideoCombine:
     def combine(
         self, images, frame_rate, codec, container, bit_depth, quality, pingpong,
         save_metadata, filename_prefix, save_output, pass_frames, crop_to_audio=False, audio_codec="Auto",
-        audio_bitrate="192k", log_level="Standard", save_first_frame=False, save_last_frame=False, audio=None, prompt=None,
-        extra_pnginfo=None,
+        audio_bitrate="192k", log_level="Standard", save_first_frame=False, save_last_frame=False, audio=None, seed=None,
+        prompt=None, extra_pnginfo=None,
     ):
         if images.ndim != 4 or images.shape[-1] < 3:
             raise ValueError("images must be an IMAGE batch shaped [frames, height, width, channels] with RGB channels.")
@@ -556,32 +423,32 @@ class DaSiWa_EnhancedVideoCombine:
         output_dir = folder_paths.get_output_directory() if save_output else folder_paths.get_temp_directory()
         output_type = "output" if save_output else "temp"
         height, width = images.shape[1:3]
-        filename_prefix = _format_filename_prefix(filename_prefix)
+        filename_prefix = _format_filename_prefix(filename_prefix, seed=seed)
         output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(filename_prefix, output_dir, width, height)
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            raise RuntimeError("No FFmpeg executable was found. Install FFmpeg or imageio-ffmpeg for the mandatory H.264/MP4 fallback.")
-
-        metadata_path = _metadata_file(prompt, extra_pnginfo) if save_metadata else None
-        audio_path, audio_duration = _audio_file(audio)
-        frame_chunks = lambda: _iter_frame_byte_chunks(images, selected_bit_depth, pingpong)
+        metadata = _metadata_file(prompt, extra_pnginfo) if save_metadata else None
+        audio_data, audio_duration = _audio_file(audio)
+        frames = lambda: _frame_arrays(images, selected_bit_depth, pingpong)
         attempts = []
         _log(
             f"Encode {_encoded_frame_count(images, pingpong)}f {width}x{height}@{frame_rate:g}fps {selected_bit_depth}-bit; "
-            f"codec={codec}, container={container}, audio={'yes' if audio_path else 'no'}."
+            f"codec={codec}, container={container}, audio={'yes' if audio_data else 'no'}."
         )
         try:
             animated_settings = _animated_image_settings(container)
             if animated_settings:
-                if audio_path:
+                if audio_data:
                     _log(f"{container} does not support audio; connected audio is omitted.")
                 output_path = os.path.join(output_folder, _output_filename(filename, counter, animated_settings[0], False))
                 encoder = _encode_animated_image(
-                    ffmpeg, container, selected_bit_depth, width, height, frame_rate, frame_chunks, output_path, quality,
+                    None, container, selected_bit_depth, width, height, frame_rate,
+                    lambda: _frame_arrays(images, 8 if container == "Animated WebP" else selected_bit_depth, pingpong),
+                    output_path, quality,
                     report_encode_progress,
                 )
                 selected_container = container
                 selected_codec = container
+                if container == "Animated WebP":
+                    selected_bit_depth = 8
             else:
                 for selected_codec in _codec_candidates(codec):
                     container_candidates = _auto_container_candidates(selected_codec, container) if codec == "Auto" else _container_candidates(selected_codec, container)
@@ -590,12 +457,12 @@ class DaSiWa_EnhancedVideoCombine:
                             _log(f"Auto test: {selected_codec}/{selected_container}.")
                         output_path = os.path.join(
                             output_folder,
-                            _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container], audio_path is not None),
+                            _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container], audio_data is not None),
                         )
                         try:
                             encoder = _encode_with_available_encoder(
-                                ffmpeg, selected_codec, selected_bit_depth, width, height, frame_rate, frame_chunks,
-                                output_path, selected_container, quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
+                                None, selected_codec, selected_bit_depth, width, height, frame_rate, frames,
+                                output_path, selected_container, quality, quality, metadata, audio_data, audio_duration, crop_to_audio,
                                 audio_codec, audio_bitrate, report_encode_progress,
                             )
                             break
@@ -607,20 +474,17 @@ class DaSiWa_EnhancedVideoCombine:
                         continue
                     break
                 else:
-                    fallback_path = os.path.join(output_folder, _output_filename(filename, counter, ".mp4", audio_path is not None))
+                    fallback_path = os.path.join(output_folder, _output_filename(filename, counter, ".mp4", audio_data is not None))
                     encoder = _encode_with_available_encoder(
-                        ffmpeg, "H.264", selected_bit_depth, width, height, frame_rate, frame_chunks,
-                        fallback_path, "MP4", quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
+                        None, "H.264", selected_bit_depth, width, height, frame_rate, frames,
+                        fallback_path, "MP4", quality, quality, metadata, audio_data, audio_duration, crop_to_audio,
                         audio_codec, audio_bitrate, report_encode_progress,
                     )
                     output_path = fallback_path
                     selected_container = "MP4"
                     selected_codec = "H.264"
         finally:
-            if metadata_path:
-                os.unlink(metadata_path)
-            if audio_path:
-                os.unlink(audio_path[0])
+            pass
 
         output_frames = _pingpong_frames(images, pingpong) if pass_frames else images[:0]
         if progress_bar is not None:
@@ -629,12 +493,14 @@ class DaSiWa_EnhancedVideoCombine:
         animated_settings = _animated_image_settings(selected_container)
         mime_types = {"WebM": "video/webm", "MKV": "video/x-matroska", "MP4": "video/mp4", **{name: settings[2] for name, settings in _ANIMATED_IMAGE_SETTINGS.items()}}
         output_mime_type = mime_types[selected_container]
-        assets = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "width": width, "height": height, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container}]
-        assets.extend(
+        main_asset = {"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "width": width, "height": height, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container}
+        frame_assets = [
             {"filename": os.path.basename(path), "subfolder": subfolder, "type": output_type, "format": "image/png", "width": width, "height": height}
             for path in frame_exports
-        )
-        ui = {"images": assets}
+        ]
+        # Real video containers (WebM/MKV/MP4) aren't PIL-openable images: only animated
+        # image formats (GIF/WebP/AVIF) belong in "images", or /view 500s trying to decode them.
+        ui = {"images": ([main_asset] if animated_settings else []) + frame_assets}
         if not animated_settings:
             ui["gifs"] = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container, "width": width, "height": height, "fps": frame_rate}]
         _log(f"Output: {output_path} ({selected_codec}, {encoder}, {selected_bit_depth}-bit).")

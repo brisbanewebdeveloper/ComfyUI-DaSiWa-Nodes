@@ -5,21 +5,26 @@ const EVENT_NAME = "dasiwa.system_monitor";
 const ROOT_ID = "dasiwa-system-monitor";
 const PANEL_ID = "dasiwa-system-monitor-panel";
 const SETTINGS_KEY = "dasiwa.system_monitor.settings";
+const MONITOR_ENABLED_SETTING = "DaSiWa.SystemMonitor.Enabled";
+const MONITOR_ENABLED_ENDPOINT = "/dasiwa/system-monitor/enabled";
 const HISTORY_LENGTH = 60;
 const DEFAULT_SETTINGS = {
-    enabled: true, mode: "lite", placement: "top", dockSide: "top", orientation: "horizontal",
+    mode: "lite", placement: "top", dockSide: "top", orientation: "horizontal",
     widgets: {}, toolbarIndex: null, x: 24, y: 60,
 };
 
 let settings = loadSettings();
 let latestSnapshot = null;
 let history = [];
+let monitorRoot = null;
+let monitorEventListener = null;
+let monitorResizeObserver = null;
+let monitorToolbarObserver = null;
 
 function loadSettings() {
     try {
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
         return {
-            enabled: saved?.enabled !== false,
             mode: saved?.mode === "full" ? "full" : "lite",
             placement: saved?.placement === "floating" ? "floating" : "top",
             dockSide: ["top", "left", "right"].includes(saved?.dockSide) ? saved.dockSide : "top",
@@ -294,8 +299,6 @@ function positionFullPanel(panel) {
 function render(snapshot = latestSnapshot) {
     const panel = document.getElementById(PANEL_ID);
     if (!panel || !snapshot) return;
-    panel.hidden = !settings.enabled;
-    if (!settings.enabled) return;
     if (settings.mode === "full") renderFull(panel, snapshot);
     else renderLite(panel, snapshot);
 }
@@ -314,6 +317,47 @@ function closeMenu() {
     document.getElementById("dasiwa-monitor-settings-menu")?.remove();
 }
 
+function isMonitorEnabled() {
+    return app.ui.settings.getSettingValue(MONITOR_ENABLED_SETTING) !== false;
+}
+
+async function syncMonitorEnabled(enabled) {
+    try {
+        await api.fetchApi(MONITOR_ENABLED_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        });
+    } catch (error) {
+        console.warn("DaSiWa System Monitor", error);
+    }
+}
+
+function unmountMonitor() {
+    closeMenu();
+    if (monitorEventListener) api.removeEventListener(EVENT_NAME, monitorEventListener);
+    monitorEventListener = null;
+    monitorResizeObserver?.disconnect();
+    monitorResizeObserver = null;
+    monitorToolbarObserver?.disconnect();
+    monitorToolbarObserver = null;
+    monitorRoot?.remove();
+    monitorRoot = null;
+    ["dasiwa-monitor-dock-left", "dasiwa-monitor-dock-right", "dasiwa-monitor-dock-target-top", "dasiwa-monitor-dock-target-left", "dasiwa-monitor-dock-target-right"].forEach((id) => document.getElementById(id)?.remove());
+    latestSnapshot = null;
+    history = [];
+}
+
+async function setMonitorEnabled(enabled) {
+    if (enabled) {
+        await syncMonitorEnabled(true);
+        await mountMonitor();
+    } else {
+        unmountMonitor();
+        await syncMonitorEnabled(false);
+    }
+}
+
 function openMenu(button) {
     const existing = document.getElementById("dasiwa-monitor-settings-menu");
     if (existing) {
@@ -328,7 +372,6 @@ function openMenu(button) {
     menu.id = "dasiwa-monitor-settings-menu";
     menu.setAttribute("role", "menu");
     menu.innerHTML = `
-        <label><input type="checkbox" ${settings.enabled ? "checked" : ""}> Show system monitor</label>
         <div class="dasiwa-monitor-menu-label">Display mode</div>
         <label><input type="radio" name="dasiwa-monitor-mode" value="lite" ${settings.mode === "lite" ? "checked" : ""}> Lite <small>toolbar meters</small></label>
         <label><input type="radio" name="dasiwa-monitor-mode" value="full" ${settings.mode === "full" ? "checked" : ""}> Full <small>all metrics + 60s graphs</small></label>
@@ -340,14 +383,8 @@ function openMenu(button) {
         <div class="dasiwa-monitor-menu-label">Widgets</div>
         <div class="dasiwa-monitor-widgets-list">${widgetControls}</div>`;
     button.after(menu);
-    menu.querySelector('input[type="checkbox"]').addEventListener("change", (event) => {
-        settings.enabled = event.target.checked;
-        saveSettings();
-        render();
-    });
     menu.querySelectorAll('input[name="dasiwa-monitor-mode"]').forEach((input) => input.addEventListener("change", (event) => {
         settings.mode = event.target.value;
-        settings.enabled = true;
         saveSettings();
         render();
         closeMenu();
@@ -371,7 +408,9 @@ function openMenu(button) {
 }
 
 function addStyles() {
+    if (document.getElementById("dasiwa-system-monitor-styles")) return;
     const style = document.createElement("style");
+    style.id = "dasiwa-system-monitor-styles";
     style.textContent = `
         #${ROOT_ID} { position: relative; display: flex; align-items: flex-start; gap: 3px; min-width: 0; margin-right: 6px; color: var(--input-text); font: 600 11px/1 var(--font-inter, sans-serif); } #${ROOT_ID}.is-floating { position: fixed; z-index: 1002; margin: 0; } #${ROOT_ID} .dasiwa-monitor-drag-handle { width: 10px; min-height: 28px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); cursor: grab; touch-action: none; } #${ROOT_ID} .dasiwa-monitor-drag-handle::after { content: "⠿"; display: block; padding-top: 7px; color: var(--descrip-text, #aaa); font-size: 13px; text-align: center; } #${ROOT_ID} .dasiwa-monitor-drag-handle:active { cursor: grabbing; }
         #dasiwa-monitor-dock-left, #dasiwa-monitor-dock-right { position: fixed; z-index: 1002; top: 120px; bottom: 8px; display: flex; align-items: flex-start; pointer-events: none; } #dasiwa-monitor-dock-left { left: 72px; } #dasiwa-monitor-dock-right { right: 72px; } #dasiwa-monitor-dock-left > #${ROOT_ID}, #dasiwa-monitor-dock-right > #${ROOT_ID} { pointer-events: auto; margin: 0; } #${ROOT_ID}.is-vertical .dasiwa-monitor-display.is-lite { flex-direction: column; align-items: stretch; } #${ROOT_ID}.is-horizontal .dasiwa-monitor-display.is-lite { flex-direction: row; }
@@ -395,53 +434,75 @@ function addStyles() {
     document.head.appendChild(style);
 }
 
+async function mountMonitor() {
+    if (monitorRoot) return;
+    addStyles();
+    const root = document.createElement("div");
+    monitorRoot = root;
+    root.id = ROOT_ID;
+    root.innerHTML = `<span class="dasiwa-monitor-drag-handle" aria-label="Drag system monitor"></span><div id="${PANEL_ID}" class="dasiwa-monitor-display is-lite">Loading…</div><button class="dasiwa-monitor-settings" type="button" title="DaSiWa monitor settings" aria-label="DaSiWa monitor settings">⚙</button>`;
+    const settingsButton = root.querySelector("button");
+    settingsButton.addEventListener("click", () => openMenu(settingsButton));
+    document.body.insertAdjacentHTML("beforeend", `
+        <div id="dasiwa-monitor-dock-left" hidden></div>
+        <div id="dasiwa-monitor-dock-right" hidden></div>
+        <div id="dasiwa-monitor-dock-target-top" class="dasiwa-monitor-dock-target" hidden>Drop to dock to top</div>
+        <div id="dasiwa-monitor-dock-target-left" class="dasiwa-monitor-dock-target" hidden>Dock left</div>
+        <div id="dasiwa-monitor-dock-target-right" class="dasiwa-monitor-dock-target" hidden>Dock right</div>`);
+    applyOrientation(root);
+    enablePanelDrag(root);
+    if (placePanel(root)) {
+        if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
+    } else {
+        document.body.appendChild(root);
+        monitorToolbarObserver = new MutationObserver(() => {
+            if (placePanel(root)) {
+                if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
+                monitorToolbarObserver?.disconnect();
+                monitorToolbarObserver = null;
+            }
+        });
+        monitorToolbarObserver.observe(document.body, { childList: true, subtree: true });
+    }
+    monitorEventListener = (event) => {
+        latestSnapshot = event.detail;
+        history = [...history, historyPoint(latestSnapshot)].slice(-HISTORY_LENGTH);
+        render();
+    };
+    api.addEventListener(EVENT_NAME, monitorEventListener);
+    monitorResizeObserver = new ResizeObserver(() => {
+        const panel = document.getElementById(PANEL_ID);
+        if (!panel) return;
+        if (settings.mode === "full") positionFullPanel(panel);
+        else fitPanel(panel);
+    });
+    monitorResizeObserver.observe(document.documentElement);
+    try {
+        latestSnapshot = await api.fetchApi("/dasiwa/system-monitor").then((response) => response.json());
+        history = [historyPoint(latestSnapshot)];
+        render();
+    } catch (error) {
+        document.getElementById(PANEL_ID)?.replaceChildren("DaSiWa System Monitor is waiting for backend telemetry.");
+        console.warn("DaSiWa System Monitor", error);
+    }
+}
+
 app.registerExtension({
     name: "DaSiWa.SystemMonitor",
-    async setup() {
-        addStyles();
-        const root = document.createElement("div");
-        root.id = ROOT_ID;
-        root.innerHTML = `<span class="dasiwa-monitor-drag-handle" aria-label="Drag system monitor"></span><div id="${PANEL_ID}" class="dasiwa-monitor-display is-lite">Loading…</div><button class="dasiwa-monitor-settings" type="button" title="DaSiWa node settings" aria-label="DaSiWa node settings">⚙</button>`;
-        const settingsButton = root.querySelector("button");
-        settingsButton.addEventListener("click", () => openMenu(settingsButton));
-        document.body.insertAdjacentHTML("beforeend", `
-            <div id="dasiwa-monitor-dock-left" hidden></div>
-            <div id="dasiwa-monitor-dock-right" hidden></div>
-            <div id="dasiwa-monitor-dock-target-top" class="dasiwa-monitor-dock-target" hidden>Drop to dock to top</div>
-            <div id="dasiwa-monitor-dock-target-left" class="dasiwa-monitor-dock-target" hidden>Dock left</div>
-            <div id="dasiwa-monitor-dock-target-right" class="dasiwa-monitor-dock-target" hidden>Dock right</div>`);
-        applyOrientation(root);
-        enablePanelDrag(root);
-        if (placePanel(root)) {
-            if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
-        } else {
-            document.body.appendChild(root);
-            const observer = new MutationObserver(() => {
-                if (placePanel(root)) {
-                    if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
-                    observer.disconnect();
-                }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-        }
-        api.addEventListener(EVENT_NAME, (event) => {
-            latestSnapshot = event.detail;
-            history = [...history, historyPoint(latestSnapshot)].slice(-HISTORY_LENGTH);
-            render();
+    init() {
+        app.ui.settings.addSetting({
+            id: MONITOR_ENABLED_SETTING,
+            name: "Enable System Monitor",
+            category: ["DaSiWa", "System Monitor", "Enable System Monitor"],
+            tooltip: "Show the monitor and run its backend telemetry polling.",
+            type: "boolean",
+            defaultValue: true,
+            onChange: (enabled) => { void setMonitorEnabled(enabled !== false); },
         });
-        new ResizeObserver(() => {
-            const panel = document.getElementById(PANEL_ID);
-            if (!panel) return;
-            if (settings.mode === "full") positionFullPanel(panel);
-            else fitPanel(panel);
-        }).observe(document.documentElement);
-        try {
-            latestSnapshot = await api.fetchApi("/dasiwa/system-monitor").then((response) => response.json());
-            history = [historyPoint(latestSnapshot)];
-            render();
-        } catch (error) {
-            document.getElementById(PANEL_ID).textContent = "DaSiWa System Monitor is waiting for backend telemetry.";
-            console.warn("DaSiWa System Monitor", error);
-        }
+    },
+    async setup() {
+        const enabled = isMonitorEnabled();
+        await syncMonitorEnabled(enabled);
+        if (enabled) await mountMonitor();
     },
 });

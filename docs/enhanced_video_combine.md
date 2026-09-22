@@ -18,9 +18,10 @@ The node is deliberately designed to avoid fixed, host-specific video settings:
 
 - **Audio output uniqueness (fix):** Audio sidecar files were named `video_00001-audio.mp4` (dash), making the counter unparseable by `folder_paths.get_save_image_path`, which expected an underscore after the prefix. Every audio save therefore overwrote the previous one. The separator is now an underscore (`video_00001_audio.mp4`, `video_00002_audio.mp4`, …) so the counter increments correctly.
 - **Codec and encoder selection:** `Auto` tests browser-compatible 8-bit AV1/WebM first, then VP9, then H.264. H.265/HEVC is excluded from Auto and must be chosen explicitly. For each candidate the node prefers NVIDIA NVENC, then Intel QSV, AMD AMF, VAAPI, and finally a software encoder. An advertised FFmpeg encoder is not trusted until an actual encode attempt succeeds.
+- **PyAV-native execution:** The node uses PyAV 18 and the FFmpeg libraries bundled in its wheel for video encoding, audio muxing, metadata, animated outputs, and preview transcoding. It never launches an `ffmpeg` executable. Hardware candidates are runtime-tested in the existing NVENC → QSV → AMF → VAAPI order; an unavailable device or failed session continues to the next candidate and ultimately to the codec's software encoder.
 - **Container safety:** Auto tries compatible container sequences for each codec and prevents an incompatible preference from being the only path. If all selected candidates fail, it attempts the mandatory H.264/MP4 fallback.
 - **Source precision:** with an explicit codec, `bit_depth=Auto` detects 8-bit versus 10-bit image-batch quantization. Browser-compatible codec `Auto` always emits 8-bit 4:2:0.
-- **Browser preview:** Chromium on Linux may claim AV1/HEVC support but render 10-bit hardware-encoded streams as black without raising a media error. To avoid this, the node always streams an FFmpeg-transcoded fragmented H.264 HTTP response for AV1 and H.265 outputs instead of relying on their native decoders. The requested output file is never changed and no preview sidecar is created.
+- **Browser preview and seeking:** Every video encoder receives a one-second GOP and an explicit keyframe whenever another elapsed second begins. MP4 outputs use fast-start metadata. For AV1 and H.265 compatibility, the node creates a content-addressed H.264/AAC preview in ComfyUI's temporary directory and serves it with `FileResponse`, including HTTP byte-range support. The requested output file is never changed; cached previews are invalidated automatically when its size or modification time changes.
 - **Output freshness:** The output node deliberately executes again on every Queue Prompt, including when upstream IMAGE inputs were cached. This ensures a new video, preview, and any selected frame exports are produced for every queue.
 - **Asset publication:** The final video and every selected first/last-frame PNG are published to ComfyUI Assets together.
 
@@ -93,7 +94,7 @@ Many Chromium/Linux installations cannot decode H.265 in a canvas/video element 
 ## Metadata and filenames
 
 - `save_metadata` embeds ComfyUI prompt/workflow metadata where the selected container supports it.
-- `filename_prefix` supports ComfyUI date placeholders such as `%date%`, `%date:yyyy-MM-dd%`, and `%date:hhmmss%`.
+- `filename_prefix` supports `%seed%` when the optional `seed` input is connected, plus ComfyUI date placeholders such as `%date%`, `%date:yyyy-MM-dd%`, and `%date:hhmmss%`. For example, `video/%date:yyyy-MM-dd%/shot_%seed%` writes the generation seed into the output name. Without a connected seed, `%seed%` is left unchanged for workflow compatibility.
 - `save_output=false` writes under ComfyUI temporary output instead of the normal output directory.
 
 ## Console logging

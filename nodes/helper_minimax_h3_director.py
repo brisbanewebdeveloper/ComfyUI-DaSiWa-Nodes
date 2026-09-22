@@ -39,6 +39,8 @@ class NormalizedGuide:
     ref_videos: dict = None
     ref_video_audios: dict = None
     ref_audios: dict = None
+    minimax_ref_items: Any = None
+    selection_stamp: float = 0.0
 
     def __post_init__(self):
         for name in ("ref_images", "ref_videos", "ref_video_audios", "ref_audios"):
@@ -164,6 +166,7 @@ def normalize_guide(data: dict) -> NormalizedGuide:
         mode=mode, prompt=prompt, resolved_prompt=resolved,
         width=int(data.get("width", 1344)), height=int(data.get("height", 768)),
         length=int(data.get("length", 124)), ref_image_size=data.get("ref_image_size", "match"),
+        minimax_ref_items=data.get("minimax_ref_items"), selection_stamp=float(data.get("selection_stamp", 0) or 0),
     )
     if mode in {"T2VA", "I2VA", "FL2VA", "L2VA"}:
         if data.get("ref_images") or data.get("ref_videos") or data.get("ref_audios") or data.get("ref_video_audios"):

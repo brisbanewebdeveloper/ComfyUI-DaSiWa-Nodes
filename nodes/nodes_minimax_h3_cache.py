@@ -8,12 +8,16 @@ implementation: no MiniMax class is mutated globally.
 from __future__ import annotations
 
 import inspect
-import logging
 import types
 from collections.abc import Callable
 from typing import Any
 
 import torch
+
+try:
+    from .helper_logging import log_dasiwa
+except ImportError:
+    from helper_logging import log_dasiwa
 
 
 class H3BlockStackCache:
@@ -55,11 +59,9 @@ class H3BlockStackCache:
     def finish(self) -> None:
         if self.verbose and self.run_count + self.skip_count:
             total = self.run_count + self.skip_count
-            logging.info(
-                "[DaSiWa MiniMax H3 Cache] skipped %s/%s block-stack runs (%.2fx theoretical speedup).",
-                self.skip_count,
-                total,
-                total / max(1, self.run_count),
+            log_dasiwa(
+                "MiniMax H3 Cache",
+                f"skipped {self.skip_count}/{total} block-stack runs ({total / max(1, self.run_count):.2f}x theoretical speedup).",
             )
         self.reset()
 
@@ -136,7 +138,7 @@ class H3BlockStackCache:
                 self.skip_count += 1
                 self.consecutive_skips += 1
                 if self.verbose:
-                    logging.info("[DaSiWa MiniMax H3 Cache] step %s: reuse block-stack residual.", self.step)
+                    log_dasiwa("MiniMax H3 Cache", f"step {self.step}: reuse block-stack residual.")
                 return {"img": self._apply_residual(hidden_states)}
 
         self.run_count += 1

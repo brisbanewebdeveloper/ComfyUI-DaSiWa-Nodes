@@ -1,6 +1,6 @@
 # DaSiWa Custom Nodes Collection
 
-A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control.
+A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control. Its installed version is shown in **ComfyUI → Settings → About** as a linked **DaSiWa Custom Nodes** badge. Use **ComfyUI → Settings → Other → DaSiWa → System Monitor** to enable or disable the monitor completely.
 
 [📰 News & Changelog — release notes and complete change history across the collection →](docs/news_and_changelog.md)
 
@@ -8,32 +8,30 @@ A high-performance collection of custom nodes for ComfyUI, optimized for video w
 
 ### 🎬 MiniMax H3 Director
 
-Timeline-based authoring for MiniMax H3 text/image/video generation, reference-to-video, and single-image inpainting workflows, integrated with ComfyUI's native H3 implementation. Two lanes (Image/Video + Audio), slot-based layout, drag-and-drop / paste / upload, per-clip trims, and structured prompt builders per mode.
+Timeline-based authoring for MiniMax H3 generation workflows. Separate Image/Video/Audio lanes, drag-and-drop/paste/upload, per-clip trims, save/load packs, and structured prompt builders.
 
 ![MiniMax H3 Director](assets/DaSiWa-MiniMaxH3-Director.png)
 
-- **FL2VA mode:** text-to-video (T2VA), first-frame (I2VA), or first+last frame interpolation; up to 2 image slots; automatic alignment-line insertion in the prompt.
-- **IMAGE INPAINT mode:** exactly one image reference, no video/audio; a 5-frame image-to-video pass through the native `MiniMaxH3ImageToVideo` node with the single image as keyframe — the output is a one-frame batch you extract your single result from with a **Get Image from Batch**. The mode emits an `inpaint_requested` output so you can switch sampling paths by mode, and the Guide node routes it to the native image-to-video call with the image as first frame and no last frame.
-- **REF2VA mode:** up to 9 images, 3 videos, 3 audio clips, 12 files total; each video has a compact V / A / V+A switch (Video only / Audio only / Video+embedded-audio) using the same trim range for both streams; standalone audio also supports left/right trim handles.
-- **REFERENCE VIDEO THUMBNAILS:** uploaded videos show their actual first frame as a background preview behind each clip tile, making it easy to identify references at a glance.
-- **REFERENCE HANDLING:** reorder clips by dragging between slots, attach external soundtracks to videos, crop references visually via draggable markers, preserve incompatible media when toggling FL2VA ↔ REF2VA instead of losing assets.
-- **LANE SELECTION & PASTE:** click an Image/Video or Audio lane to select it; Ctrl+V pastes clipboard images/videos/audio into the chosen lane; drag-and-drop from your file manager works too.
-- **PROMPT BUILDERS:**
-  - FL2VA/I2VA/L2VA/T2VA: guided fields for integrated_multimodal_description, overall_soundscape, and non_diegetic_music with automatic alignment headers.
-  - REF2VA: simplified six-section free-text builder (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music) with helper buttons: **Insert [Shot N]** places shot markers at cursor, **Prefill Labels & Summary** auto-generates Picture/Video/Audio labels from your inserted media, and **Preview Prompt** shows the exact assembled prompt in a popup with copy-to-clipboard.
-- **VALIDATED LIMITS:** 2–15 second reference windows; max 15s combined visual and audio duration each; strict path-safety under ComfyUI's input directory.
-- **NATIVE ROUTING & LAZY LOADING:** hands validated data to ComfyUI's built-in MiniMaxH3ImageToVideo / MiniMaxH3ReferenceToVideo nodes (Image Inpaint uses the image-to-video node); only the selected FL2VA or REF2VA model is requested.
-- **OPTIONAL EXECUTOR:** connect the Director guide to **DaSiWa MiniMax H3 Director Executor** for an integrated SigmaShift, sampling, video decode, and audio decode path; keep using **MiniMax H3 Director Guide** with standard sampler nodes for custom graphs.
-- **SEQUENCE EXECUTION:** wrap guides with **Sequence Segment**, combine them through the autogrowing **Sequence Plan**, then execute mixed FL2VA/REF2VA runs with run selection, source passthrough, disk resume, CPU-offloaded AV continuity, and concatenated image/audio outputs.
-- **SAFE COEXISTENCE:** the Director uses the unique node ID `DaSiWaMiniMaxH3Director`, so it can be installed beside other MiniMax H3 Director packages. Saved DaSiWa workflows using the former shared ID migrate when opened.
-- **RESOLUTION PANEL:** Aspect / Resolution / Input scaling selectors (all default to **Auto**) drive the output canvas on MiniMax's 16-px grid — Auto aspect follows your first visual reference, Auto resolution sets a 768 px short side, plus fixed aspect, MP and pixel presets with CUSTOM values. The dropdowns are grouped in columns (aspect by orientation, resolution by ###p / MP, ascending) and label the auto options **Native (ShortEdge 768px)** / **Native (ShortEdge 2048px)**. Input scaling (Off / Auto / Target / Fit / Fill / Fit+pad / Divisible crop) preprocesses visual references via the included Torch Resize before they reach H3.
-- **PROMPT MODE TOGGLE:** a Simple / Structured switch in the mode bar changes how builder fields are assembled into the final prompt — Structured keeps the labelled sections, Simple renders one flat block. The choice is persisted in the workflow and honored by **Preview Prompt**.
-- **FRAME RATE:** a `frame_rate` FLOAT input (0.1–240, default 24) sets the output FPS and is also emitted as a `frame_rate` output so downstream nodes can read the effective value.
-- **CROP PREVIEW:** a ▶ Play crop button previews only the current crop range, and the preview crop range itself is draggable for quick scrubbing.
-- **PASTE-REPLACE:** Ctrl+V onto a selected media tile replaces that tile in place, preserving its slot position instead of appending.
-- **EXTERNAL OVERWRITE INPUTS:** optional `external_prompt_overwrite` (STRING) replaces the assembled builder output; connect both `external_width_overwrite` and `external_height_overwrite` (INT) to replace the Director canvas and bypass its sizing and input preprocessing entirely.
+- 🎥 **Modes:** FL2VA (T2VA/I2VA/L2VA, 2 image slots), IMAGE INPAINT (1 image → single frame via 5-frame pass), REF2VA (9 img / 3 vid / 3 audio = 12 total; V/A/V+A switch per video)
+- 📸 **REFMOD references:** saved image/video/audio RefMods and upstream v5 bundles from `models/refmods/` — overlay selector, strength scaling, workflow-local descriptions, `<RefMod N>` stable aliases resolved at runtime to native reference labels.
+- 🔀 **Reference handling:** drag-reorder between slots, external soundtracks per video, visual crop via draggable markers, incompatible media preserved on mode toggle
+- 📋 **Paste & upload:** lane selection + Ctrl+V paste into chosen lane, drag-and-drop from file manager, paste-replace onto selected tile
+- ✍️ **Prompt builders:** FL2VA/I2VA/L2VA guided fields; REF2VA six-section builder with Insert [Shot N], Insert RefMod #, Prefill Labels & Summary, Preview Prompt (shows resolved `<RefMod N>` → native labels + description block); Simple/Structured toggle persisted with bidirectional content preservation (unlabeled text dumps to detailed_description); live character counter across all fields
+- 📐 **Resolution panel:** Aspect/Resolution/Input Scaling selectors (all default Auto) on 32px grid; grouped dropdowns; CUSTOM values; Torch Resize preprocessing (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop)
+- 💾 **Save/Load packs:** reference files + prompt + RefMod selections persisted independently; append or overwrite with limit validation and missing-file checks
+- 🎬 **Video thumbnails:** first-frame preview behind each video clip tile
+- ⏱️ **Crop preview:** ▶ Play crop button, draggable preview range
+- 🔒 **Validated limits:** 2–15s reference windows, 15s max combined visual/audio duration, path-safety under ComfyUI input directory
+- 🧩 **Native routing & lazy loading:** hands validated data to built-in MiniMaxH3 nodes; only selected model requested; REF2VA binds native inputs by name for Core-order compatibility
+- ▶️ **Optional executor:** connect the guide to **DaSiWa MiniMax H3 Director Executor** for integrated sampling plus video/audio decode, or use the Guide with standard sampler nodes.
+- 🔗 **Sequence execution:** wrap guides with **Sequence Segment**, combine them through **Sequence Plan**, then run mixed FL2VA/REF2VA sequences with resume, source passthrough, CPU-offloaded AV continuity, and concatenated outputs.
+- 🤝 **Safe coexistence:** the unique node ID `DaSiWaMiniMaxH3Director` avoids collisions with other Director packages; saved DaSiWa workflows using the former shared ID migrate when opened.
+- ⚙️ **External overwrite inputs:** `external_prompt_overwrite` (STRING), `external_width_overwrite` + `external_height_overwrite` (INT) bypass Director canvas sizing
+- 🎞️ **Frame rate:** FLOAT input (0.1–240, default 24) with matching output for downstream nodes
 
 [Full documentation, UI guide, and prompting reference →](docs/minimax_h3_director.md)
+
+---
 
 ### ⚡ MiniMax H3 Cache
 
@@ -177,6 +175,8 @@ Converts an `IMAGE` batch into a high-quality video with optional `AUDIO` muxing
 ![DaSiWa Enhanced Video Combine](assets/DaSiWa-Enhanced-Video-Combine.png)
 
 - **Codecs:** Auto (AV1 → VP9 → H.264), or explicit AV1 / VP9 / H.264 / H.265(HEVC). Hardware-first encoder chain (NVENC → QSV → AMF → VAAPI → software); mandatory H.264/MP4 fallback.
+- **PyAV-native encoding (v0.4.40):** Encoding, audio muxing, metadata, animated outputs, and preview transcoding run through PyAV 18 and its bundled FFmpeg libraries without launching external processes. Hardware encoders are tried first and failed or unavailable devices fall back to software encoders.
+- **Seekable previews (v0.4.40):** Every generated video receives one-second keyframes. MP4 outputs use fast-start metadata. AV1, VP9, HEVC, 10-bit, and other compatibility previews are cached as ordinary H.264/AAC files served with HTTP byte-range support, so browsers can pause and scrub reliably. Downloads remain the unchanged original codec/container.
 - **Containers:** Auto-selects per codec (WebM/MKV/MP4 for AV1/VP9; MP4/MKV for H.264/H.265).
 - **Animated images:** Animated AVIF (GPU AV1 or software) and Animated WebP (`libwebp_anim`). Looping, no audio.
 - **Bit depth & quality:** Auto-detects 8-bit vs 10-bit source precision; Auto codec forces 8-bit 4:2:0. CRF/CQ-based quality slider (default 20).
@@ -185,6 +185,7 @@ Converts an `IMAGE` batch into a high-quality video with optional `AUDIO` muxing
 - **Frame exports:** Save first/last frame as PNG alongside the video; all assets published to ComfyUI Assets.
 - **Ping-pong mode:** Forward/reverse frame loop.
 - **Workflow metadata:** Embed prompt/workflow JSON where supported.
+- **Output naming (v0.4.45):** Connect a seed to the optional `seed` socket and use `%seed%` in `filename_prefix` (for example `video/%date:yyyy-MM-dd%/shot_%seed%`) to include the exact generation seed in the video and first/last-frame export names.
 - **Logging:** Compact CLI output with codec/container/encoder decisions and resolved audio settings. Built-in `?` help dialog.
 
 [Full documentation →](docs/enhanced_video_combine.md)
@@ -313,7 +314,7 @@ The **DaSiWa LLM / VLM nodes** let you run local transformers chat or vision-lan
 - **Prompt Presets:** Custom system instructions, LTX-2.3/Wan2.2 video prompt enhancement, and image/video caption presets for mixed tags, tag-only, or natural language.
 - **Memory Modes:** Keep models cached for speed, or use full cleanup to unload DaSiWa and ComfyUI managed models before/after analysis so later image/video models recover VRAM/RAM.
 - **Frame Sampling:** Limit video analysis with max frames, stride, frame strategy, resize controls, context limits, and optional KV-cache reduction.
-- **Local, GGUF, Ollama, or HF Models:** Load full Transformers folders, local GGUF through llama.cpp, call Ollama, or download a Hugging Face repo id into `ComfyUI/models/llm`.
+- **Local, GGUF, or Loopback Ollama Models:** Load already-installed Transformers folders, local GGUF through llama.cpp, or call Ollama on `127.0.0.1`. Runtime model downloads, custom remote model code, and arbitrary Ollama URLs are disabled so a workflow cannot make the ComfyUI server fetch code or send requests to an attacker-chosen service.
 
 [Full documentation →](docs/llm_nodes.md)
 
@@ -347,3 +348,4 @@ Search for **DaSiWa-Nodes** and install.
 - Lora-Loader is based on [Brojakhoeman/Loradaddyloaderltx](https://github.com/Brojakhoeman/Loradaddyloaderltx/tree/main).
 - Ideas for Watermark Overlay are inspired by [Artificial-Sweetener/comfyui-WhiteRabbit](https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit)
 - MiniMax H3 Director was inspired by the LTX Director concept from [whatdreamscost](https://github.com/whatdreamscost)
+- MiniMax H3 Director RefMod integration (saved person references, `.safetensors` latent format, strength scaling) is based on the design and file format established in [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod). The DaSiWa implementation was contributed by [kasimalperenyavuz-design](https://github.com/kasimalperenyavuz-design) in [PR #45](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/45). It is standalone — no runtime dependency on the upstream pack — but both can be installed side-by-side and share the same RefMod files in `models/refmods/`.

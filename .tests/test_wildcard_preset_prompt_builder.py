@@ -65,9 +65,12 @@ class TestPromptAssembly:
             "Character - Hair",
             "Character - Body",
             "Wardrobe",
+            "Weapons & Items",
             "Body Visibility",
             "Composition & Pose",
             "Scene",
+            "Background",
+            "Intimate Backgrounds",
             "NSFW",
             "Negative Prompts",
         ]

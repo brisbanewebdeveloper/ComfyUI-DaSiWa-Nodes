@@ -89,7 +89,8 @@ def test_large_cpu_output_uses_comfy_temp_mmap_with_stable_frame_indexes(tmp_pat
     monkeypatch.setattr(rtx_upscaler_refiner, "can_allocate_in_ram", lambda _: False)
     monkeypatch.setattr(rtx_upscaler_refiner, "_temporary_output_directory", lambda: str(tmp_path))
 
-    output, storage_path = rtx_upscaler_refiner._allocate_output_tensor((3, 2, 2, 3), torch.float32, torch.device("cpu"), auto_unload_models=False)
+    output, storage_path = rtx_upscaler_refiner._allocate_output_tensor(
+        (3, 2, 2, 3), torch.float32, torch.device("cpu"), allow_mmap=True, auto_unload_models=False)
     output[0].fill_(1)
     output[1].fill_(2)
     output[2].fill_(3)
@@ -112,7 +113,8 @@ def test_mmap_output_removes_its_temporary_file_when_tensor_is_released(tmp_path
     monkeypatch.setattr(rtx_upscaler_refiner, "can_allocate_in_ram", lambda _: False)
     monkeypatch.setattr(rtx_upscaler_refiner, "_temporary_output_directory", lambda: str(tmp_path))
 
-    output, storage_path = rtx_upscaler_refiner._allocate_output_tensor((1, 2, 2, 3), torch.float32, torch.device("cpu"))
+    output, storage_path = rtx_upscaler_refiner._allocate_output_tensor(
+        (1, 2, 2, 3), torch.float32, torch.device("cpu"), allow_mmap=True)
 
     assert storage_path is not None
     assert os.path.exists(storage_path)
@@ -125,7 +127,7 @@ def test_input_schema_has_mmap_and_auto_unload_options():
     optional = DaSiWa_RTX_UpscalerRefiner.INPUT_TYPES()["optional"]
 
     assert optional["use_mmap"][0] == "BOOLEAN"
-    assert optional["use_mmap"][1]["default"] is True
+    assert optional["use_mmap"][1]["default"] is False
     assert optional["auto_unload_models"][0] == "BOOLEAN"
     assert optional["auto_unload_models"][1]["default"] is True
     # Legacy key stays at its position for old workflows.
@@ -166,7 +168,7 @@ def test_auto_unload_runs_full_unload_when_vram_is_short(tmp_path, monkeypatch):
     monkeypatch.setattr(rtx_upscaler_refiner, "_temporary_output_directory", lambda: str(tmp_path))
 
     output, storage_path = rtx_upscaler_refiner._allocate_output_tensor(
-        (1, 2, 2, 3), torch.float32, device, auto_unload_models=True)
+        (1, 2, 2, 3), torch.float32, device, allow_mmap=True, auto_unload_models=True)
 
     # VRAM stays short even after the unload -> disk-backed CPU output.
     assert storage_path is not None
@@ -200,7 +202,7 @@ def test_auto_unload_disabled_falls_back_without_unloading(tmp_path, monkeypatch
     monkeypatch.setattr(rtx_upscaler_refiner, "_temporary_output_directory", lambda: str(tmp_path))
 
     output, storage_path = rtx_upscaler_refiner._allocate_output_tensor(
-        (1, 2, 2, 3), torch.float32, device, auto_unload_models=False)
+        (1, 2, 2, 3), torch.float32, device, allow_mmap=True, auto_unload_models=False)
 
     assert storage_path is not None
     assert calls == []
@@ -221,23 +223,27 @@ def test_use_mmap_off_gpu_uses_ram_when_vram_short(monkeypatch):
     assert output.device.type == "cpu"
 
 
-def test_use_mmap_off_gpu_raises_when_vram_and_ram_short(monkeypatch):
+def test_use_mmap_off_gpu_uses_lazy_ram_when_vram_and_ram_are_short(monkeypatch):
     device = torch.device("cuda:0")
     monkeypatch.setattr(rtx_upscaler_refiner, "_can_fit_in_vram", lambda *_: False)
     monkeypatch.setattr(rtx_upscaler_refiner, "can_allocate_in_ram", lambda _: False)
 
-    with pytest.raises(RuntimeError, match=r"'use_mmap' is off"):
-        rtx_upscaler_refiner._allocate_output_tensor(
-            (1, 2, 2, 3), torch.float32, device, allow_mmap=False, auto_unload_models=False)
+    output, storage_path = rtx_upscaler_refiner._allocate_output_tensor(
+        (1, 2, 2, 3), torch.float32, device, allow_mmap=False, auto_unload_models=False)
+
+    assert storage_path is None
+    assert output.device.type == "cpu"
 
 
-def test_use_mmap_off_cpu_raises_when_ram_short(tmp_path, monkeypatch):
+def test_use_mmap_off_cpu_uses_lazy_ram_when_ram_is_short(tmp_path, monkeypatch):
     monkeypatch.setattr(rtx_upscaler_refiner, "can_allocate_in_ram", lambda _: False)
     monkeypatch.setattr(rtx_upscaler_refiner, "_temporary_output_directory", lambda: str(tmp_path))
 
-    with pytest.raises(RuntimeError, match=r"'use_mmap' is off"):
-        rtx_upscaler_refiner._allocate_output_tensor(
-            (1, 2, 2, 3), torch.float32, torch.device("cpu"), allow_mmap=False, auto_unload_models=False)
+    output, storage_path = rtx_upscaler_refiner._allocate_output_tensor(
+        (1, 2, 2, 3), torch.float32, torch.device("cpu"), allow_mmap=False, auto_unload_models=False)
+
+    assert storage_path is None
+    assert output.device.type == "cpu"
 
 
 def test_use_mmap_on_gpu_prefers_ram_over_disk_when_vram_short(monkeypatch):

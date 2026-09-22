@@ -5,7 +5,7 @@ const sourcePath = new URL("../js/minimax_h3_director.js", import.meta.url);
 let source = await readFile(sourcePath, "utf8");
 source = source.replace(
     'import { app } from "../../scripts/app.js";\nimport { api } from "../../scripts/api.js";',
-    "const app = { registerExtension() {} }; const api = {};"
+    "const app = { registerExtension() {} }; const api = { addEventListener() {} };"
 );
 source += "\nexport { mediaTypeFor, wavDurationFromBuffer, REPOSITORY_URL, MINIMAX_MULTIPLE, ASPECT_OPTIONS, RESOLUTION_PRESETS };";
 
@@ -17,6 +17,9 @@ assert.match(source, /\.ds-h3\{box-sizing:border-box[^`]*background:transparent;
 assert.doesNotMatch(source, /promptPanelHeight/, "restoring a workflow must not reference the removed prompt-panel divider state");
 assert.match(source, /FL2VA supports image references only; video and audio are unavailable\./, "unsupported drops must show an explicit FL2VA error");
 assert.match(source, /ds-h3-timeline-lane \$\{targetLane\}[^`]*\$\{supported \? "" : " disabled"\}/, "unsupported lanes must be visibly blocked");
+assert.match(source, /const ioSide = controlGroup\(\); ioSide\.style\.cssText \+= ";padding-left:8px;border-left:1px solid #344452";/, "Load and Save must have their own separated toolbar group");
+assert.match(source, /topRow\.append\(modesSide, promptSide, spacer, ioSide, actionsSide, docsButton\)/, "the toolbar must place Load/Save before the right-aligned Remove/Clear group");
+assert.match(source, /\], ioSide, true, "Load", "ds-h3-io-dropdown load"\);[\s\S]*?null, ioSide, true, "Save", "ds-h3-io-dropdown save"\);/, "Load and Save must render in the separated toolbar group");
 assert.match(source, /removeButton\.textContent = "Remove"/, "selected media must have a toolbar remove button");
 assert.match(source, /close\.className = "ds-h3-clip-close"/, "selected media must have a clip-corner remove button");
 assert.doesNotMatch(source, /Remove selected media item/, "the old prompt-panel remove button must be absent");
@@ -25,7 +28,7 @@ assert.match(source, /ds-h3-status ds-h3-info-field/, "status messages must use 
 assert.match(source, /Math\.min\(sourceDuration, 15\)/, "long uploaded media must default to a 15-second crop");
 assert.match(source, /extractWaveform\(value, added\.id\)/, "audio uploads must decode a waveform");
 assert.match(source, /waveform\.className = "ds-h3-waveform"/, "audio clips must render their waveform canvas");
-assert.match(source, /let selectedLane = "visual"/, "the timeline must keep an active destination lane");
+assert.match(source, /let selectedLane = "image"/, "the timeline must keep an active destination lane");
 assert.match(source, /ds-h3-timeline-lane\.selected/, "the active lane must be visibly highlighted");
 assert.match(source, /timeline\.addEventListener\("paste", async event =>/, "the timeline must accept clipboard paste events");
 assert.match(source, /await acceptFile\(file, selectedLane\)/, "clipboard files must be routed to the selected lane");
@@ -53,7 +56,7 @@ assert.match(source, /function buildSimpleForm\(panel\)/, "simple mode must rend
 assert.match(source, /createBuilderField\("Prompt", builderState\.simple_prompt/, "simple mode must bind the visible field to serialized simple_prompt state");
 assert.match(source, /if \(value === "simple"\) builderState\.simple_prompt = previewTextFor\(mode\(\), false\);/, "switching into simple mode must seed the single field from the current builder prompt");
 assert.match(source, /promptButton\.className = "ds-h3-prompt-mode-btn"/, "prompt-style choices must use the prompt-mode button styling");
-assert.match(source, /function showPromptPreview\(\) \{[\s\S]*?const promptText = previewTextFor\(m, hasExternalPrompt\(\)\);/, "the prompt preview must render the selected style");
+assert.match(source, /function showPromptPreview\(\) \{[\s\S]*?let promptText = previewTextFor\(m, hasExternalPrompt\(\)\);/, "the prompt preview must render the selected style");
 assert.match(source, /builderState\.prompt_mode = value/, "prompt-style buttons must set the explicitly selected mode");
 assert.match(source, /const resetBuilderState = \(\) => \{ builderState = DEFAULT_BUILDER_STATE\(mode\(\)\); builderState\.mode = mode\(\); \};/, "Clear must reset all serialized builder fields to the current mode defaults");
 assert.match(source, /const clearAll = \(\) => \{ selectedId = null; resetBuilderState\(\);/, "Clear must reset prompt/text fields as well as selected media");

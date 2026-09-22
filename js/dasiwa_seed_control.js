@@ -7,10 +7,9 @@ import { app } from "../../scripts/app.js";
  * Use Last, Last-10 history with copy actions, "External seed connected"
  * note, and the before-queue auto-roll in Random mode.
  *
- * Layout (fixed-width panel column, rows never stretch on resize):
- *   row 1 — seed field with an attached ▲/▼ spinner on the input's right edge
- *   row 2 — Random|Fixed switch (one control) + New roll
- *   row 3 — Use Last, Last 10 seeds
+ * Layout (responsive panel):
+ *   wide   — seed field, Random|Fixed + New, and Use Last + history share one line
+ *   narrow — controls wrap from right to left below the seed as node width shrinks
  *
  * Backing widgets (hidden native widgets, created by the backend):
  *   seed_value        INT    — the effective local seed (0..2^64-1)
@@ -36,14 +35,13 @@ const DASIWASEED_MAX_SEED = 0xffffffffffffffffn;
 const DASIWASEED_NODE_TYPES = new Set(["DaSiWa_SeedControl"]);
 const DASIWASEED_STATE_WIDGET = "seed_control_state";
 const DASIWASEED_VALUE_WIDGET = "seed_value";
-// Fixed panel column: all three rows share this width, so the controls
-// never stretch when the node is resized. 240 px leaves room for the
-// full 16-digit monospace seed next to the 26 px spinner (the seed input
-// flexes to fill the rest of the row); the switch and New button flex to
-// fill their row and every row is the same 42 px cell height, so all
-// controls align in the same space.
-const DASIWASEED_PANEL_WIDTH = 240;
-const DASIWASEED_COMPUTE_SIZE_WIDTH = DASIWASEED_PANEL_WIDTH + 40;
+// The panel starts compact, then its three control groups share one line
+// once their minimum widths fit. While shrinking, the rightmost groups wrap
+// one at a time below the seed field.
+const DASIWASEED_MIN_PANEL_WIDTH = 240;
+const DASIWASEED_TWO_LINE_PANEL_WIDTH = 384;
+const DASIWASEED_WIDE_PANEL_WIDTH = 628;
+const DASIWASEED_COMPUTE_SIZE_WIDTH = DASIWASEED_MIN_PANEL_WIDTH + 40;
 
 // Field surfaces follow ComfyUI's own widget theme (--comfy-input-bg /
 // --border-color / --input-text) with neutral dark fallbacks, so the
@@ -55,8 +53,10 @@ function dasiwaSeedControlInstallStyles() {
   dasiwaSeedControlCssInstalled = true;
   const style = document.createElement("style");
   style.textContent = `
-    .ds-seed{box-sizing:border-box;width:${DASIWASEED_PANEL_WIDTH}px;background:transparent;font:12px system-ui,sans-serif;display:flex;flex-direction:column;gap:4px;padding:2px}
-    .ds-seed-row{display:flex;align-items:center;gap:5px;width:100%;min-width:0}
+    .ds-seed{box-sizing:border-box;width:100%;min-width:${DASIWASEED_MIN_PANEL_WIDTH}px;background:transparent;font:12px system-ui,sans-serif;display:flex;flex-direction:column;gap:4px;padding:2px;container-type:inline-size}
+    .ds-seed-control{display:flex;flex-wrap:wrap;align-items:stretch;gap:4px;width:100%}
+    .ds-seed-row{display:flex;align-items:center;gap:5px;min-width:0;flex:1 1 190px}
+    .ds-seed-control > .ds-seed-row:first-child{flex:2 1 240px}
     .ds-seed-btn{width:100%;display:flex;align-items:center;gap:8px;box-sizing:border-box;height:42px;padding:0 9px;background:var(--comfy-input-bg,#222);border:1px solid var(--border-color,#4e4e4e);border-radius:5px;color:var(--input-text,#ddd);font:12px system-ui,sans-serif;cursor:pointer;text-align:left;transition:background .16s ease,border-color .16s ease,box-shadow .16s ease}
     .ds-seed-btn:hover:not(:disabled){background:var(--button-hover-surface,#262729);border-color:var(--border-color,#4e4e4e);box-shadow:0 0 9px rgba(0,0,0,.35)}
     .ds-seed-btn:focus-visible{outline:none;border-color:var(--border-color,#4e4e4e);box-shadow:0 0 0 2px rgba(255,255,255,.18)}
@@ -149,7 +149,7 @@ function dasiwaSeedControlInstall(node) {
   if (controlState.mode === "random" && (!lastSeedText || lastSeedText === "0")) { lastSeedText = dasiwaSeedControlRollSeed(); dasiwaSeedControlWriteSeedMirror(lastSeedText); }
 
   const dasiwaSeedControlBuildSeedPanel = () => {
-    const seedControl = document.createElement("div"); seedControl.className = "ds-seed-control"; seedControl.style.cssText = "display:flex;flex-direction:column;gap:4px;width:100%";
+    const seedControl = document.createElement("div"); seedControl.className = "ds-seed-control"; seedControl.style.cssText = "width:100%";
     if (dasiwaSeedControlHasExternalSeed()) {
       const external = document.createElement("span"); external.textContent = "External seed connected"; external.style.cssText = "font-size:11px;color:#9fb3c2;white-space:nowrap"; seedControl.append(external);
       return seedControl;
@@ -209,7 +209,9 @@ function dasiwaSeedControlInstall(node) {
     const last = document.createElement("button"); last.type = "button"; last.className = "ds-seed-btn"; last.textContent = "Use Last"; last.disabled = !controlState.last_seed; last.style.cssText = "width:68px;padding:3px 0;justify-content:center;gap:0;text-align:center;white-space:nowrap"; last.onclick = () => { if (!controlState.last_seed) return; lastSeedText = controlState.last_seed; dasiwaSeedControlWriteSeedMirror(lastSeedText); input.value = lastSeedText; controlState.mode = "fixed"; dasiwaSeedControlEmit(); dasiwaSeedControlSyncSwitch(); dasiwaSeedControlRefitFont(); };
     const lastBtn = last;
     panelLastBtn = last;
-    const history = document.createElement("details"); history.style.cssText = "position:relative;flex:1;min-width:0"; const summary = document.createElement("summary"); summary.className = "ds-seed-btn"; summary.textContent = "Last 10 seeds"; summary.style.cssText = "padding:3px 6px;justify-content:center;gap:0;text-align:center;white-space:nowrap;cursor:pointer"; history.append(summary); const list = document.createElement("div"); list.style.cssText = "position:absolute;z-index:10;right:0;top:24px;min-width:160px;max-height:180px;overflow:auto;padding:5px;background:var(--comfy-menu-bg,#353535);border:1px solid var(--border-color,#4e4e4e);border-radius:4px";
+    // Keep the history trigger compact at every node width; only the row
+    // itself participates in the responsive wrapping.
+    const history = document.createElement("details"); history.style.cssText = "position:relative;flex:0 0 128px;min-width:0"; const summary = document.createElement("summary"); summary.className = "ds-seed-btn"; summary.textContent = "Last 10 seeds"; summary.style.cssText = "padding:3px 6px;justify-content:center;gap:0;text-align:center;white-space:nowrap;cursor:pointer"; history.append(summary); const list = document.createElement("div"); list.style.cssText = "position:absolute;z-index:10;right:0;top:24px;min-width:160px;max-height:180px;overflow:auto;padding:5px;background:var(--comfy-menu-bg,#353535);border:1px solid var(--border-color,#4e4e4e);border-radius:4px";
     // Populates (or repopulates) the Last-10 list in place; used both at
     // panel build and after a queue-time roll, so the list reflects the
     // freshly rolled seed without rebuilding the whole panel.
@@ -228,7 +230,11 @@ function dasiwaSeedControlInstall(node) {
     return seedControl;
   };
 
-  const root = document.createElement("div"); root.className = "ds-seed"; root.style.cssText = `width:${DASIWASEED_PANEL_WIDTH}px`;
+  const root = document.createElement("div"); root.className = "ds-seed"; root.style.cssText = "width:100%";
+  const dasiwaSeedControlSyncWidth = width => {
+    const contentWidth = Math.max(DASIWASEED_MIN_PANEL_WIDTH, Number(width || node.size?.[0] || DASIWASEED_COMPUTE_SIZE_WIDTH) - 40);
+    root.style.width = `${contentWidth}px`;
+  };
   const dasiwaSeedControlRender = () => { root.innerHTML = ""; root.append(dasiwaSeedControlBuildSeedPanel()); };
 
   // In-place panel refresh after a queue-time roll: update the seed input,
@@ -241,14 +247,28 @@ function dasiwaSeedControlInstall(node) {
     if (panelLastBtn) panelLastBtn.disabled = !controlState.last_seed;
   };
 
-  const dasiwaSeedControlUiHeight = () => 140;
+  // Each wrapped row costs 42 px plus the panel gap. Keep the minimum
+  // height in lockstep with the responsive flex layout: three, two, or one row.
+  const dasiwaSeedControlUiHeight = () => {
+    const panelWidth = Number(node.size?.[0] || DASIWASEED_COMPUTE_SIZE_WIDTH) - 40;
+    if (panelWidth >= DASIWASEED_WIDE_PANEL_WIDTH) return 50;
+    if (panelWidth >= DASIWASEED_TWO_LINE_PANEL_WIDTH) return 96;
+    return 140;
+  };
   if (node.addDOMWidget) {
     const domWidget = node.addDOMWidget("dasiwa_seed_control_ui", "custom", root, { serialize: false, hideOnZoom: false, getHeight: dasiwaSeedControlUiHeight });
-    // Fixed size: the panel keeps its column width no matter how the node
-    // is resized, so the fields never stretch or reflow.
+    // This is a minimum size only. The root follows node resizing so the
+    // container query can move rows 2/3 beside the seed field when space exists.
     domWidget.computeSize = () => [DASIWASEED_COMPUTE_SIZE_WIDTH, dasiwaSeedControlUiHeight()];
   }
   if (node.size?.[0] < DASIWASEED_COMPUTE_SIZE_WIDTH || !node.size?.[0]) node.setSize?.([DASIWASEED_COMPUTE_SIZE_WIDTH + 14, dasiwaSeedControlUiHeight()]);
+  const dasiwaSeedControlOriginalResize = node.onResize;
+  node.onResize = function (size) {
+    dasiwaSeedControlOriginalResize?.apply(this, arguments);
+    dasiwaSeedControlSyncWidth(size?.[0]);
+  };
+  dasiwaSeedControlSyncWidth(node.size?.[0]);
+  requestAnimationFrame(() => dasiwaSeedControlSyncWidth(node.size?.[0]));
 
   node.__dasiwaSeedRestorePersistedState = () => { const parsed = dasiwaSeedControlParseState(dasiwaSeedControlStateWidget().value); controlState = parsed; lastSeedText = parsed.last_seed || String(dasiwaSeedControlSeedWidget().value ?? 0); dasiwaSeedControlRender(); };
   node.__dasiwaSeedPrepareSeed = () => { if (dasiwaSeedControlHasExternalSeed() || controlState?.mode !== "random") return; const value = dasiwaSeedControlRollSeed(); lastSeedText = value; const widget = dasiwaSeedControlSeedWidget(); if (widget) { widget.value = value; widget.callback?.(value); } controlState.last_seed = value; controlState.recent = [value, ...(controlState.recent || []).filter(entry => entry !== value)].slice(0, 10); dasiwaSeedControlEmit(); dasiwaSeedControlRefreshPanel(); };

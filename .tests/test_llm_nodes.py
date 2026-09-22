@@ -32,9 +32,9 @@ def test_selector_exposes_kv_cache_strategy_and_llama_cpp_controls(monkeypatch):
     monkeypatch.setattr(llm_nodes, "_resolve_model_path", lambda *args, **kwargs: "/models/chat.gguf")
 
     config = llm_nodes.DaSiWa_LLMModelSelector().select(
-        "None", "", "", "main", False, "llama_cpp", "text", "cuda", "auto", "none",
-        "unload_after_run", False, "auto", "quantized", "quanto", 4, 128,
-        8192, -1, 0, "", "", "http://127.0.0.1:11434", 300, False,
+        "None", "", "llama_cpp", "text", "cuda", "auto", "none",
+        "unload_after_run", "auto", "quantized", "quanto", 4, 128,
+        8192, -1, 0, "", "", 300,
     )[0]
 
     assert config["backend"] == "llama_cpp"
@@ -42,10 +42,22 @@ def test_selector_exposes_kv_cache_strategy_and_llama_cpp_controls(monkeypatch):
     assert config["kv_cache_quant_backend"] == "quanto"
     assert config["llama_n_ctx"] == 8192
     assert config["llama_n_gpu_layers"] == -1
-    inputs = llm_nodes.DaSiWa_LLMModelSelector.INPUT_TYPES()
-    assert list(inputs["required"])[-2:] == ["ollama_url", "ollama_timeout"]
-    assert inputs["optional"]["allow_remote_ollama"][1]["default"] is False
-    assert config["allow_remote_ollama"] is False
+
+
+def test_selector_schema_excludes_remote_execution_and_request_controls():
+    required = llm_nodes.DaSiWa_LLMModelSelector.INPUT_TYPES()["required"]
+
+    assert not {
+        "hf_repo_id", "hf_revision", "download_if_missing", "trust_remote_code", "ollama_url",
+    } & set(required)
+
+
+def test_unknown_model_does_not_download_or_create_directories(monkeypatch):
+    monkeypatch.setattr(llm_nodes, "_folder_paths_for_llm", lambda: ["/not-a-model-root"])
+    monkeypatch.setattr(llm_nodes.os, "makedirs", lambda *_: (_ for _ in ()).throw(AssertionError("must not create directories")))
+
+    with pytest.raises(FileNotFoundError, match="already installed"):
+        llm_nodes._resolve_model_path("not-installed", "")
 
 
 def test_transformers_generation_kwargs_support_quantized_kv_cache():
@@ -107,17 +119,13 @@ def test_ollama_unload_request_sets_keep_alive_zero(monkeypatch):
             return b'{"message": {"content": "done"}}'
 
     def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
         captured["payload"] = request.data
         captured["timeout"] = timeout
         return Response()
 
     monkeypatch.setattr(llm_nodes.urlrequest, "urlopen", fake_urlopen)
-    config = {
-        "model_path": "qwen3:8b",
-        "ollama_url": "http://ollama:11434",
-        "allow_remote_ollama": True,
-        "ollama_timeout": 12,
-    }
+    config = {"model_path": "qwen3:8b", "ollama_timeout": 12}
 
     response, image_count = llm_nodes._run_ollama_generation(
         config, "", "hello", 32, 0.7, 0.9, 1.0, -1, [], unload_after_request=True,
@@ -125,50 +133,6 @@ def test_ollama_unload_request_sets_keep_alive_zero(monkeypatch):
 
     assert response == "done"
     assert image_count == 0
+    assert captured["url"] == "http://127.0.0.1:11434/api/chat"
     assert captured["timeout"] == 12
     assert llm_nodes.json.loads(captured["payload"])["keep_alive"] == 0
-
-
-@pytest.mark.parametrize("allow_remote", (False, "true", 1))
-def test_ollama_remote_url_requires_explicit_boolean_opt_in(monkeypatch, allow_remote):
-    monkeypatch.setattr(
-        llm_nodes.urlrequest,
-        "urlopen",
-        lambda *_args, **_kwargs: pytest.fail("Blocked remote request reached the network boundary."),
-    )
-    config = {
-        "model_path": "qwen3:8b",
-        "ollama_url": "https://ollama.example.com",
-        "ollama_timeout": 12,
-        "allow_remote_ollama": allow_remote,
-    }
-
-    with pytest.raises(ValueError, match="allow_remote_ollama=true"):
-        llm_nodes._run_ollama_generation(
-            config, "", "hello", 32, 0.7, 0.9, 1.0, -1, [], unload_after_request=False,
-        )
-
-
-def test_ollama_loopback_url_does_not_require_remote_opt_in(monkeypatch):
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return False
-
-        def read(self):
-            return b'{"message": {"content": "local"}}'
-
-    monkeypatch.setattr(llm_nodes.urlrequest, "urlopen", lambda *_args, **_kwargs: Response())
-    config = {
-        "model_path": "qwen3:8b",
-        "ollama_url": "http://[::1]:11434",
-        "ollama_timeout": 12,
-    }
-
-    response, _ = llm_nodes._run_ollama_generation(
-        config, "", "hello", 32, 0.7, 0.9, 1.0, -1, [], unload_after_request=False,
-    )
-
-    assert response == "local"

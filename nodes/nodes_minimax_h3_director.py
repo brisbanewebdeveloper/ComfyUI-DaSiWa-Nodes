@@ -1,5 +1,9 @@
 """MiniMax H3 Director guide node."""
 import json
+import math
+import re
+
+from .helper_refmod_format import load_refmods, refmod_fingerprint
 
 from .helper_logging import log_dasiwa
 from .helper_minimax_h3_director import (
@@ -13,6 +17,69 @@ from .helper_minimax_h3_prompt_builder import (
 )
 
 BASE_MODES = {"T2VA", "I2VA", "FL2VA", "L2VA"}
+REFMOD_ALIAS = re.compile(r"<\s*refmod\s*_?\s*(\d+)(?:\s*:[^>]+)?\s*>", re.I)
+
+
+def _load_refmod_rows(rows):
+    if not isinstance(rows, list) or len(rows) > 8:
+        raise ValueError("Director supports up to 8 RefMod slots.")
+    loaded, slots = [], set()
+    for row in rows:
+        try:
+            slot = int(row.get("slot"))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("RefMod slots must be unique numbers from 1 to 8.") from exc
+        if slot < 1 or slot > 8 or slot in slots:
+            raise ValueError("RefMod slots must be unique numbers from 1 to 8.")
+        slots.add(slot)
+        if row.get("enabled", True) is False:
+            continue
+        if not row.get("name"):
+            raise ValueError(f"RefMod {slot}: name is required.")
+        try:
+            strength = float(row.get("strength", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"RefMod {slot}: strength must be between 0 and 1.") from exc
+        if not math.isfinite(strength) or not 0 <= strength <= 1:
+            raise ValueError(f"RefMod {slot}: strength must be between 0 and 1.")
+        if strength == 0:
+            continue
+        try:
+            refs = load_refmods(row["name"])
+        except (OSError, ValueError, KeyError) as exc:
+            log_dasiwa("MiniMax H3 Director", f"RefMod {slot} '{row['name']}' skipped: {exc}")
+            continue
+        for latent, meta in refs:
+            loaded.append({**meta, "slot": slot, "name": row["name"],
+                           "description": str(row.get("description", "")).strip(),
+                           "strength": strength, "kind": meta["kind"], "latent": latent * strength})
+    return sorted(loaded, key=lambda item: item["slot"])
+
+
+def _refmod_tag_map(loaded, ref_images, ref_videos, ref_video_audios, ref_audios):
+    counts = {"image": len(ref_images), "video": len(ref_videos),
+              "audio": len(ref_video_audios) + len(ref_audios)}
+    tags = {}
+    for item in loaded:
+        counts[item["kind"]] += 1
+        label = {"image": "Picture", "video": "Video", "audio": "Audio"}[item["kind"]]
+        tags.setdefault(item["slot"], []).append(f"<{label} {counts[item['kind']]}>")
+    return {slot: " ".join(labels) for slot, labels in tags.items()}
+
+
+def _translate_refmods(value, tags):
+    if isinstance(value, list):
+        return [_translate_refmods(item, tags) for item in value]
+    if isinstance(value, dict):
+        return {key: _translate_refmods(item, tags) for key, item in value.items()}
+    if not isinstance(value, str):
+        return value
+    def replace(match):
+        slot = int(match.group(1))
+        if slot not in tags:
+            raise ValueError(f"<RefMod {slot}> has no active reference. Select it or remove the tag.")
+        return tags[slot]
+    return REFMOD_ALIAS.sub(replace, value)
 
 
 def _describe_model(model) -> str:
@@ -23,6 +90,21 @@ def _describe_model(model) -> str:
 
 
 class MiniMaxH3Director:
+    @classmethod
+    def IS_CHANGED(cls, mode, prompt, width, height, duration, ref_image_size, timeline_data,
+                   builder_state="", **_kwargs):
+        if mode != "REF2VA":
+            return timeline_data
+        try:
+            rows = json.loads(timeline_data or "{}").get("refmods", [])
+        except (AttributeError, TypeError, json.JSONDecodeError):
+            return timeline_data
+        selected = []
+        for row in rows:
+            if row.get("enabled", True) is not False and row.get("name") and float(row.get("strength", 1)) != 0:
+                selected.append((row["name"], refmod_fingerprint(row["name"])))
+        return timeline_data, tuple(selected)
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -93,6 +175,7 @@ class MiniMaxH3Director:
             raise ValueError(f"MiniMax Director timeline_data is invalid JSON: {exc}") from exc
         if not isinstance(state, dict):
             raise ValueError("MiniMax Director timeline_data must contain an object")
+        refmod_items = _load_refmod_rows(state.get("refmods", [])) if mode == "REF2VA" else []
         input_scaling = "Off" if external_canvas else (state.get("resolution") or {}).get("input_scaling", "Auto")
         try:
             builder = json.loads(builder_state) if builder_state else state.get("builder_state", {})
@@ -120,7 +203,7 @@ class MiniMaxH3Director:
             input_directory = None
 
         if mode == "Image Inpaint":
-            image_items = [pair for pair in items if pair[1].get("type") == "image"]
+            image_items = [pair for pair in items if pair[1].get("type") == "image" and pair[1].get("slot", pair[0]) == 0]
             incompatible_items = [pair[1].get("type") for pair in items if pair[1].get("type") != "image"]
             if incompatible_items:
                 raise ValueError("Image Inpaint accepts image references only; video and audio references are not supported")
@@ -137,10 +220,24 @@ class MiniMaxH3Director:
             image_items = sorted((pair for pair in items if pair[1].get("type") == "image"), key=lambda pair: (pair[1].get("slot", pair[0]), pair[0]))
             if mode == "T2VA":
                 image_items = []
-            elif mode in {"I2VA", "L2VA"}:
-                image_items = image_items[:1]
+            elif mode == "I2VA":
+                # Bound to slot 0 specifically, not "whichever is lowest" -- a
+                # REF2VA-era image at slot 2+ must never get pulled in just
+                # because slot 0's image was deleted.
+                image_items = [pair for pair in image_items if pair[1].get("slot", pair[0]) == 0]
+            elif mode == "L2VA":
+                # New timelines reserve slot 0 as the FL2VA holdover and use slot 1
+                # as the closing frame. Older saved L2VA workflows used slot 0 as
+                # their only frame, so preserve that established state when no slot
+                # 1 item exists. Never fall through to unrelated REF2VA slots.
+                slot_one_items = [pair for pair in image_items if pair[1].get("slot", pair[0]) == 1]
+                image_items = slot_one_items or [pair for pair in image_items if pair[1].get("slot", pair[0]) == 0]
             else:
-                image_items = image_items[:2]
+                # FL2VA: bound to exactly {0, 1}, not "lowest 2 remaining" -- same
+                # reasoning as I2VA/L2VA above, and it also means the two items
+                # here (if both present) are always genuinely slot 0 and slot 1,
+                # so the "slot == 1" check below can no longer miss both.
+                image_items = [pair for pair in image_items if pair[1].get("slot", pair[0]) in (0, 1)]
             for index, (_, item) in enumerate(image_items):
                 value = item.get("value", item.get("tensor"))
                 if isinstance(value, str) and input_directory:
@@ -196,17 +293,33 @@ class MiniMaxH3Director:
                         else:
                             ref_audios[f"ref_audio_{len(ref_audios) + 1}"] = attached_audio
                         audios.append({**item, "duration": audio_duration(attached_audio) if isinstance(attached_audio, dict) else item.get("duration")})
-            validate_reference_limits(images=images, videos=videos, audios=audios)
+            validate_reference_limits(images=images, videos=videos, audios=audios,
+                                      audio_has_visual=bool(images or videos or refmod_items))
+
+        tag_map = _refmod_tag_map(refmod_items, ref_images, ref_videos, ref_video_audios, ref_audios)
+        prompt = _translate_refmods(prompt, tag_map)
+        for key in ("simple_prompt", "imd", "soundscape", "music"):
+            if isinstance(merged.get(key), str):
+                merged[key] = _translate_refmods(merged[key], tag_map)
+        for key in ("subject_definitions", "summary", "retention_analysis", "detailed_description",
+                    "subject_defs", "summary_text", "retention", "style_line", "detail", "soundscape", "music"):
+            if key in merged.get("ref", {}):
+                merged["ref"][key] = _translate_refmods(merged["ref"][key], tag_map)
 
         blocks = state.get("prompt_blocks", [])
         if isinstance(external_prompt_overwrite, str) and external_prompt_overwrite.strip():
-            resolved = external_prompt_overwrite
+            resolved = _translate_refmods(external_prompt_overwrite, tag_map)
         else:
             resolved = build_prompt(merged)
             if (not migrated_legacy_prompt and
                     not any(str(merged.get(key) or "").strip() for key in ("imd", "soundscape")) and
                     mode != "REF2VA"):
                 resolved = assemble_prompt(prompt, blocks)
+            resolved = _translate_refmods(resolved, tag_map)
+        descriptions = [f"{tag_map[item['slot']]}: {_translate_refmods(item['description'], tag_map)}"
+                        for item in refmod_items if item["description"]]
+        if descriptions:
+            resolved += "\n\nReference descriptions:\n" + "\n".join(descriptions)
         for issue in validate_builder_state(merged):
             log_dasiwa("MiniMax H3 Director", f"[{issue['level'].upper()}] {issue['msg']}")
         guide = {
@@ -217,6 +330,9 @@ class MiniMaxH3Director:
             "timeline": [{key: item.get(key) for key in ("id", "type", "start", "duration", "order", "trim_start", "trim_end") if key in item} for _, item in items],
             "prompt_payload": {"mode": mode, "full_prompt": resolved, "is_ref_mode": mode == "REF2VA", "subject_definitions": merged["ref"]["subject_defs"], "summary": merged["ref"]["summary_text"], "retention_analysis": merged["ref"]["retention"], "detailed_description": {"style_line": merged["ref"]["style_line"], "detail": merged["ref"]["detail"]}, "overall_soundscape": merged["ref"]["soundscape"] if mode == "REF2VA" else merged["soundscape"], "non_diegetic_music": merged["ref"]["music"] if mode == "REF2VA" else merged["music"], "imd": merged.get("imd", ""), "p2_shot": merged.get("p2_shot", ""), "last_shot": merged.get("last_shot", "")},
         }
+        if refmod_items:
+            guide["minimax_ref_items"] = refmod_items
+            guide["selection_stamp"] = max(refmod_fingerprint(item["name"])[0] for item in refmod_items)
         normalize_guide(guide)
         selected_model = ref2va_model if mode == "REF2VA" else fl2va_model
         log_dasiwa("MiniMax H3 Director", f"mode={mode}; requested_model={'ref2va_model' if mode == 'REF2VA' else 'fl2va_model'}; passed_model={_describe_model(selected_model)}; canvas={width}x{height}; frames={length}; fps={frame_rate}; refs=images:{len(ref_images)},videos:{len(ref_videos)},video_audio:{len(ref_video_audios)},audio:{len(ref_audios)}; timeline_items={len(items)}")

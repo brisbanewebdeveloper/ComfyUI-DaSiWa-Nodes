@@ -120,6 +120,24 @@ def test_gpu_info_retries_windows_cim_probe_when_empty(monkeypatch):
     assert monitor.gpu_info() == gpus
 
 
+def test_monitor_stop_ends_the_polling_thread():
+    monitor = system_monitor.DaSiWaSystemMonitor(interval=0.01)
+
+    monitor.start()
+    assert monitor.running is True
+    monitor.stop()
+
+    assert monitor.running is False
+
+
+def test_monitor_control_route_stops_telemetry_and_rejects_disabled_snapshots():
+    source = MODULE_PATH.read_text(encoding="utf-8")
+
+    assert '@PromptServer.instance.routes.post("/dasiwa/system-monitor/enabled")' in source
+    assert 'return web.json_response({"error": "System Monitor is disabled."}, status=503)' in source
+    assert 'return web.json_response({"enabled": monitor.running})' in source
+
+
 def test_snapshot_reports_partition_capacity_and_io_rates(monkeypatch):
     monitor = system_monitor.DaSiWaSystemMonitor()
     partition = types.SimpleNamespace(device="/dev/nvme0n1p2", mountpoint="/", fstype="ext4")

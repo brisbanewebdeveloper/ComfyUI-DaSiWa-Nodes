@@ -21,7 +21,7 @@ function transcodedVideoUrl(video) {
     return api.apiURL(`/dasiwa/enhanced-video-preview?${params}`);
 }
 
-const NATIVE_BROWSER_VIDEO = new Set(["AV1|WebM|8", "VP9|WebM|8", "H.264|MP4|8"]);
+const NATIVE_BROWSER_VIDEO = new Set(["H.264|MP4|8"]);
 
 function shouldUseTranscodedPreview(video) {
     const key = `${video.codec}|${video.container}|${video.bit_depth ?? 8}`;
@@ -103,7 +103,7 @@ function showHelpDialog() {
             <dt><b>image animation</b></dt><dd>Animated WebP and Animated AVIF are manual image-animation outputs. They are excluded from Auto codec/container selection, ignore the codec choice, and omit connected audio.</dd>
             <dt><b>bit depth / quality</b></dt><dd>With an explicit codec, Auto bit depth detects 8- or 10-bit frame precision; codec Auto uses browser-compatible 8-bit output. Lower quality values retain more detail and create larger files.</dd>
             <dt><b>audio</b></dt><dd>Connect AUDIO to mux it. Choose Auto, AAC, Opus, or MP3 plus a target bitrate; Auto uses Opus for WebM and AAC for MKV/MP4. Crop to audio ends video at the audio duration. Preview sound is on only while the pointer is over the video. Check <b>Mute</b> to keep the preview permanently silent; the choice is saved with the node.</dd>
-            <dt><b>preview</b></dt><dd>The native output is used when the browser supports it. Unsupported outputs are transcoded to a temporary H.264 response while streaming; no preview sidecar is written. Autoplay and Mute are also saved with the node.</dd>
+            <dt><b>preview</b></dt><dd>H.264/MP4 can use the native output. AV1, VP9, HEVC, 10-bit, and other outputs use a cached seekable H.264/AAC preview with one-second keyframes and HTTP range support. Autoplay and Mute are saved with the node.</dd>
             <dt><b>other</b></dt><dd>Ping-pong reverses interior frames for a loop. Save metadata embeds the ComfyUI workflow. Pass frames keeps frames available downstream.</dd>
         </dl>`;
     document.body.append(dialog);
@@ -245,7 +245,7 @@ app.registerExtension({
                     preview.load();
                     return;
                 }
-                resolution.textContent = "Preview unavailable (FFmpeg or browser decoder missing)";
+                resolution.textContent = "Preview unavailable (PyAV transcode or browser decoder failed)";
                 duration.textContent = "";
                 fps.textContent = "";
             });

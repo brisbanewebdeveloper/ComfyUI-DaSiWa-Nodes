@@ -6,11 +6,9 @@ does not hold a live reference to a very large model.
 """
 
 import gc
-from ipaddress import ip_address
 import json
 import os
 from urllib import error as urlerror
-from urllib.parse import urlsplit
 from urllib import request as urlrequest
 from dataclasses import dataclass
 
@@ -26,6 +24,7 @@ except ImportError:
 
 
 _LLM_CACHE = {}
+OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
 _IMAGE_RESAMPLING = getattr(Image, "Resampling", None)
 _PIL_LANCZOS = (
     getattr(_IMAGE_RESAMPLING, "LANCZOS")
@@ -175,60 +174,7 @@ def _list_llm_models():
     return ["None"] + models
 
 
-def _safe_repo_dir_name(repo_id, revision):
-    repo_name = repo_id.strip().replace("/", "--")
-    revision_name = (revision or "").strip()
-    if revision_name and revision_name != "main":
-        repo_name = f"{repo_name}--{revision_name.replace('/', '--')}"
-    return repo_name
-
-
-def _resolve_hf_repo_path(hf_repo_id, hf_revision, download_if_missing):
-    repo_id = (hf_repo_id or "").strip()
-    if not repo_id:
-        return None
-
-    local_name = _safe_repo_dir_name(repo_id, hf_revision)
-    for base in _folder_paths_for_llm():
-        candidate = os.path.join(base, local_name)
-        if os.path.isfile(os.path.join(candidate, "config.json")):
-            return candidate
-
-    nested_name = repo_id.replace("/", os.sep)
-    for base in _folder_paths_for_llm():
-        candidate = os.path.join(base, nested_name)
-        if os.path.isfile(os.path.join(candidate, "config.json")):
-            return candidate
-
-    if not download_if_missing:
-        raise FileNotFoundError(
-            f"HF repo '{repo_id}' is not present in models/llm. "
-            "Enable download_if_missing to fetch it."
-        )
-
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise ImportError(
-            "Downloading Hugging Face repos requires huggingface_hub. "
-            "Install it in the ComfyUI environment with: pip install huggingface_hub"
-        ) from exc
-
-    local_dir = os.path.join(_LLM_DIR, local_name)
-    os.makedirs(local_dir, exist_ok=True)
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    log_dasiwa("LLM Nodes", f"Downloading HF repo '{repo_id}' to {local_dir}")
-    snapshot_download(
-        repo_id=repo_id,
-        revision=(hf_revision or "main").strip() or "main",
-        local_dir=local_dir,
-        token=token or None,
-    )
-    return _normalize_model_path(local_dir)
-
-
-def _resolve_model_path(model_name, custom_path, hf_repo_id="", hf_revision="main", download_if_missing=False,
-                        allow_gguf=False):
+def _resolve_model_path(model_name, custom_path, allow_gguf=False):
     path = (custom_path or "").strip()
     if path:
         path = os.path.expanduser(path)
@@ -242,12 +188,8 @@ def _resolve_model_path(model_name, custom_path, hf_repo_id="", hf_revision="mai
             raise FileNotFoundError(f"LLM path does not exist: {path}")
         return _normalize_model_path(path, allow_gguf=allow_gguf)
 
-    hf_path = _resolve_hf_repo_path(hf_repo_id, hf_revision, download_if_missing)
-    if hf_path:
-        return _normalize_model_path(hf_path, allow_gguf=allow_gguf)
-
     if not model_name or model_name == "None":
-        raise ValueError("Choose an LLM model or provide a custom_path.")
+        raise ValueError("Choose an already installed LLM model or provide a custom_path.")
 
     for base in _folder_paths_for_llm():
         candidate = os.path.join(base, model_name)
@@ -261,7 +203,11 @@ def _resolve_model_path(model_name, custom_path, hf_repo_id="", hf_revision="mai
     if full_path and os.path.exists(full_path):
         return _normalize_model_path(full_path, allow_gguf=allow_gguf)
 
-    raise FileNotFoundError(f"Could not find LLM model: {model_name}")
+    raise FileNotFoundError(
+        "LLM model is not already installed. Put the complete model folder in "
+        "ComfyUI/models/llm or choose an existing local model. Runtime downloads "
+        "are disabled for security."
+    )
 
 
 def _normalize_model_path(path, allow_gguf=False):
@@ -384,36 +330,6 @@ def _generation_cache_kwargs(config, use_kv_cache):
     return kwargs
 
 
-def _validate_ollama_url(ollama_url: str, allow_remote: bool) -> str:
-    """Validate the Ollama API boundary and require opt-in for non-loopback hosts."""
-    base_url = (ollama_url or "").strip().rstrip("/")
-    try:
-        parsed = urlsplit(base_url)
-        parsed.port
-    except ValueError as exc:
-        raise ValueError("Enter a valid Ollama server URL.") from exc
-
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("Ollama URL must use http or https and include a host.")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("Ollama URL must not contain credentials.")
-    if parsed.query or parsed.fragment:
-        raise ValueError("Ollama URL must not contain a query string or fragment.")
-
-    hostname = parsed.hostname.rstrip(".").lower()
-    is_loopback = hostname == "localhost" or hostname.endswith(".localhost")
-    if not is_loopback:
-        try:
-            is_loopback = ip_address(hostname).is_loopback
-        except ValueError:
-            pass
-    if not is_loopback and allow_remote is not True:
-        raise ValueError(
-            "Remote Ollama URLs require allow_remote_ollama=true. Only enable it for a trusted server."
-        )
-    return base_url
-
-
 def _load_transformers_model(config, need_vision):
     try:
         from transformers import AutoProcessor, AutoTokenizer
@@ -441,7 +357,6 @@ def _load_transformers_model(config, need_vision):
         config["device"],
         config["dtype"],
         config["quantization"],
-        config["trust_remote_code"],
         task,
         config["attention_implementation"],
         is_vision,
@@ -452,7 +367,7 @@ def _load_transformers_model(config, need_vision):
 
     dtype = _torch_dtype(config["dtype"])
     common_kwargs = {
-        "trust_remote_code": config["trust_remote_code"],
+        "trust_remote_code": False,
         "low_cpu_mem_usage": True,
     }
     if dtype != "auto":
@@ -488,7 +403,7 @@ def _load_transformers_model(config, need_vision):
         try:
             processor = AutoProcessor.from_pretrained(
                 model_path,
-                trust_remote_code=config["trust_remote_code"],
+                trust_remote_code=False,
             )
             tokenizer = getattr(processor, "tokenizer", None)
         except Exception as exc:
@@ -497,7 +412,7 @@ def _load_transformers_model(config, need_vision):
     if tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(
             model_path,
-            trust_remote_code=config["trust_remote_code"],
+            trust_remote_code=False,
         )
 
     model_classes = []
@@ -602,16 +517,12 @@ def _run_ollama_generation(config, system_prompt, user_text, max_new_tokens, tem
     if unload_after_request:
         payload_data["keep_alive"] = 0
     payload = json.dumps(payload_data).encode()
-    base_url = _validate_ollama_url(
-        config["ollama_url"], config.get("allow_remote_ollama", False)
-    )
-    endpoint = base_url + "/api/chat"
-    request = urlrequest.Request(endpoint, data=payload, headers={"Content-Type": "application/json"})
+    request = urlrequest.Request(OLLAMA_CHAT_URL, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urlrequest.urlopen(request, timeout=config["ollama_timeout"]) as response:
             result = json.loads(response.read().decode())
     except (urlerror.URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"Could not reach Ollama at {endpoint}: {exc}") from exc
+        raise RuntimeError(f"Could not reach Ollama at {OLLAMA_CHAT_URL}: {exc}") from exc
     try:
         return result["message"]["content"].strip(), 0
     except (KeyError, TypeError) as exc:
@@ -815,16 +726,12 @@ class DaSiWa_LLMModelSelector:
             "required": {
                 "model": (_list_llm_models(), {"description": "Model folder under ComfyUI/models/llm. Use a full Hugging Face-style folder with config/tokenizer files."}),
                 "custom_path": ("STRING", {"default": "", "description": "Optional absolute path, or relative path under ComfyUI/models/llm. Overrides model when set."}),
-                "hf_repo_id": ("STRING", {"default": "", "description": "Optional Hugging Face repo id, for example Qwen/Qwen2.5-VL-7B-Instruct. Overrides model when set."}),
-                "hf_revision": ("STRING", {"default": "main", "description": "HF branch, tag, or commit. Used when downloading or locating a repo copy."}),
-                "download_if_missing": ("BOOLEAN", {"default": False, "description": "Download hf_repo_id into ComfyUI/models/llm if it is not already present."}),
-                "backend": (["transformers", "llama_cpp", "ollama"], {"default": "transformers", "description": "Transformers loads complete Hugging Face folders, llama.cpp loads local GGUF files, and Ollama calls its local or remote API."}),
+                "backend": (["transformers", "llama_cpp", "ollama"], {"default": "transformers", "description": "Transformers loads complete local model folders, llama.cpp loads local GGUF files, and Ollama calls its loopback API."}),
                 "task": (["auto", "text", "vision"], {"default": "auto", "description": "Use vision when analyzing connected images/frame batches."}),
                 "device": (["auto", "cuda", "cpu"], {"default": "auto", "description": "Device placement for the model."}),
                 "dtype": (["auto", "float16", "bfloat16", "float32"], {"default": "auto", "description": "Model dtype. Auto follows the model config when possible."}),
                 "quantization": (["none", "8bit", "4bit"], {"default": "none", "description": "Optional bitsandbytes quantization. Requires bitsandbytes installed."}),
                 "cache_mode": (["cached", "unload_after_run"], {"default": "unload_after_run", "description": "Cached is faster. Unload after run frees RAM/VRAM after every output."}),
-                "trust_remote_code": ("BOOLEAN", {"default": False, "description": "Allow custom model code from the model folder."}),
                 "attention_implementation": (["auto", "sdpa", "flash_attention_2", "eager"], {"default": "auto", "description": "Optional attention backend override."}),
                 "kv_cache_implementation": (["default", "dynamic", "static", "quantized"], {"default": "default", "description": "Transformers KV-cache strategy. Quantized reduces generation memory but requires a compatible Transformers cache backend."}),
                 "kv_cache_quant_backend": (["quanto", "hqq"], {"default": "quanto", "description": "Backend used only by the quantized Transformers KV cache."}),
@@ -835,12 +742,8 @@ class DaSiWa_LLMModelSelector:
                 "llama_n_threads": ("INT", {"default": 0, "min": 0, "max": 256, "step": 1, "description": "llama.cpp CPU threads. 0 lets llama.cpp choose."}),
                 "llama_chat_format": ("STRING", {"default": "", "description": "Optional llama.cpp chat format, for example chatml. Leave empty to use GGUF metadata."}),
                 "ollama_model": ("STRING", {"default": "", "description": "Ollama model name, for example qwen3:8b. Required when backend is ollama."}),
-                "ollama_url": ("STRING", {"default": "http://127.0.0.1:11434", "description": "Ollama server base URL."}),
-                "ollama_timeout": ("INT", {"default": 300, "min": 1, "max": 3600, "step": 1, "description": "Ollama request timeout in seconds."}),
-            },
-            "optional": {
-                "allow_remote_ollama": ("BOOLEAN", {"default": False, "description": "Allow Ollama requests to a non-loopback host. Enable only for a trusted server."}),
-            },
+                "ollama_timeout": ("INT", {"default": 300, "min": 1, "max": 3600, "step": 1, "description": "Loopback Ollama request timeout in seconds."}),
+            }
         }
 
     RETURN_TYPES = ("DASIWA_LLM_CONFIG",)
@@ -848,33 +751,26 @@ class DaSiWa_LLMModelSelector:
     FUNCTION = "select"
     CATEGORY = "DaSiWa/LLM"
 
-    def select(self, model, custom_path, hf_repo_id, hf_revision, download_if_missing,
-               backend, task, device, dtype, quantization, cache_mode, trust_remote_code,
+    def select(self, model, custom_path, backend, task, device, dtype, quantization, cache_mode,
                attention_implementation, kv_cache_implementation, kv_cache_quant_backend,
                kv_cache_nbits, kv_cache_residual_length, llama_n_ctx, llama_n_gpu_layers,
-               llama_n_threads, llama_chat_format, ollama_model, ollama_url, ollama_timeout,
-               allow_remote_ollama=False):
+               llama_n_threads, llama_chat_format, ollama_model, ollama_timeout):
         if backend == "ollama":
             model_path = ollama_model.strip()
             if not model_path:
                 raise ValueError("Enter ollama_model when backend is ollama.")
-            ollama_url = _validate_ollama_url(ollama_url, allow_remote_ollama is True)
         else:
             model_path = _resolve_model_path(
-                model, custom_path, hf_repo_id, hf_revision, download_if_missing,
-                allow_gguf=backend == "llama_cpp",
+                model, custom_path, allow_gguf=backend == "llama_cpp",
             )
         return ({
             "model_path": model_path,
-            "hf_repo_id": hf_repo_id,
-            "hf_revision": hf_revision,
             "backend": backend,
             "task": task,
             "device": device,
             "dtype": dtype,
             "quantization": quantization,
             "cache_mode": cache_mode,
-            "trust_remote_code": bool(trust_remote_code),
             "attention_implementation": attention_implementation,
             "kv_cache_implementation": kv_cache_implementation,
             "kv_cache_quant_backend": kv_cache_quant_backend,
@@ -884,8 +780,6 @@ class DaSiWa_LLMModelSelector:
             "llama_n_gpu_layers": llama_n_gpu_layers,
             "llama_n_threads": llama_n_threads,
             "llama_chat_format": llama_chat_format.strip(),
-            "ollama_url": ollama_url.strip(),
-            "allow_remote_ollama": allow_remote_ollama is True,
             "ollama_timeout": ollama_timeout,
         },)
 

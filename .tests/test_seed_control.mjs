@@ -79,11 +79,17 @@ const topLevelFunctionNames = [...source.matchAll(/^(?:function |const )[A-Za-z0
 const nonUnique = topLevelFunctionNames.filter(name => !name.startsWith("dasiwaSeedControl") && !name.startsWith("DASIWASEED"));
 assert.equal(nonUnique.length, 0, `top-level declarations must be uniquely prefixed, found: ${nonUnique.join(", ")}`);
 
-// ---- Fixed panel column: fields keep the same width when the node resizes ----
-assert.match(source, /DASIWASEED_PANEL_WIDTH/, "the panel must use a fixed column width constant");
-assert.match(source, /width:\$\{DASIWASEED_PANEL_WIDTH\}px/, "the root panel must render at the fixed column width, not 100%");
-assert.match(source, /domWidget\.computeSize = \(\) => \[DASIWASEED_COMPUTE_SIZE_WIDTH/, "the widget size must be fixed, not follow the node width");
-assert.match(source, /flex:1;min-width:0/, "the last-10 history must flex to fill the fixed row width");
+// ---- Responsive layout: wide shares one line; narrow wraps below the seed ----
+assert.match(source, /DASIWASEED_TWO_LINE_PANEL_WIDTH = 384/, "the two-row layout must define its minimum width");
+assert.match(source, /if \(panelWidth >= DASIWASEED_WIDE_PANEL_WIDTH\) return 50/, "a wide one-line node must have a compact DOM-widget height");
+assert.match(source, /if \(panelWidth >= DASIWASEED_TWO_LINE_PANEL_WIDTH\) return 96/, "a two-line node must not retain the three-line minimum height");
+assert.match(source, /flex-wrap:wrap/, "control rows must wrap as the node becomes narrower");
+assert.match(source, /\.ds-seed-row\{display:flex;align-items:center;gap:5px;min-width:0;flex:1 1 190px/, "each non-seed control group must have a stable wrapping width");
+assert.match(source, /\.ds-seed-control > \.ds-seed-row:first-child\{flex:2 1 240px/, "the seed field must retain priority and width before controls wrap below it");
+assert.doesNotMatch(source, /grid-row:1 \/ span 2/, "the wide layout must not stack rows 2 and 3 beside the seed");
+assert.match(source, /dasiwaSeedControlSyncWidth/, "the DOM root must track node-resize width changes");
+assert.match(source, /node\.onResize = function \(size\)/, "node resize must update the responsive panel width");
+assert.match(source, /flex:0 0 128px;min-width:0/, "the Last-10 trigger must keep a fixed width while the node resizes");
 assert.match(source, /historyRow\.append\(last, history\)/, "row 3 must hold Use Last and the last-10 dropdown");
 // Seed number must always display fully: the column is wide enough for a
 // 16-digit monospace seed and the font auto-shrinks if it still overflows.
