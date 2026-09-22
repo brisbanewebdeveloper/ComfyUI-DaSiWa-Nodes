@@ -461,9 +461,14 @@ function install(node) {
     counter.style.cssText = "margin-left:auto;color:#8fa3b2;font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;padding-top:4px";
     helpers.appendChild(counter);
     const updateCount = () => {
-      let total = 0;
-      panel.querySelectorAll("textarea").forEach(ta => { total += (ta.value || "").length; });
-      counter.textContent = `${total} chars`;
+      try {
+        const text = previewTextFor(mode(), externalPromptWidget()?.value);
+        counter.textContent = `${text.length} chars`;
+      } catch (e) {
+        let total = 0;
+        panel.querySelectorAll("textarea").forEach(ta => { total += (ta.value || "").length; });
+        counter.textContent = `${total} chars`;
+      }
     };
     panel.addEventListener("input", updateCount);
     updateCount();
