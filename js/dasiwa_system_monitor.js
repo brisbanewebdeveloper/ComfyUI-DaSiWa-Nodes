@@ -271,10 +271,12 @@ function renderLite(panel, snapshot) {
 }
 
 function renderFull(panel, snapshot) {
-    panel.className = "dasiwa-monitor-display is-full";
     const root = monitorRoot;
     if (settings.dockSide === "top") {
         // Toolbar clips overflow — render full view as a body-level overlay anchored to the toolbar.
+        // Keep inline panel compact so it doesn't break toolbar layout.
+        panel.className = "dasiwa-monitor-display is-lite";
+        panel.innerHTML = `<span class="dasiwa-monitor-metric cpu" style="--fill:0%"><span>FULL</span><strong>ON</strong></span>`;
         if (!fullOverlay) {
             fullOverlay = document.createElement("div");
             fullOverlay.id = "dasiwa-monitor-full-overlay";
@@ -298,6 +300,7 @@ function renderFull(panel, snapshot) {
     } else {
         // Side docks don't clip — render inline as before.
         if (fullOverlay) fullOverlay.hidden = true;
+        panel.className = "dasiwa-monitor-display is-full";
         panel.innerHTML = `
             <div class="dasiwa-monitor-full-header"><strong>System Monitor</strong><span>last ${history.length}s</span></div>
             <div class="dasiwa-monitor-full-grid">
