@@ -4,11 +4,11 @@ A compact, non-intrusive system telemetry bar integrated directly into the Comfy
 
 ## Overview
 
-The System Monitor displays real-time resource utilization in the ComfyUI header area. A DaSiWa settings button sits directly beside the monitor and is the home for settings shared by DaSiWa nodes as they are added.
+The System Monitor displays real-time resource utilization in the ComfyUI header area. Its local display controls remain on the monitor itself; the global switch lives at **ComfyUI → Settings → Other → DaSiWa → System Monitor**.
 
 The current settings are stored in the browser, so they remain active after a ComfyUI page reload:
 
-- **Show system monitor:** hides or shows the monitor while keeping the settings button available.
+- **Enable System Monitor:** the global DaSiWa switch. Off removes the monitor toolbar/floating UI, dock targets, frontend listeners, and backend telemetry polling. On starts and mounts them again.
 - **Lite:** the default compact fixed-width, color-coded toolbar meters. Each meter shows a label, a numeric value, and a proportional background fill representing 0–100% usage.
 - **Full:** a spacious monitor panel with every available metric, its current value and detail, plus a live graph covering the most recent 60 telemetry samples (normally about one minute).
 - **Dock:** choose the top toolbar, left side, or right side from the settings menu. The selection is retained after reload.
@@ -94,12 +94,13 @@ A ResizeObserver monitors window changes and adjusts visibility dynamically with
 
 ## API Endpoints
 
-The backend exposes two REST endpoints for external consumption:
+The backend exposes three REST endpoints:
 
-- `/dasiwa/system-monitor` — Full system snapshot (JSON)
-- `/dasiwa/system-monitor/gpus` — GPU-specific data only (JSON)
+- `/dasiwa/system-monitor` — Full system snapshot (JSON; returns 503 when disabled)
+- `/dasiwa/system-monitor/gpus` — GPU-specific data only (JSON; returns 503 when disabled)
+- `POST /dasiwa/system-monitor/enabled` — Starts or stops telemetry using `{ "enabled": true | false }`
 
-Additionally, updates are broadcast via WebSocket event `dasiwa.system_monitor` approximately once per second.
+Updates are broadcast via WebSocket event `dasiwa.system_monitor` approximately once per second while the monitor is enabled.
 
 ## Troubleshooting
 
@@ -112,10 +113,9 @@ Additionally, updates are broadcast via WebSocket event `dasiwa.system_monitor` 
 
 ## Disabling
 
-Two independent levels:
+Use **ComfyUI → Settings → Other → DaSiWa → System Monitor** to disable the monitor. This removes every monitor element from the ComfyUI UI, unregisters its frontend event listeners, stops the backend polling thread, and makes snapshot routes return 503 until re-enabled. The preference is browser-local and is synchronized when that browser loads ComfyUI.
 
-- **Browser-local (UI):** Use the settings button next to the monitor and disable **Show system monitor**. This only hides the panel in your browser; it does not stop the lightweight backend telemetry thread, which keeps the WebSocket event and REST endpoints live so re-enabling is instant without a ComfyUI restart.
-- **Backend (real disable):** Set the `DASWA_SYSTEM_MONITOR` environment variable to `0`, `false`, `no`, `off`, `disable`, or `disabled` before starting ComfyUI. This skips starting the polling thread entirely — no `psutil` sampling and no `nvidia-smi`/`rocm-smi` subprocess calls. Any other value (or an unset variable) leaves the monitor on, preserving the default local-run behavior.
+For a server that must never start telemetry before a browser connects, set `DASWA_SYSTEM_MONITOR` to `0`, `false`, `no`, `off`, `disable`, or `disabled` before starting ComfyUI. The settings switch can still enable it later.
 
 ```bash
 # bash / zsh

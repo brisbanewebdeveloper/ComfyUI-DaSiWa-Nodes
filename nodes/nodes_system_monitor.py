@@ -344,12 +344,21 @@ class DaSiWaSystemMonitor:
             "gpus": self.gpu_info(),
         }
 
+    @property
+    def running(self):
+        return bool(self._thread and self._thread.is_alive())
+
     def start(self):
-        if self._thread and self._thread.is_alive():
+        if self.running:
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="DaSiWaSystemMonitor", daemon=True)
         self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=self.interval + 1)
 
     def _run(self):
         while not self._stop.is_set():
@@ -359,13 +368,32 @@ class DaSiWaSystemMonitor:
 
 
 monitor = DaSiWaSystemMonitor()
-if PromptServer is not None and _monitor_enabled():
-    monitor.start()
+if PromptServer is not None:
+    if _monitor_enabled():
+        monitor.start()
 
     @PromptServer.instance.routes.get("/dasiwa/system-monitor")
     async def system_monitor_snapshot(request):
+        if not monitor.running:
+            return web.json_response({"error": "System Monitor is disabled."}, status=503)
         return web.json_response(monitor.snapshot())
 
     @PromptServer.instance.routes.get("/dasiwa/system-monitor/gpus")
     async def system_monitor_gpus(request):
+        if not monitor.running:
+            return web.json_response({"error": "System Monitor is disabled."}, status=503)
         return web.json_response(monitor.gpu_info())
+
+    @PromptServer.instance.routes.post("/dasiwa/system-monitor/enabled")
+    async def system_monitor_enabled(request):
+        try:
+            enabled = (await request.json()).get("enabled")
+        except (AttributeError, ValueError, json.JSONDecodeError):
+            return web.json_response({"error": "Expected a JSON enabled boolean."}, status=400)
+        if not isinstance(enabled, bool):
+            return web.json_response({"error": "Expected a JSON enabled boolean."}, status=400)
+        if enabled:
+            monitor.start()
+        else:
+            monitor.stop()
+        return web.json_response({"enabled": monitor.running})

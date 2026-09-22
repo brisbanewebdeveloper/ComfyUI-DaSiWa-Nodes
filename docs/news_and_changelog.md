@@ -2,9 +2,15 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers the last two months: **2026-06-29 → 2026-09-19**. The first commit in this window is from 2026-07-05; older history lives in the git log. All entries are listed **newest first**.
+This changelog covers the last two months: **2026-06-29 → 2026-09-21**. The first commit in this window is from 2026-07-05; older history lives in the git log. All entries are listed **newest first**.
 
 ## News
+
+- **MiniMax H3 Director: RefMod lane & prompt-mode fixes (09-22):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load (falls back to saved `media_type` when library data isn't loaded yet). Remove button in REFMOD overlay now updates the timeline immediately. Clear button disables all refmods in the overlay and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes show a single Image row only (no clutter). Track height adapts to fit shown lanes instead of fixed 280px minimum. Simple/Structured prompt mode switching now preserves content bidirectionally — switching Structured → Simple flattens fields, Simple → Structured parses them back; unlabeled text dumps into detailed_description. Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that updates live as you type. Refmod X button in slotline now disables the refmod in the overlay instead of trying to remove it from items. Strength changes reflect immediately in the timeline without requiring a lane re-click. Version bump to 0.4.52.
+
+- **System Monitor: global DaSiWa settings switch (09-21):** **Settings → Other → DaSiWa → System Monitor** now controls the monitor completely. Off removes its toolbar/floating UI, dock targets, frontend listeners, and backend telemetry polling; on mounts and starts them again. Version bump to 0.4.51.
+
+- **Settings About: installed nodepack version (09-21):** ComfyUI → Settings → About now shows a linked `DaSiWa Custom Nodes v…` badge, using the packaged release version. Version bump to 0.4.50.
 
 - **MiniMax H3 Director: upstream RefMod v5 bundles (09-19):** REF2VA now loads current standalone and bundled RefMods created by ComfyUI-MiniMaxH3Mod. Bundle members are expanded into their image, video, and audio references; one `<RefMod N>` alias resolves to every contained native label in member order. Version bump to 0.4.47.
 
@@ -43,6 +49,9 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.4.52 | 09-22 | MiniMax H3 Director: RefMod lane fixes, prompt-mode content preservation, char counter, immediate overlay sync |
+| 0.4.51 | 09-21 | System Monitor: global DaSiWa settings switch that fully mounts/stops telemetry |
+| 0.4.50 | 09-21 | Settings About: visible installed DaSiWa Custom Nodes version badge |
 | 0.4.47 | 09-19 | MiniMax H3 Director: upstream RefMod v5 bundle loading |
 | 0.4.45 | 09-19 | Enhanced Video Combine: `%seed%` filename token via an optional seed input |
 | 0.4.43 | 09-18 | MiniMax H3 Director: RefMod timeline visualization, missing-file resilience, upstream credit to ComfyUI-MiniMaxH3Mod |
@@ -81,6 +90,8 @@ Quick reference for the version bumps inside this window, newest first:
 ## Changelog
 
 ### MiniMax H3 Director (v1)
+
+- **09-22:** **RefMod lane & prompt-mode fixes (0.4.52):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load — falls back to the refmod's saved `media_type` when library data isn't loaded yet, so tags are unique until REFMOD panel opens. Remove button in REFMOD overlay now calls `render()` after removal so the timeline updates immediately instead of requiring a lane re-click. Clear button (modebar) now disables all refmods in the overlay (`enabled = false`) and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes (I2VA, L2VA, FL2VA, Image Inpaint) show a single-row Image lane only — no clutter from unused Video/Audio rows. Track height adapts to fit shown lanes (min-height 0 instead of fixed 280px). Simple/Structured prompt mode switching preserves content bidirectionally: Structured → Simple flattens fields into `field: value` lines; Simple → Structured parses those labels back into separate fields, and if no recognized labels are found the full text dumps into `detailed_description` (REF2VA) or `integrated_multimodal_description` (other modes). Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that sums characters across all textareas and updates live on every keystroke. Refmod X button in the slotline now sets the refmod's `enabled = false` in the overlay (matching overlay behavior) instead of calling `remove()` which only works on regular media items. Strength changes in the REFMOD overlay reflect immediately in the timeline clip without requiring a lane re-click.
 
 - **09-19:** **Upstream RefMod v5 bundles (0.4.47):** The REF2VA overlay recognizes RefMod containers from ComfyUI-MiniMaxH3Mod as well as standalone image/video/audio files. It expands each `ref_N` member into its native reference; `<RefMod N>` resolves to all labels from that selected bundle in member order.
 
