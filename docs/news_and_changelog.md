@@ -2,15 +2,23 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers the last two months: **2026-06-29 → 2026-09-21**. The first commit in this window is from 2026-07-05; older history lives in the git log. All entries are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-09-23**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
 
+- **Unreleased — Registry automation:** The failing scheduled Registry-status workflow is removed. On a future `pyproject.toml` version bump, the publish workflow will retain the newly active release, deprecate its four immediate predecessors, and unpublish older versions. No Registry versions are changed by the workflow edit itself.
+
+- **Free Memory toolbar control (09-23, 0.4.55):** A separate DaSiWa-logo button beside the top-docked monitor offers **Free VRAM** (unload ComfyUI-managed models) and **Free System RAM** (unload models and reset the execution cache). It stays available when monitoring is off, has its own DaSiWa setting, and closes its menu on outside clicks. The monitor chips, settings button, and memory button now align at 36px height. [Usage and limits →](system_monitor.md#free-memory-toolbar-button)
+- **Director prompt count and monitor overlays (09-22, 0.4.53–0.4.54):** The prompt character counter now counts the assembled prompt, including structured headers. Full monitor mode and its settings menu render above toolbar content instead of being clipped; the Full view retains meter colors and fill bars.
+
 - **MiniMax H3 Director: RefMod lane & prompt-mode fixes (09-22):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load (falls back to saved `media_type` when library data isn't loaded yet). Remove button in REFMOD overlay now updates the timeline immediately. Clear button disables all refmods in the overlay and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes show a single Image row only (no clutter). Track height adapts to fit shown lanes instead of fixed 280px minimum. Simple/Structured prompt mode switching now preserves content bidirectionally — switching Structured → Simple flattens fields, Simple → Structured parses them back; unlabeled text dumps into detailed_description. Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that updates live as you type. Refmod X button in slotline now disables the refmod in the overlay instead of trying to remove it from items. Strength changes reflect immediately in the timeline without requiring a lane re-click. Version bump to 0.4.52.
+
+- **Recent stability fixes (09-19, 0.4.48–0.4.49):** RefMod image dimensions are read correctly from 5D latents; Enhanced Video Combine no longer exposes videos as image assets; stale drive mountpoints no longer break monitor polling. The experimental MiniMax H3 Latent Upscaler was removed after output-quality issues—it is not a shipped node.
 
 - **System Monitor: global DaSiWa settings switch (09-21):** **Settings → Other → DaSiWa → System Monitor** now controls the monitor completely. Off removes its toolbar/floating UI, dock targets, frontend listeners, and backend telemetry polling; on mounts and starts them again. Version bump to 0.4.51.
 
 - **Settings About: installed nodepack version (09-21):** ComfyUI → Settings → About now shows a linked `DaSiWa Custom Nodes v…` badge, using the packaged release version. Version bump to 0.4.50.
+- **Recent stability fixes (09-19, 0.4.48–0.4.49):** RefMod image dimensions are read correctly from 5D latents; Enhanced Video Combine no longer exposes videos as image assets; stale drive mountpoints no longer break monitor polling. The experimental MiniMax H3 Latent Upscaler was removed after output-quality issues—it is not a shipped node.
 
 - **MiniMax H3 Director: upstream RefMod v5 bundles (09-19):** REF2VA now loads current standalone and bundled RefMods created by ComfyUI-MiniMaxH3Mod. Bundle members are expanded into their image, video, and audio references; one `<RefMod N>` alias resolves to every contained native label in member order. Version bump to 0.4.47.
 
@@ -49,9 +57,13 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.4.55 | 09-23 | Independent Free Memory toolbar button; VRAM/model unload and RAM/cache reset actions |
+| 0.4.54 | 09-22 | Director prompt counter includes assembled structured headers |
+| 0.4.53 | 09-22 | Monitor Full overlay and settings-menu clipping, colors, and fill bars fixed |
 | 0.4.52 | 09-22 | MiniMax H3 Director: RefMod lane fixes, prompt-mode content preservation, char counter, immediate overlay sync |
 | 0.4.51 | 09-21 | System Monitor: global DaSiWa settings switch that fully mounts/stops telemetry |
 | 0.4.50 | 09-21 | Settings About: visible installed DaSiWa Custom Nodes version badge |
+| 0.4.49 | 09-19 | Experimental H3 Latent Upscaler (subsequently removed before 0.4.50 due to output-quality issues) |
 | 0.4.47 | 09-19 | MiniMax H3 Director: upstream RefMod v5 bundle loading |
 | 0.4.45 | 09-19 | Enhanced Video Combine: `%seed%` filename token via an optional seed input |
 | 0.4.43 | 09-18 | MiniMax H3 Director: RefMod timeline visualization, missing-file resilience, upstream credit to ComfyUI-MiniMaxH3Mod |
@@ -91,8 +103,11 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### MiniMax H3 Director (v1)
 
+- **09-22 (0.4.54):** The character counter measures the final assembled prompt, including structured field headers, rather than only raw textarea text.
+
 - **09-22:** **RefMod lane & prompt-mode fixes (0.4.52):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load — falls back to the refmod's saved `media_type` when library data isn't loaded yet, so tags are unique until REFMOD panel opens. Remove button in REFMOD overlay now calls `render()` after removal so the timeline updates immediately instead of requiring a lane re-click. Clear button (modebar) now disables all refmods in the overlay (`enabled = false`) and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes (I2VA, L2VA, FL2VA, Image Inpaint) show a single-row Image lane only — no clutter from unused Video/Audio rows. Track height adapts to fit shown lanes (min-height 0 instead of fixed 280px). Simple/Structured prompt mode switching preserves content bidirectionally: Structured → Simple flattens fields into `field: value` lines; Simple → Structured parses those labels back into separate fields, and if no recognized labels are found the full text dumps into `detailed_description` (REF2VA) or `integrated_multimodal_description` (other modes). Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that sums characters across all textareas and updates live on every keystroke. Refmod X button in the slotline now sets the refmod's `enabled = false` in the overlay (matching overlay behavior) instead of calling `remove()` which only works on regular media items. Strength changes in the REFMOD overlay reflect immediately in the timeline clip without requiring a lane re-click.
 
+- **09-19:** RefMod image latent width and height now use the correct dimensions of 5D tensors.
 - **09-19:** **Upstream RefMod v5 bundles (0.4.47):** The REF2VA overlay recognizes RefMod containers from ComfyUI-MiniMaxH3Mod as well as standalone image/video/audio files. It expands each `ref_N` member into its native reference; `<RefMod N>` resolves to all labels from that selected bundle in member order.
 
 - **09-18:** **RefMod timeline visualization + upstream credit (0.4.43):** Enabled RefMods now render as read-only clips in their appropriate reference lane with a green REFMOD badge, slot number, and strength indicator — total reference count visible at a glance alongside uploaded media. Missing RefMod files warn-and-skip instead of hard-erroring, so stale workflow saves don't crash generation. **Upstream credit:** the saved person RefMod concept, `.safetensors` latent file format, and strength scaling design are based on [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod); both packs can be installed side-by-side and share the same `models/refmods/` folder.
@@ -144,6 +159,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### Enhanced Video Combine
 
+- **09-19:** Video outputs are no longer advertised as `ui["images"]` assets; image-only consumers no longer receive video entries.
+
 - **09-19:** **`%seed%` output naming (0.4.45):** An optional `seed` input expands `%seed%` in `filename_prefix`, including the corresponding first/last-frame export names. Unconnected inputs preserve the literal token for existing workflows.
 - **09-15:** **PyAV-native encoding and seekable previews (0.4.40):** all video/audio encoding, metadata, animated WebP/AVIF, and compatibility preview transcoding moved from external FFmpeg processes to PyAV 18. Hardware encoder candidates are runtime-tested and fall back through NVENC → QSV → AMF → VAAPI → software. Outputs receive explicit one-second keyframes; MP4 uses fast-start metadata. AV1, VP9, HEVC, 10-bit, and other compatibility previews are cached as H.264/AAC MP4 and served with byte-range support for reliable browser scrubbing, while downloads remain the untouched original codec/container.
 - **08-22 / 08-25:** preview checkboxes (Autoplay, Mute) persist across reloads (PR #30); permanent Mute checkbox persisted with node properties.
@@ -166,6 +183,10 @@ Quick reference for the version bumps inside this window, newest first:
 - **07-30:** LLM cache and GGUF backends added (local GGUF via llama.cpp alongside Ollama and Hugging Face download).
 
 ### DaSiWa System Monitor
+
+- **09-23 (0.4.55):** Separate Free Memory toolbar button with a DaSiWa logo, independent visibility setting, and VRAM versus system-RAM/cache actions via ComfyUI's `/free` route. The controls and meter chips align at 36px height; both menus close on outside clicks. [Details →](system_monitor.md#free-memory-toolbar-button)
+- **09-22 (0.4.53):** Full panel and settings menu escape toolbar clipping; Full mode restores its meter colors and proportional fill bars.
+- **09-19:** Disk polling skips stale mountpoints that raise `OSError`.
 
 - **09-04:** stable chip width — values render in a fixed-width monospace cell (percent/°C pad to 3 digits, disk throughput to one decimal), so the chip width no longer shifts as digits tick; values ≥ 1000 MB/s switch to `x.x GB/s` so fast (M2-class) disks don't overflow the chip (issue #36).
 - **08-28:** Windows CIM probe now cached — no more per-second PowerShell spawns.
