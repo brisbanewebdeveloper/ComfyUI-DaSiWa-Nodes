@@ -4,7 +4,7 @@ A compact, non-intrusive system telemetry bar integrated directly into the Comfy
 
 ## Overview
 
-The System Monitor displays real-time resource utilization in the ComfyUI header area. Its local display controls remain on the monitor itself; the global switch lives at **ComfyUI → Settings → Other → DaSiWa → System Monitor**.
+The System Monitor displays real-time resource utilization in the ComfyUI header area. Its local display controls remain on the monitor itself; the global switch lives at **ComfyUI → Settings → Other → DaSiWa → System Monitor**. The separate Free Memory button is independent of monitor telemetry.
 
 The current settings are stored in the browser, so they remain active after a ComfyUI page reload:
 
@@ -15,6 +15,15 @@ The current settings are stored in the browser, so they remain active after a Co
 - **Widget layout:** choose horizontal or vertical meter flow. This is especially useful in left/right side docks.
 - **Widgets:** enable or disable individual CPU, memory, disk, I/O, and GPU meters. Every widget is enabled by default and choices are retained after reload.
 - **Placement:** drag the monitor freely anywhere on the ComfyUI canvas. Floating placement uses pixel-aligned coordinates to keep its text sharp. Drop it on the visible top, left, or right target to dock it.
+
+## Free Memory toolbar button
+
+The DaSiWa-logo button sits beside the monitor when it is docked in the top toolbar. It remains in the toolbar if the monitor is floating, side-docked, or disabled. Click it to choose:
+
+- **Free VRAM:** asks ComfyUI to unload its managed models (`POST /free` with `unload_models: true`, `free_memory: false`).
+- **Free System RAM:** unloads managed models **and** resets ComfyUI's execution cache (`unload_models: true`, `free_memory: true`). This is not an operating-system-wide RAM purge.
+
+The request is queued by ComfyUI and processed by its prompt worker; the button does not interrupt an active generation or free memory owned by other processes. Click outside either this menu or the monitor settings menu to close it. Disable the Free Memory button separately at **ComfyUI → Settings → Other → DaSiWa → Free Memory → Show Free Memory Button**; the preference is browser-local and does not disable telemetry.
 
 ## Display Modes
 

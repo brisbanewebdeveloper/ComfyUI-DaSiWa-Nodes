@@ -21,6 +21,7 @@ let fullOverlay = null;
 let monitorEventListener = null;
 let monitorResizeObserver = null;
 let monitorToolbarObserver = null;
+let monitorMenuOutsideListener = null;
 
 function loadSettings() {
     try {
@@ -348,6 +349,8 @@ function fitPanel(panel) {
 }
 
 function closeMenu() {
+    if (monitorMenuOutsideListener) document.removeEventListener("pointerdown", monitorMenuOutsideListener);
+    monitorMenuOutsideListener = null;
     document.getElementById("dasiwa-monitor-settings-menu")?.remove();
 }
 
@@ -397,7 +400,7 @@ async function setMonitorEnabled(enabled) {
 function openMenu(button) {
     const existing = document.getElementById("dasiwa-monitor-settings-menu");
     if (existing) {
-        existing.remove();
+        closeMenu();
         return;
     }
     const root = button.closest(`#${ROOT_ID}`);
@@ -441,9 +444,10 @@ function openMenu(button) {
         saveSettings();
         render();
     }));
-    requestAnimationFrame(() => document.addEventListener("pointerdown", (event) => {
-        if (!menu.contains(event.target) && event.target !== button) closeMenu();
-    }, { once: true }));
+    monitorMenuOutsideListener = (event) => {
+        if (!menu.contains(event.target) && !button.contains(event.target)) closeMenu();
+    };
+    document.addEventListener("pointerdown", monitorMenuOutsideListener);
 }
 
 function addStyles() {
@@ -451,11 +455,11 @@ function addStyles() {
     const style = document.createElement("style");
     style.id = "dasiwa-system-monitor-styles";
     style.textContent = `
-        #${ROOT_ID} { position: relative; display: flex; align-items: flex-start; gap: 3px; min-width: 0; margin-right: 6px; color: var(--input-text); font: 600 11px/1 var(--font-inter, sans-serif); } #${ROOT_ID}.is-floating { position: fixed; z-index: 1002; margin: 0; } #${ROOT_ID} .dasiwa-monitor-drag-handle { width: 10px; min-height: 28px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); cursor: grab; touch-action: none; } #${ROOT_ID} .dasiwa-monitor-drag-handle::after { content: "⠿"; display: block; padding-top: 7px; color: var(--descrip-text, #aaa); font-size: 13px; text-align: center; } #${ROOT_ID} .dasiwa-monitor-drag-handle:active { cursor: grabbing; }
+        #${ROOT_ID} { position: relative; display: flex; align-items: flex-start; gap: 3px; min-width: 0; margin-right: 6px; color: var(--input-text); font: 600 11px/1 var(--font-inter, sans-serif); } #${ROOT_ID}.is-floating { position: fixed; z-index: 1002; margin: 0; } #${ROOT_ID} .dasiwa-monitor-drag-handle { width: 10px; min-height: 36px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); cursor: grab; touch-action: none; } #${ROOT_ID} .dasiwa-monitor-drag-handle::after { content: "⠿"; display: block; padding-top: 7px; color: var(--descrip-text, #aaa); font-size: 13px; text-align: center; } #${ROOT_ID} .dasiwa-monitor-drag-handle:active { cursor: grabbing; }
         #dasiwa-monitor-dock-left, #dasiwa-monitor-dock-right { position: fixed; z-index: 1002; top: 120px; bottom: 8px; display: flex; align-items: flex-start; pointer-events: none; } #dasiwa-monitor-dock-left { left: 72px; } #dasiwa-monitor-dock-right { right: 72px; } #dasiwa-monitor-dock-left > #${ROOT_ID}, #dasiwa-monitor-dock-right > #${ROOT_ID} { pointer-events: auto; margin: 0; } #${ROOT_ID}.is-vertical .dasiwa-monitor-display.is-lite { flex-direction: column; align-items: stretch; } #${ROOT_ID}.is-horizontal .dasiwa-monitor-display.is-lite { flex-direction: row; }
         .dasiwa-monitor-dock-target { position: fixed; z-index: 1005; box-sizing: border-box; border: 2px dashed #22d3ee; background: #0891b533; color: #cffafe; font: 700 12px/38px var(--font-inter, sans-serif); letter-spacing: .04em; text-align: center; pointer-events: none; } .dasiwa-monitor-dock-target.is-active { background: #0891b588; border-style: solid; } #dasiwa-monitor-dock-target-top { top: 0; left: 0; width: 100vw; height: 42px; } #dasiwa-monitor-dock-target-left, #dasiwa-monitor-dock-target-right { top: 48px; bottom: 0; width: 56px; writing-mode: vertical-rl; padding-top: 12px; } #dasiwa-monitor-dock-target-left { left: 0; } #dasiwa-monitor-dock-target-right { right: 0; }
         #${PANEL_ID}.is-lite { display: flex; align-items: center; gap: 3px; min-width: 0; }
-        #${ROOT_ID} .dasiwa-monitor-metric { position: relative; box-sizing: border-box; display: grid; grid-template-columns: max-content max-content; gap: 4px; align-items: center; flex: none; min-width: 56px; height: 28px; overflow: hidden; padding: 0 3px; border: 1px solid color-mix(in srgb, var(--meter) 65%, var(--border-color)); background: var(--comfy-input-bg); white-space: nowrap; }
+        #${ROOT_ID} .dasiwa-monitor-metric { position: relative; box-sizing: border-box; display: grid; grid-template-columns: max-content max-content; gap: 4px; align-items: center; flex: none; min-width: 56px; height: 36px; overflow: hidden; padding: 0 3px; border: 1px solid color-mix(in srgb, var(--meter) 65%, var(--border-color)); background: var(--comfy-input-bg); white-space: nowrap; }
         #${ROOT_ID} .dasiwa-monitor-metric::before, #${ROOT_ID} .dasiwa-monitor-full-metric i { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--fill); opacity: .38; background: var(--meter); transition: width .35s ease; }
         #${ROOT_ID} span, #${ROOT_ID} strong { position: relative; z-index: 1; font-variant-numeric: tabular-nums; }
         #${ROOT_ID} .dasiwa-monitor-metric span { color: var(--input-text); font-size: 9px; letter-spacing: .01em; }
@@ -464,7 +468,7 @@ function addStyles() {
         #${ROOT_ID} .cpu { --meter: #38bdf8; } #${ROOT_ID} .ram { --meter: #a78bfa; } #${ROOT_ID} .swap { --meter: #f59e0b; } #${ROOT_ID} .disk { --meter: #fb7185; } #${ROOT_ID} .disk-rd { --meter: #34d399; } #${ROOT_ID} .disk-wr { --meter: #f472b6; }
         #${ROOT_ID} .gpu-util { --meter: #4ade80; } #${ROOT_ID} .gpu-vram { --meter: #22d3ee; } #${ROOT_ID} .gpu-temp { --meter: #fb923c; }
         #${ROOT_ID} [hidden] { display: none !important; }
-        #${ROOT_ID} .dasiwa-monitor-settings { position: relative; z-index: 1003; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-color); color: var(--input-text); background: var(--comfy-input-bg); cursor: pointer; font-size: 15px; } #${ROOT_ID} .dasiwa-monitor-settings:hover, #${ROOT_ID} .dasiwa-monitor-settings:focus-visible { border-color: #22d3ee; color: #22d3ee; outline: none; }
+        #${ROOT_ID} .dasiwa-monitor-settings { position: relative; z-index: 1003; width: 36px; height: 36px; padding: 0; border: 1px solid var(--border-color); color: var(--input-text); background: var(--comfy-input-bg); cursor: pointer; font-size: 15px; } #${ROOT_ID} .dasiwa-monitor-settings:hover, #${ROOT_ID} .dasiwa-monitor-settings:focus-visible { border-color: #22d3ee; color: #22d3ee; outline: none; }
         #dasiwa-monitor-settings-menu { position: fixed; z-index: 1004; display: grid; gap: 8px; width: 220px; padding: 10px; border: 1px solid var(--border-color); background: var(--comfy-menu-bg, #202020); box-shadow: 0 8px 24px #0008; font: 500 12px/1.25 var(--font-inter, sans-serif); } #dasiwa-monitor-settings-menu label { display: grid; grid-template-columns: 16px auto; gap: 6px; align-items: start; cursor: pointer; } #dasiwa-monitor-settings-menu small { grid-column: 2; color: var(--descrip-text, #aaa); } #dasiwa-monitor-settings-menu .dasiwa-monitor-menu-label { padding-top: 4px; border-top: 1px solid var(--border-color); color: var(--descrip-text, #aaa); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; } #dasiwa-monitor-settings-menu .dasiwa-monitor-menu-note { color: var(--descrip-text, #aaa); font-size: 11px; line-height: 1.35; } #dasiwa-monitor-settings-menu .dasiwa-monitor-widgets-list { display: grid; gap: 3px; max-height: 180px; overflow-y: auto; }
         #dasiwa-monitor-full-overlay { position: fixed; z-index: 1003; width: min(720px, calc(100vw - 24px)); max-height: calc(100vh - 64px); overflow: auto; padding: 14px; border: 1px solid var(--border-color); background: var(--comfy-menu-bg, #202020); box-shadow: 0 12px 32px #0009; color: var(--input-text); font: 600 11px/1 var(--font-inter, sans-serif); }
         #dasiwa-monitor-full-overlay .cpu { --meter: #38bdf8; } #dasiwa-monitor-full-overlay .ram { --meter: #a78bfa; } #dasiwa-monitor-full-overlay .swap { --meter: #f59e0b; } #dasiwa-monitor-full-overlay .disk { --meter: #fb7185; } #dasiwa-monitor-full-overlay .disk-rd { --meter: #34d399; } #dasiwa-monitor-full-overlay .disk-wr { --meter: #f472b6; }

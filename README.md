@@ -239,6 +239,7 @@ A compact system telemetry bar integrated directly into the ComfyUI top toolbar.
 - **Cross-Platform:** Works on Linux and Windows with automatic fallback detection for GPU tools.
 - **Container-safe:** In containers and sandboxes where parts of `/proc` are missing (e.g. `/proc/vmstat`), probes degrade to `n/a` instead of warning every second. Set `DASWA_SYSTEM_MONITOR=0` (also `false`/`no`/`off`/`disable`) to fully stop the backend polling thread.
 - **Independent Placement:** Renders as its own toolbar element, not dependent on third-party extensions.
+- **Free Memory Button:** Separate DaSiWa-logo toolbar button beside the top-docked monitor (or in the toolbar when the monitor is off). Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Hide the button independently under **Settings → Other → DaSiWa → Free Memory**.
 
 **Lite mode**
 
