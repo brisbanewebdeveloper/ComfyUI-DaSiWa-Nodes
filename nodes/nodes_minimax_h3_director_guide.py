@@ -3,6 +3,7 @@
 from .helper_minimax_h3_director import normalize_guide
 from .helper_refmod_format import refmod_fingerprint
 from .helper_logging import log_dasiwa
+import uuid
 
 
 def _describe_output(value) -> str:
@@ -74,19 +75,71 @@ class MiniMaxH3DirectorGuide:
                 "guide": ("MINIMAX_H3_DIRECTOR_GUIDE",),
             },
             "optional": {"audio_vae": ("VAE",)},
+            "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("CONDITIONING", "LATENT")
-    RETURN_NAMES = ("positive", "latent")
+    RETURN_TYPES = ("CONDITIONING", "LATENT", "DF_H3_CONTINUITY_CONTEXT")
+    RETURN_NAMES = ("positive", "latent", "continuity_context")
     FUNCTION = "apply"
     CATEGORY = "DaSiWa/MiniMax H3"
 
     @classmethod
-    def IS_CHANGED(cls, clip, vae, guide, audio_vae=None):
+    def IS_CHANGED(cls, clip, vae, guide, audio_vae=None, **kwargs):
+        if isinstance(guide, dict) and "continuity" in guide:
+            from .h3_continuity.core import parse_settings
+            settings = parse_settings(guide["continuity"])
+            if settings["capture"] or settings["operation"] == "continue":
+                return float("nan")
         items = guide.get("minimax_ref_items", []) if isinstance(guide, dict) else []
         return tuple((item["name"], refmod_fingerprint(item["name"])) for item in items if item.get("name"))
 
-    def apply(self, clip, vae, guide, audio_vae=None):
+    def apply(self, clip, vae, guide, audio_vae=None, prompt=None, unique_id=None):
+        raw = guide.get("continuity") if isinstance(guide, dict) else None
+        if raw is None:
+            return (*self._apply_native(clip, vae, guide, audio_vae), {"disabled": True})
+        from .h3_continuity.core import ClipStore, parse_settings, prepare_continuation, add_tail, continuation_timing
+        from .h3_continuity.vendor.continuation_nodes import _require_native_arbitrary_guides
+        settings = parse_settings(raw)
+        continuing = settings["operation"] == "continue"
+        if not continuing and (not settings["capture"] or guide["mode"] == "Image Inpaint"):
+            return (*self._apply_native(clip, vae, guide, audio_vae), {"disabled": True})
+        if guide["mode"] == "Image Inpaint":
+            raise ValueError("Continuity requires a video mode, not Image Inpaint.")
+        if abs(float(guide.get("frame_rate", 24)) - 24) > 1e-6:
+            raise ValueError("H3 continuity uses native 24 fps. Set Director frame_rate to 24.")
+        from .h3_continuity.validation import validate_capture_graph
+        validate_capture_graph(prompt, unique_id)
+        _require_native_arbitrary_guides()
+        context = {**settings, "run_id": uuid.uuid4().hex, "mode": guide["mode"],
+                   "resolved_prompt": guide.get("resolved_prompt", guide.get("prompt", ""))}
+        if not continuing:
+            positive, latent = self._apply_native(clip, vae, guide, audio_vae)
+            context.update(source_id="", overlap_frames=0, extension_frames=0)
+            return positive, latent, context
+        if settings["source_kind"] == "video":
+            from .h3_continuity.video_source import import_checkpoint
+            _validate_h3_vaes(vae, audio_vae, "REF2VA")
+            previous, metadata, source_id = import_checkpoint(settings, guide, vae, audio_vae)
+            context["source_id"] = source_id
+        else:
+            from .h3_continuity.inspection import checkpoint_issues
+            store = ClipStore()
+            info = store.inspect(settings["session"], settings["source_id"])
+            issues = checkpoint_issues(info, guide["mode"], guide["width"], guide["height"])
+            if issues:
+                raise ValueError(" ".join(issues))
+            previous, metadata = store.load(settings["session"], settings["source_id"])
+        if settings.get("version", 2) >= 3:
+            settings.update(continuation_timing(settings["duration_seconds"], settings["overlap_frames"], metadata["frames"]))
+            context.update({key: settings[key] for key in ("overlap_frames", "extension_frames", "duration_seconds")})
+        updated, target, layout = prepare_continuation(previous, metadata, guide, settings)
+        positive, _ = self._apply_native(clip, vae, updated, audio_vae)
+        context.update(layout=layout, resolved_prompt=updated["resolved_prompt"],
+                       provenance={"source_kind": settings["source_kind"],
+                                   "source_video_id": settings.get("source_video_id", "")})
+        return add_tail(positive, previous, target, layout), target, context
+
+    def _apply_native(self, clip, vae, guide, audio_vae=None):
         state = normalize_guide(guide)
         pure_preencoded = bool(state.minimax_ref_items) and not any((
             state.ref_images, state.ref_videos, state.ref_video_audios, state.ref_audios))

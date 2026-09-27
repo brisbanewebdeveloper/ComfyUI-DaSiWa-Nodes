@@ -4,7 +4,7 @@ A compact, non-intrusive system telemetry bar integrated directly into the Comfy
 
 ## Overview
 
-The System Monitor displays real-time resource utilization in the ComfyUI header area. Its local display controls remain on the monitor itself; the global switch lives at **ComfyUI → Settings → Other → DaSiWa → System Monitor**.
+The System Monitor displays real-time resource utilization in the ComfyUI header area. Its local display controls remain on the monitor itself; the global switch lives at **ComfyUI → Settings → Other → DaSiWa → System Monitor**. The separate Free Memory button is independent of monitor telemetry.
 
 The current settings are stored in the browser, so they remain active after a ComfyUI page reload:
 
@@ -15,6 +15,15 @@ The current settings are stored in the browser, so they remain active after a Co
 - **Widget layout:** choose horizontal or vertical meter flow. This is especially useful in left/right side docks.
 - **Widgets:** enable or disable individual CPU, memory, disk, I/O, and GPU meters. Every widget is enabled by default and choices are retained after reload.
 - **Placement:** drag the monitor freely anywhere on the ComfyUI canvas. Floating placement uses pixel-aligned coordinates to keep its text sharp. Drop it on the visible top, left, or right target to dock it.
+
+## Free Memory toolbar button
+
+The DaSiWa-logo button sits beside the monitor when it is docked in the top toolbar. It remains in the toolbar if the monitor is floating, side-docked, or disabled. Click it to choose:
+
+- **Free VRAM:** asks ComfyUI to unload its managed models (`POST /free` with `unload_models: true`, `free_memory: false`).
+- **Free System RAM:** unloads managed models **and** resets ComfyUI's execution cache (`unload_models: true`, `free_memory: true`). This is not an operating-system-wide RAM purge.
+
+The request is queued by ComfyUI and processed by its prompt worker; the button does not interrupt an active generation or free memory owned by other processes. Click outside either this menu or the monitor settings menu to close it. Disable the Free Memory button separately at **ComfyUI → Settings → Other → DaSiWa → Free Memory → Show Free Memory Button**; the preference is browser-local and does not disable telemetry.
 
 ## Display Modes
 
@@ -62,16 +71,20 @@ Hover over any metric chip to see detailed information:
 
 | Platform | Vendor | Detection Method |
 |----------|--------|------------------|
-| Linux | NVIDIA | `nvidia-smi` query |
+| Linux | NVIDIA | NVML (`nvidia-ml-py`), `nvidia-smi` query as fallback |
 | Linux | AMD | `rocm-smi` JSON output |
 | Linux | Intel | DRM/sysfs device tree |
-| Windows | NVIDIA | `nvidia-smi` if available, otherwise CIM `Win32_VideoController` |
-| Windows | AMD | CIM `Win32_VideoController` fallback |
+| Windows | NVIDIA | NVML (`nvidia-ml-py`), then `nvidia-smi`, otherwise CIM `Win32_VideoController` |
+| Windows | AMD | ADLX (`amd-adlx`), otherwise CIM `Win32_VideoController` |
 | Windows | Intel | CIM `Win32_VideoController` fallback |
 
 When multiple GPUs of the same vendor exist, each receives a sequential index starting at 0. If a specific GPU tool is unavailable, the system gracefully degrades to generic device enumeration.
 
 On Windows the CIM `Win32_VideoController` query is expensive (a fresh `powershell.exe` per call) and its data — adapter name, `PNPDeviceID`, `AdapterRAM` — is static, so it is probed **once** and cached for the lifetime of the monitor instance. A successful non-empty result is reused on every subsequent tick; an empty result is retried on the next tick until an adapter is found. This avoids spawning a powershell process on every telemetry interval.
+
+NVIDIA telemetry uses **one NVML session opened on the first sample and kept for the life of the monitor**. Spawning `nvidia-smi` every tick opens a new NVML session each time, and under Docker Desktop / WSL2 on Windows every session opened in the guest leaks NVIDIA driver memory on the host until reboot; queries on one open session do not. If NVML cannot load, the monitor falls back to `nvidia-smi`, retrying NVML at most every 10 minutes.
+
+AMD telemetry on Windows goes through ADLX, the AMD driver's own telemetry library, since `rocm-smi` and `amdsmi` have no Windows build. Like NVML it is opened once and kept for the life of the monitor. VRAM from ADLX is device-wide, covering memory held by other applications. Without `amd-adlx` an AMD card still appears through CIM, but utilization, VRAM usage and temperature show `n/a`.
 
 ## Responsive Behavior
 
@@ -88,8 +101,10 @@ A ResizeObserver monitors window changes and adjusts visibility dynamically with
 ## Backend Requirements
 
 - **psutil** — Cross-platform system metrics (CPU, RAM, swap, disk). Included in project dependencies.
-- **nvidia-smi** — Optional, bundled with NVIDIA drivers.
-- **rocm-smi** — Optional, part of ROCm toolkit for AMD GPUs.
+- **nvidia-ml-py** — NVIDIA telemetry through NVML (installed from `requirements.txt`; pure Python, harmless without an NVIDIA GPU).
+- **nvidia-smi** — Optional fallback when NVML cannot load, bundled with NVIDIA drivers.
+- **amd-adlx** — AMD telemetry on Windows through ADLX (installed from `requirements.txt` on Windows only; the driver library is loaded only when an AMD driver is present).
+- **rocm-smi** — Optional, part of ROCm toolkit for AMD GPUs on Linux.
 - No additional GPU tools required on Windows beyond standard drivers.
 
 ## API Endpoints
@@ -107,7 +122,7 @@ Updates are broadcast via WebSocket event `dasiwa.system_monitor` approximately 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Monitor shows "Loading..." | Backend route not registered | Ensure `nodes/nodes_system_monitor.py` is imported in `__init__.py` |
-| No GPU metrics shown | Missing GPU query tool | Verify `nvidia-smi --query-gpu=index,name --format=csv` runs successfully |
+| No GPU metrics shown | Missing GPU query tool | Verify `python -c "import pynvml; pynvml.nvmlInit()"` or `nvidia-smi --query-gpu=index,name --format=csv` runs successfully |
 | Swap shows "n/a" | No swap configured | Normal behavior; indicates swap/pagefile is disabled |
 | Panel overlaps other toolbar items | Insufficient toolbar width | Lower-priority metrics auto-hide; check browser developer console for errors |
 

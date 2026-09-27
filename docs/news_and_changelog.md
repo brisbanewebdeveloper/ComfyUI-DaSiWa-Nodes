@@ -2,15 +2,38 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers the last two months: **2026-06-29 → 2026-09-21**. The first commit in this window is from 2026-07-05; older history lives in the git log. All entries are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-09-26**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **H3 Continuity Advanced overlay (0.4.61):** The rounded Advanced button now sits between Use latest output and Clear source. It opens a separate settings overlay instead of growing the Director node. The new ∞ Save new takes button before Choose start video controls checkpoint capture; choosing a source activates continuation separately. Capture, preferred context, references, session ID and source selection stay in saved workflow state; saved checkpoints remain available after ComfyUI restarts. Unsaved workflow changes still require saving.
+
+- **H3 Forge: vision GGUF and authenticated servers (09-26, 0.4.60):** Forge now supports vision-capable GGUF models (model + mmproj projector in the same folder) for continuity tail-image drafting, and OpenAI-compatible servers that require an API key via the new **H3 Forge → OpenAI-compatible API key** setting. Embedding models are excluded from the Ollama picker.
+
+- **H3 Continuity 1.1.0 (09-25, 0.4.59):** Integrated AV continuity with native tail conditioning and Forge drafting for continuation prompts. REF2VA audio-only validation resolved. Continuity nodes registered under the DaSiWa/MiniMax H3 category alongside the Director.
+
+- **System Monitor: persistent NVML session (09-25, #54):** NVIDIA GPU polling now uses one persistent NVML session instead of spawning a new process per poll, reducing overhead and eliminating intermittent probe failures.
+
+- **H3 Forge: Transformers GQA compatibility (09-25, #55):** Fixed compatibility with newer Transformers versions that changed the GQA helper signature, restoring Forge operation on recent ComfyUI builds.
+
+- **Prompt Forge guide:** The [Director guide](minimax_h3_director.md#prompt-forge-writing-and-applying-a-draft) now walks through idea, model, creativity and detail choices, reference roles, draft review, applying, cancellation, and saved-history behavior. The README lists Prompt Forge as a separate major Director feature.
+
+- **H3 Forge saved drafts (09-24, 0.4.57):** Each Director keeps its last three successful Forge generations in its saved workflow. Reopen Forge to preview and apply one; **Clear history** removes drafts only, while the Director's **Clear** also clears its Forge history. [Director guide →](minimax_h3_director.md)
+
+- **H3 Prompt Forge and single prompt editor (09-24, 0.4.56):** PR #51 adds on-demand prompt writing with a local ComfyUI LLM, Ollama, or a configured OpenAI-compatible server. Director prompts start empty in one editor; Insert Prompt Structure restores the former section template on demand. Prompt helpers and Prompt Forge share a dark rounded toolbar. Old structured workflows, embedded prompts, and reference packs migrate into the single field. [Director guide →](minimax_h3_director.md)
+
+- **Unreleased — Registry automation:** The failing scheduled Registry-status workflow is removed. On a future `pyproject.toml` version bump, the publish workflow will retain the newly active release, deprecate its four immediate predecessors, and unpublish older versions. No Registry versions are changed by the workflow edit itself.
+
+- **Free Memory toolbar control (09-23, 0.4.55):** A separate DaSiWa-logo button beside the top-docked monitor offers **Free VRAM** (unload ComfyUI-managed models) and **Free System RAM** (unload models and reset the execution cache). It stays available when monitoring is off, has its own DaSiWa setting, and closes its menu on outside clicks. The monitor chips, settings button, and memory button now align at 36px height. [Usage and limits →](system_monitor.md#free-memory-toolbar-button)
+- **Director prompt count and monitor overlays (09-22, 0.4.53–0.4.54):** The prompt character counter now counts the assembled prompt, including structured headers. Full monitor mode and its settings menu render above toolbar content instead of being clipped; the Full view retains meter colors and fill bars.
 
 - **MiniMax H3 Director: RefMod lane & prompt-mode fixes (09-22):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load (falls back to saved `media_type` when library data isn't loaded yet). Remove button in REFMOD overlay now updates the timeline immediately. Clear button disables all refmods in the overlay and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes show a single Image row only (no clutter). Track height adapts to fit shown lanes instead of fixed 280px minimum. Simple/Structured prompt mode switching now preserves content bidirectionally — switching Structured → Simple flattens fields, Simple → Structured parses them back; unlabeled text dumps into detailed_description. Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that updates live as you type. Refmod X button in slotline now disables the refmod in the overlay instead of trying to remove it from items. Strength changes reflect immediately in the timeline without requiring a lane re-click. Version bump to 0.4.52.
 
 - **System Monitor: global DaSiWa settings switch (09-21):** **Settings → Other → DaSiWa → System Monitor** now controls the monitor completely. Off removes its toolbar/floating UI, dock targets, frontend listeners, and backend telemetry polling; on mounts and starts them again. Version bump to 0.4.51.
 
 - **Settings About: installed nodepack version (09-21):** ComfyUI → Settings → About now shows a linked `DaSiWa Custom Nodes v…` badge, using the packaged release version. Version bump to 0.4.50.
+
+- **Recent stability fixes (09-19, 0.4.48–0.4.49):** RefMod image dimensions are read correctly from 5D latents; Enhanced Video Combine no longer exposes videos as image assets; stale drive mountpoints no longer break monitor polling. The experimental MiniMax H3 Latent Upscaler was removed after output-quality issues—it is not a shipped node.
 
 - **MiniMax H3 Director: upstream RefMod v5 bundles (09-19):** REF2VA now loads current standalone and bundled RefMods created by ComfyUI-MiniMaxH3Mod. Bundle members are expanded into their image, video, and audio references; one `<RefMod N>` alias resolves to every contained native label in member order. Version bump to 0.4.47.
 
@@ -51,9 +74,19 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.4.61 | 09-26 | H3 Continuity Advanced overlay; ∞ Save new takes button; workflow-persisted session state |
+| 0.4.60 | 09-26 | H3 Forge: vision GGUF support and authenticated OpenAI-compatible servers |
+| 0.4.59 | 09-25 | H3 Continuity 1.1.0: AV tail conditioning, Forge drafting for continuations, REF2VA audio-only validation fix |
+| 0.4.58 | 09-25 | System Monitor: persistent NVML session (#54); H3 Forge Transformers GQA signature fix (#55) |
+| 0.4.57 | 09-24 | Forge saves three drafts per Director; Forge history and Director Clear controls |
+| 0.4.56 | 09-24 | H3 Prompt Forge and single free-text Director prompt with optional structure insertion and legacy migration |
+| 0.4.55 | 09-23 | Independent Free Memory toolbar button; VRAM/model unload and RAM/cache reset actions |
+| 0.4.54 | 09-22 | Director prompt counter includes assembled structured headers |
+| 0.4.53 | 09-22 | Monitor Full overlay and settings-menu clipping, colors, and fill bars fixed |
 | 0.4.52 | 09-22 | MiniMax H3 Director: RefMod lane fixes, prompt-mode content preservation, char counter, immediate overlay sync |
 | 0.4.51 | 09-21 | System Monitor: global DaSiWa settings switch that fully mounts/stops telemetry |
 | 0.4.50 | 09-21 | Settings About: visible installed DaSiWa Custom Nodes version badge |
+| 0.4.49 | 09-19 | Experimental H3 Latent Upscaler (subsequently removed before 0.4.50 due to output-quality issues) |
 | 0.4.47 | 09-19 | MiniMax H3 Director: upstream RefMod v5 bundle loading |
 | 0.4.45 | 09-19 | Enhanced Video Combine: `%seed%` filename token via an optional seed input |
 | 0.4.43 | 09-18 | MiniMax H3 Director: RefMod timeline visualization, missing-file resilience, upstream credit to ComfyUI-MiniMaxH3Mod |
@@ -93,8 +126,19 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### MiniMax H3 Director (v1)
 
+- **09-26 (0.4.61):** **H3 Continuity Advanced overlay:** The rounded Advanced button now sits between Use latest output and Clear source, opening a separate settings overlay instead of growing the Director node. New ∞ Save new takes button before Choose start video controls checkpoint capture independently from continuation activation. Capture state, preferred context, references, session ID, and source selection persist in saved workflow state; checkpoints remain available after ComfyUI restarts.
+
+- **09-26 (0.4.60):** **H3 Forge vision GGUF and authenticated servers:** Vision-capable GGUF models (model + mmproj projector in the same folder) are now detected and paired automatically for continuity tail-image drafting; Forge lists them as "sees pictures". OpenAI-compatible servers that require an API key are supported via the new **Settings → DaSiWa → H3 Forge → OpenAI-compatible API key** setting (sent as Bearer token to that address only). Embedding models are filtered out of the Ollama picker.
+
+- **09-25 (0.4.59):** **H3 Continuity 1.1.0:** Integrated AV continuity with native tail conditioning for both completed H3 checkpoints and ordinary uploaded videos. Forge drafting automatically receives continuity context (source-tail evidence, next action, added duration). REF2VA audio-only validation resolved. Continuity companion nodes (Append & Stage, Publish Export) registered under DaSiWa/MiniMax H3 category.
+
+- **09-25 (0.4.58):** **Transformers GQA helper signature fix (#55):** Fixed compatibility with newer Transformers versions that changed the GQA helper signature, restoring Forge operation on recent ComfyUI builds.
+
+- **09-22 (0.4.54):** The character counter measures the final assembled prompt, including structured field headers, rather than only raw textarea text.
+
 - **09-22:** **RefMod lane & prompt-mode fixes (0.4.52):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load — falls back to the refmod's saved `media_type` when library data isn't loaded yet, so tags are unique until REFMOD panel opens. Remove button in REFMOD overlay now calls `render()` after removal so the timeline updates immediately instead of requiring a lane re-click. Clear button (modebar) now disables all refmods in the overlay (`enabled = false`) and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes (I2VA, L2VA, FL2VA, Image Inpaint) show a single-row Image lane only — no clutter from unused Video/Audio rows. Track height adapts to fit shown lanes (min-height 0 instead of fixed 280px). Simple/Structured prompt mode switching preserves content bidirectionally: Structured → Simple flattens fields into `field: value` lines; Simple → Structured parses those labels back into separate fields, and if no recognized labels are found the full text dumps into `detailed_description` (REF2VA) or `integrated_multimodal_description` (other modes). Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that sums characters across all textareas and updates live on every keystroke. Refmod X button in the slotline now sets the refmod's `enabled = false` in the overlay (matching overlay behavior) instead of calling `remove()` which only works on regular media items. Strength changes in the REFMOD overlay reflect immediately in the timeline clip without requiring a lane re-click.
 
+- **09-19:** RefMod image latent width and height now use the correct dimensions of 5D tensors.
 - **09-19:** **Upstream RefMod v5 bundles (0.4.47):** The REF2VA overlay recognizes RefMod containers from ComfyUI-MiniMaxH3Mod as well as standalone image/video/audio files. It expands each `ref_N` member into its native reference; `<RefMod N>` resolves to all labels from that selected bundle in member order.
 
 - **09-18:** **RefMod timeline visualization + upstream credit (0.4.43):** Enabled RefMods now render as read-only clips in their appropriate reference lane with a green REFMOD badge, slot number, and strength indicator — total reference count visible at a glance alongside uploaded media. Missing RefMod files warn-and-skip instead of hard-erroring, so stale workflow saves don't crash generation. **Upstream credit:** the saved person RefMod concept, `.safetensors` latent file format, and strength scaling design are based on [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod); both packs can be installed side-by-side and share the same `models/refmods/` folder.
@@ -123,6 +167,14 @@ Quick reference for the version bumps inside this window, newest first:
 - **08-29:** **PDD compatibility:** the node detects the live `FinalLayer.forward` signature at patch time and passes the ComfyUI 0.34+ PDD sigma-schedule arguments, so the PDD LoRA head bank works with cache enabled. **Per-token masks:** honors `denoise_mask` / `audio_denoise_mask` exactly like Core — mixed masks run masked rows at their own strength via per-row `rows_to_mod_index` modulation; absent or uniform masks collapse to the scalar path, byte-identical to the previous behaviour. **Spectrum patch artifact:** `patches/comfyui-spectrum-minimax-h3-pdd.patch` for xmarre's ComfyUI-Spectrum-MiniMax-H3 v0.2.20, which silently degrades on the PDD signature.
 - **08-16:** both nodes added: an approximate, model-scoped whole-block-stack residual cache (relative-L1 threshold sampling, 15–90% sampling window, bounded cache hits, auto/CUDA/CPU storage) and a one-input INT8-attention model patch; both are model-clone patches and chain in either order.
 
+### H3 Prompt Forge
+
+- **09-26 (0.4.60):** Vision-capable GGUF models (model + mmproj projector in the same folder) are detected and paired automatically for continuity tail-image drafting; Forge lists them as "sees pictures". OpenAI-compatible servers that require an API key are supported via the new **Settings → DaSiWa → H3 Forge → OpenAI-compatible API key** setting (sent as Bearer token to that address only). Embedding models are filtered out of the Ollama picker.
+- **09-25 (0.4.58):** Fixed compatibility with newer Transformers versions that changed the GQA helper signature (#55), restoring Forge operation on recent ComfyUI builds.
+- **09-25 (0.4.59):** Continuity drafting: when Continuity Active, Forge automatically receives source-tail evidence, next action, and snapped added Duration. Tail images are prepared only when a vision model needs them and are not displayed as tiles. Apply to node updates only the continuation prompt without queueing a video.
+- **09-24 (0.4.57):** Each Director keeps its last three successful Forge generations in its saved workflow. Reopen Forge to preview and apply one; Clear history removes drafts only, while the Director's Clear also clears its Forge history.
+- **09-24 (0.4.56):** On-demand prompt writing with a local ComfyUI LLM, Ollama, or a configured OpenAI-compatible server. Three model sources: ComfyUI `models/llm` folder (Transformers or GGUF), Ollama API at loopback, and any OpenAI-compatible `/v1/models` + `/v1/chat/completions` endpoint. Drafts are written before the H3 video queue and applied manually; Forge refuses a new generation while a workflow is sampling so it does not evict the video model.
+
 ### Seed Control
 
 - **08-26:** new standalone Seed Control node extracted from the Director seed panel: full 64-bit unsigned seeds, Random|Fixed segmented switch, spinner with hold-to-repeat, Last 10 seeds history, external override socket, and INT + NOISE outputs; lossless 64-bit display via decimal-string mirroring; mode, last seed, and history persist with the workflow.
@@ -148,6 +200,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### Enhanced Video Combine
 
+- **09-19:** Video outputs are no longer advertised as `ui["images"]` assets; image-only consumers no longer receive video entries.
+
 - **09-19:** **`%seed%` output naming (0.4.45):** An optional `seed` input expands `%seed%` in `filename_prefix`, including the corresponding first/last-frame export names. Unconnected inputs preserve the literal token for existing workflows.
 - **09-15:** **PyAV-native encoding and seekable previews (0.4.40):** all video/audio encoding, metadata, animated WebP/AVIF, and compatibility preview transcoding moved from external FFmpeg processes to PyAV 18. Hardware encoder candidates are runtime-tested and fall back through NVENC → QSV → AMF → VAAPI → software. Outputs receive explicit one-second keyframes; MP4 uses fast-start metadata. AV1, VP9, HEVC, 10-bit, and other compatibility previews are cached as H.264/AAC MP4 and served with byte-range support for reliable browser scrubbing, while downloads remain the untouched original codec/container.
 - **08-22 / 08-25:** preview checkboxes (Autoplay, Mute) persist across reloads (PR #30); permanent Mute checkbox persisted with node properties.
@@ -170,6 +224,12 @@ Quick reference for the version bumps inside this window, newest first:
 - **07-30:** LLM cache and GGUF backends added (local GGUF via llama.cpp alongside Ollama and Hugging Face download).
 
 ### DaSiWa System Monitor
+
+- **09-25 (0.4.58):** NVIDIA GPU polling now uses one persistent NVML session instead of spawning a new process per poll, reducing overhead and eliminating intermittent probe failures (#54).
+
+- **09-23 (0.4.55):** Separate Free Memory toolbar button with a DaSiWa logo, independent visibility setting, and VRAM versus system-RAM/cache actions via ComfyUI's `/free` route. The controls and meter chips align at 36px height; both menus close on outside clicks. [Details →](system_monitor.md#free-memory-toolbar-button)
+- **09-22 (0.4.53):** Full panel and settings menu escape toolbar clipping; Full mode restores its meter colors and proportional fill bars.
+- **09-19:** Disk polling skips stale mountpoints that raise `OSError`.
 
 - **09-04:** stable chip width — values render in a fixed-width monospace cell (percent/°C pad to 3 digits, disk throughput to one decimal), so the chip width no longer shifts as digits tick; values ≥ 1000 MB/s switch to `x.x GB/s` so fast (M2-class) disks don't overflow the chip (issue #36).
 - **08-28:** Windows CIM probe now cached — no more per-second PowerShell spawns.

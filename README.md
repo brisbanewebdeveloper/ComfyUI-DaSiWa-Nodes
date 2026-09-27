@@ -1,6 +1,8 @@
 # DaSiWa Custom Nodes Collection
 
-A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control. Its installed version is shown in **ComfyUI → Settings → About** as a linked **DaSiWa Custom Nodes** badge. Use **ComfyUI → Settings → Other → DaSiWa → System Monitor** to enable or disable the monitor completely.
+A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control. Its installed version is shown in **ComfyUI → Settings → About**.
+
+Use **ComfyUI → Settings → Other → DaSiWa → ...** to enable or disable extra settings.
 
 [📰 News & Changelog — release notes and complete change history across the collection →](docs/news_and_changelog.md)
 
@@ -8,26 +10,29 @@ A high-performance collection of custom nodes for ComfyUI, optimized for video w
 
 ### 🎬 MiniMax H3 Director
 
-Timeline-based authoring for MiniMax H3 generation workflows. Separate Image/Video/Audio lanes, drag-and-drop/paste/upload, per-clip trims, save/load packs, and structured prompt builders.
+> 🎬 MiniMax H3 Director — The Ultimate One-Stop Video Creation Pipeline: Experience the most advanced, feature-complete MiniMax H3 Director node available for ComfyUI. Built as a comprehensive production hub, it seamlessly merges timeline-based multi-modal authoring, intelligent LLM/VLM Prompt Forge assistance, deep RefMod persona control, and high-precision continuity extensions into a single, unified workflow. Whether starting from text, images, or an existing H3 video, the Director serves as your central command deck for end-to-end synchronized video and audio generation.
 
 ![MiniMax H3 Director](assets/DaSiWa-MiniMaxH3-Director.png)
+![MiniMax H3 Director](assets/DaSiWa-MiniMaxH3-Director-PromptForge.png)
+![MiniMax H3 Director](assets/DaSiWa-MiniMaxH3-Director-RefMod.png)
 
-- 🎥 **Modes:** FL2VA (T2VA/I2VA/L2VA, 2 image slots), IMAGE INPAINT (1 image → single frame via 5-frame pass), REF2VA (9 img / 3 vid / 3 audio = 12 total; V/A/V+A switch per video)
-- 📸 **REFMOD references:** saved image/video/audio RefMods and upstream v5 bundles from `models/refmods/` — overlay selector, strength scaling, workflow-local descriptions, `<RefMod N>` stable aliases resolved at runtime to native reference labels.
-- 🔀 **Reference handling:** drag-reorder between slots, external soundtracks per video, visual crop via draggable markers, incompatible media preserved on mode toggle
-- 📋 **Paste & upload:** lane selection + Ctrl+V paste into chosen lane, drag-and-drop from file manager, paste-replace onto selected tile
-- ✍️ **Prompt builders:** FL2VA/I2VA/L2VA guided fields; REF2VA six-section builder with Insert [Shot N], Insert RefMod #, Prefill Labels & Summary, Preview Prompt (shows resolved `<RefMod N>` → native labels + description block); Simple/Structured toggle persisted with bidirectional content preservation (unlabeled text dumps to detailed_description); live character counter across all fields
-- 📐 **Resolution panel:** Aspect/Resolution/Input Scaling selectors (all default Auto) on 32px grid; grouped dropdowns; CUSTOM values; Torch Resize preprocessing (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop)
-- 💾 **Save/Load packs:** reference files + prompt + RefMod selections persisted independently; append or overwrite with limit validation and missing-file checks
-- 🎬 **Video thumbnails:** first-frame preview behind each video clip tile
-- ⏱️ **Crop preview:** ▶ Play crop button, draggable preview range
-- 🔒 **Validated limits:** 2–15s reference windows, 15s max combined visual/audio duration, path-safety under ComfyUI input directory
-- 🧩 **Native routing & lazy loading:** hands validated data to built-in MiniMaxH3 nodes; only selected model requested; REF2VA binds native inputs by name for Core-order compatibility
-- ▶️ **Optional executor:** connect the guide to **DaSiWa MiniMax H3 Director Executor** for integrated sampling plus video/audio decode, or use the Guide with standard sampler nodes.
-- 🔗 **Sequence execution:** wrap guides with **Sequence Segment**, combine them through **Sequence Plan**, then run mixed FL2VA/REF2VA sequences with resume, source passthrough, CPU-offloaded AV continuity, and concatenated outputs.
-- 🤝 **Safe coexistence:** the unique node ID `DaSiWaMiniMaxH3Director` avoids collisions with other Director packages; saved DaSiWa workflows using the former shared ID migrate when opened.
-- ⚙️ **External overwrite inputs:** `external_prompt_overwrite` (STRING), `external_width_overwrite` + `external_height_overwrite` (INT) bypass Director canvas sizing
-- 🎞️ **Frame rate:** FLOAT input (0.1–240, default 24) with matching output for downstream nodes
+- 🎥 **H3 modes:** T2VA/I2VA/L2VA/FL2VA in the two-image endpoint family (first/last-frame interpolation); REF2VA (9 images, 3 videos, 3 audio files; 12 total); Image Inpaint (one image → single output frame via a 5-frame pass).
+- 🖼️ **Reference Director:** separate image/video/audio lanes; drag-reorder slots, per-media prompts, external soundtracks, embedded-video V/A/V+A switch; incompatible media retained when changing modes.
+- 📋 **Media input:** lane-selected Ctrl+V, file-manager drag-and-drop, paste-replace on a selected tile; first-frame video thumbnails and audio waveforms.
+- ⏱️ **Reference trims:** draggable crop markers and preview range, ▶ Play crop; 2–15s per reference window and ≤15s combined visual / ≤15s combined audio, with input-path validation.
+- 📸 **RefMods:** image/video/audio files and upstream v5 bundles from `models/refmods/`; overlay selection, strength scaling, workflow-local descriptions, runtime `<RefMod N>` → native-label resolution.
+- ✍️ **Prompt editor:** one free-text field per mode; optional structure, shot/RefMod insertion and reference-label prefill; legacy prompts migrate into that field.
+- ✨ **Prompt Forge:** review/apply H3 drafts from `models/llm`, Ollama or an OpenAI-compatible server; vision models can see reference pictures. [Model setup and limitations →](docs/minimax_h3_director.md#prompt-forge-connect-an-llm-and-apply-a-draft).
+- ♾️ **Continuity (opt-in):** extend a completed 24-fps H3 video/audio take from a pinned latent checkpoint; separate next-action prompt, explicit source advancement, optional Forge draft. [Wiring and limits →](docs/h3_continuity.md).
+- 📐 **Smart resolution:** Auto/custom aspect, resolution and megapixel presets; input scaling via Torch Resize (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop).
+- 💾 **Save/Load packs:** reference files, prompt and RefMod selections; append/overwrite with mode-limit and missing-file checks.
+- 🧩 **Native H3 routing:** Director + Guide forward to built-in H3 nodes; selected-model lazy loading and name-bound REF2VA inputs; optional prompt and width/height overwrite sockets.
+- ▶️ **Optional executor:** connect the Director guide to **DaSiWa MiniMax H3 Director Executor** for integrated sampling and video/audio decode.
+- 🔗 **Sequence execution:** combine Director guides through **Sequence Segment** and **Sequence Plan** for mixed FL2VA/REF2VA runs with resume, source passthrough, AV continuity, and concatenated outputs.
+- 🤝 **Safe coexistence:** `DaSiWaMiniMaxH3Director` avoids node ID collisions; saved DaSiWa workflows using the former shared ID migrate when opened.
+- 🎞️ **Frame rate:** 0.1–240 FLOAT input (default 24) and matching output for downstream nodes; Image Inpaint outputs a still.
+- ⚡ **Optional performance nodes:** MiniMax H3 Cache and Patch Comfy Kitchen Attention patch the connected model; cache storage supports CUDA/CPU fallback. These are separate nodes, not Director modes.
+- 💎 **Optional output processing:** RTX Upscaler & Refiner offers denoise/deblur/VSR upscale with frame-by-frame memory control; Watermark Overlay adds branding; Enhanced Video Combine encodes/muxes audio, previews output and optionally exports first/last PNG frames to ComfyUI Assets. Wire these downstream as needed; H3 latent upscaling is not shipped.
 
 [Full documentation, UI guide, and prompting reference →](docs/minimax_h3_director.md)
 
@@ -242,6 +247,7 @@ A compact system telemetry bar integrated directly into the ComfyUI top toolbar.
 - **Cross-Platform:** Works on Linux and Windows with automatic fallback detection for GPU tools.
 - **Container-safe:** In containers and sandboxes where parts of `/proc` are missing (e.g. `/proc/vmstat`), probes degrade to `n/a` instead of warning every second. Set `DASWA_SYSTEM_MONITOR=0` (also `false`/`no`/`off`/`disable`) to fully stop the backend polling thread.
 - **Independent Placement:** Renders as its own toolbar element, not dependent on third-party extensions.
+- **Free Memory Button:** Separate DaSiWa-logo toolbar button beside the top-docked monitor (or in the toolbar when the monitor is off). Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Hide the button independently under **Settings → Other → DaSiWa → Free Memory**.
 
 **Lite mode**
 
@@ -339,6 +345,14 @@ The **DaSiWa LLM / VLM nodes** let you run local transformers chat or vision-lan
 ### Use ComfyUI-Manager
 
 Search for **DaSiWa-Nodes** and install.
+
+### Repository contents versus local data
+
+The repository ships `assets/` screenshots, `docs/`, `data/` starter libraries, `nodes/` and `js/`. The former example `workflows/` and most in-repository tests were retired; one System Monitor regression test remains tracked. Tests are not part of the current package or its push workflow. A formerly bundled Spectrum v0.2.20 compatibility patch targeted a separate project, was never applied by this pack, and is no longer shipped.
+
+Runtime files do **not** belong in the node pack repository: `lorainfo/` is a regenerable Civitai metadata cache; `.hermes/`, `.projectatlas/`, `graft/`, Python bytecode and test caches are local tooling state. H3 Continuity checkpoints live in the ComfyUI **output** directory at `output/df_h3_continuity/` (not beside `nodes/`); browser video previews live in ComfyUI's **temp** directory. The root-level `input/`, `output/`, `temp/`, `models/`, and `cache/` are ignored as safeguards if someone uses this checkout as a ComfyUI base directory. The `.gitignore` rules prevent *new* matching files being staged; they do not remove files already tracked or delete anyone's local files.
+
+A commit on local or Gitea `main` does not automatically appear on the separate GitHub remote; publishing to each remote is a separate action.
 
 ---
 

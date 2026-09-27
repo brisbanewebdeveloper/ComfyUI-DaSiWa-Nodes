@@ -15,6 +15,9 @@ if __package__:
     from .nodes.nodes_minimax_h3_director import MiniMaxH3Director
     from .nodes.nodes_minimax_h3_executor import MiniMaxH3DirectorExecutor
     from .nodes.nodes_minimax_h3_director_guide import MiniMaxH3DirectorGuide
+    from .nodes.h3_continuity.nodes import DaSiWaH3ContinuityAppend, DaSiWaH3ContinuityPublish
+    from .nodes.h3_continuity import routes as continuity_routes
+    continuity_routes.register_routes(__import__("server").PromptServer.instance)
     from .nodes.nodes_minimax_h3_cache import MiniMaxH3Cache
     from .nodes.nodes_minimax_h3_sequence import (
         MiniMaxH3SequenceExecutor,
@@ -23,6 +26,7 @@ if __package__:
     )
     from .nodes import nodes_system_monitor
     from .nodes import input_images  # registers /dasiwa/input-images route
+    from .nodes import h3_forge  # registers /dasiwa/h3/forge routes
     from .nodes import refmod_library
     refmod_library.register_routes(__import__("server").PromptServer.instance)
     from .nodes import lora_info  # registers /dasiwa/ltx2/lorainfo + /dasiwa/ltx2/loraimg
@@ -51,6 +55,8 @@ if __package__:
         "DaSiWaMiniMaxH3Director": MiniMaxH3Director,
         "DaSiWaMiniMaxH3DirectorExecutor": MiniMaxH3DirectorExecutor,
         "MiniMaxH3DirectorGuide": MiniMaxH3DirectorGuide,
+        "DaSiWaH3ContinuityAppend": DaSiWaH3ContinuityAppend,
+        "DaSiWaH3ContinuityPublish": DaSiWaH3ContinuityPublish,
         "MiniMaxH3Cache": MiniMaxH3Cache,
         "DaSiWaMiniMaxH3SequenceSegment": MiniMaxH3SequenceSegment,
         "DaSiWaMiniMaxH3SequencePlan": MiniMaxH3SequencePlan,
@@ -80,6 +86,8 @@ if __package__:
         "DaSiWaMiniMaxH3Director": "DaSiWa MiniMax H3 Director",
         "DaSiWaMiniMaxH3DirectorExecutor": "DaSiWa MiniMax H3 Director Executor",
         "MiniMaxH3DirectorGuide": "MiniMax H3 Director Guide",
+        "DaSiWaH3ContinuityAppend": "H3 Continuity • Append & Stage",
+        "DaSiWaH3ContinuityPublish": "H3 Continuity • Publish Export",
         "MiniMaxH3Cache": "MiniMax H3 Cache",
         "DaSiWaMiniMaxH3SequenceSegment": "DaSiWa MiniMax H3 Sequence Segment",
         "DaSiWaMiniMaxH3SequencePlan": "DaSiWa MiniMax H3 Sequence Plan",
