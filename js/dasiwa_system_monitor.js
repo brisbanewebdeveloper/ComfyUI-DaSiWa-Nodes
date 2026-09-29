@@ -6,11 +6,14 @@ const ROOT_ID = "dasiwa-system-monitor";
 const PANEL_ID = "dasiwa-system-monitor-panel";
 const SETTINGS_KEY = "dasiwa.system_monitor.settings";
 const MONITOR_ENABLED_SETTING = "DaSiWa.SystemMonitor.Enabled";
+const BACKGROUND_OPACITY_SETTING = "DaSiWa.SystemMonitor.BackgroundOpacity";
+const CONTENT_OPACITY_SETTING = "DaSiWa.SystemMonitor.ContentOpacity";
+const OPACITY_ATTRS = { min: 0, max: 100, step: 1 };
 const MONITOR_ENABLED_ENDPOINT = "/dasiwa/system-monitor/enabled";
 const HISTORY_LENGTH = 60;
 const DEFAULT_SETTINGS = {
     mode: "lite", placement: "top", dockSide: "top", orientation: "horizontal",
-    widgets: {}, toolbarIndex: null, x: 24, y: 60,
+    widgets: {}, x: 24, y: 60, width: null,
 };
 
 let settings = loadSettings();
@@ -32,9 +35,9 @@ function loadSettings() {
             dockSide: ["top", "left", "right"].includes(saved?.dockSide) ? saved.dockSide : "top",
             orientation: saved?.orientation === "vertical" ? "vertical" : "horizontal",
             widgets: saved?.widgets && typeof saved.widgets === "object" ? saved.widgets : {},
-            toolbarIndex: Number.isInteger(saved?.toolbarIndex) ? saved.toolbarIndex : null,
             x: Number.isFinite(saved?.x) ? saved.x : DEFAULT_SETTINGS.x,
             y: Number.isFinite(saved?.y) ? saved.y : DEFAULT_SETTINGS.y,
+            width: Number.isFinite(saved?.width) && saved.width >= 120 ? saved.width : null,
         };
     } catch {
         return { ...DEFAULT_SETTINGS };
@@ -57,6 +60,24 @@ function hideSideDocks() {
     });
 }
 
+function applySize(root) {
+    root.classList.toggle("is-resized", settings.width !== null);
+    root.style.width = settings.width === null ? "" : `${Math.min(settings.width, window.innerWidth - 16)}px`;
+    root.style.height = "";
+}
+
+function topDock() {
+    const row = document.querySelector('[data-testid="top-menu-actionbars"]');
+    if (!row?.parentElement) return null;
+    let dock = document.getElementById("dasiwa-monitor-dock-top");
+    if (!dock) {
+        dock = document.createElement("div");
+        dock.id = "dasiwa-monitor-dock-top";
+    }
+    if (dock.previousElementSibling !== row) row.after(dock);
+    return dock;
+}
+
 function placePanel(root, side = settings.dockSide) {
     settings.dockSide = side;
     settings.orientation = side === "top" ? "horizontal" : "vertical";
@@ -69,6 +90,8 @@ function placePanel(root, side = settings.dockSide) {
     root.style.top = "";
     root.style.transform = "";
     hideSideDocks();
+    const currentTopDock = document.getElementById("dasiwa-monitor-dock-top");
+    if (currentTopDock) currentTopDock.hidden = side !== "top";
     if (side === "left" || side === "right") {
         const dock = document.getElementById(`dasiwa-monitor-dock-${side}`);
         if (!dock) return false;
@@ -76,33 +99,17 @@ function placePanel(root, side = settings.dockSide) {
         dock.appendChild(root);
         return true;
     }
-    const legacyTopbar = document.querySelector('[data-testid="legacy-topbar-container"] > .flex');
-    if (legacyTopbar) {
-        const children = [...legacyTopbar.children];
-        const before = Number.isInteger(settings.toolbarIndex) ? children[settings.toolbarIndex] : children[0];
-        legacyTopbar.insertBefore(root, before ?? null);
-        return true;
-    }
-    const extensionsButton = document.querySelector('button[aria-label="Extensions"]');
-    if (!extensionsButton?.parentElement) return false;
-    extensionsButton.before(root);
+    const dock = topDock();
+    if (!dock) return false;
+    dock.hidden = false;
+    dock.appendChild(root);
     return true;
 }
 
-function saveToolbarPosition(root) {
-    settings.toolbarIndex = [...root.parentElement.children].indexOf(root);
-    saveSettings();
-}
-
-function dockPanel(root, pointerX = 0) {
-    settings.dockSide = "top";
+function dockPanel(root) {
     if (!placePanel(root, "top")) return false;
-    const toolbar = root.parentElement;
-    const before = [...toolbar.children].find((child) => child !== root && pointerX < child.getBoundingClientRect().left + child.offsetWidth / 2);
-    if (before) toolbar.insertBefore(root, before);
-    else toolbar.appendChild(root);
     settings.placement = "top";
-    saveToolbarPosition(root);
+    saveSettings();
     return true;
 }
 
@@ -110,6 +117,8 @@ function floatPanel(root, x, y) {
     document.body.appendChild(root);
     root.classList.remove("is-dock-top", "is-dock-left", "is-dock-right");
     root.classList.add("is-floating");
+    const dock = document.getElementById("dasiwa-monitor-dock-top");
+    if (dock) dock.hidden = true;
     [...root.querySelector(`#${PANEL_ID}`)?.children ?? []].forEach((metric) => metric.hidden = false);
     settings.placement = "floating";
     settings.x = Math.max(8, Math.min(x, window.innerWidth - root.offsetWidth - 8));
@@ -177,7 +186,7 @@ function enablePanelDrag(root) {
                     return;
                 }
                 const side = dockSideAtPoint(endEvent.clientX, endEvent.clientY);
-                if (side === "top") dockPanel(root, endEvent.clientX);
+                if (side === "top") dockPanel(root);
                 else if (side) {
                     settings.dockSide = side;
                     settings.placement = "top";
@@ -187,6 +196,54 @@ function enablePanelDrag(root) {
                 else saveSettings();
                 hideDockTargets();
             }
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", end);
+        window.addEventListener("pointercancel", end);
+    });
+}
+
+function meterWidthLimits(root) {
+    const panel = root.querySelector(`#${PANEL_ID}`);
+    const widths = [...panel.children].map((metric) => metric.getBoundingClientRect().width);
+    const gap = parseFloat(getComputedStyle(panel).columnGap) || 0;
+    const chrome = root.querySelector(".dasiwa-monitor-drag-handle").offsetWidth
+        + root.querySelector(".dasiwa-monitor-settings").offsetWidth
+        + 15 // Corner grip keeps its own gutter, never covering the last meter.
+        + 2 * (parseFloat(getComputedStyle(root).columnGap) || 0);
+    return {
+        min: Math.max(120, chrome + Math.max(0, ...widths)),
+        max: Math.max(120, chrome + widths.reduce((total, width) => total + width, 0) + gap * Math.max(0, widths.length - 1)),
+    };
+}
+
+function enablePanelResize(root) {
+    const handle = root.querySelector(".dasiwa-monitor-resize-handle");
+    handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const startWidth = root.getBoundingClientRect().width;
+        const startX = event.clientX;
+        const move = (next) => {
+            const rect = root.getBoundingClientRect();
+            const { min, max } = meterWidthLimits(root);
+            const containerRight = settings.placement === "floating" ? window.innerWidth : root.parentElement.getBoundingClientRect().right;
+            const available = Math.min(window.innerWidth, containerRight) - rect.left - 8;
+            settings.width = Math.max(min, Math.min(startWidth + next.clientX - startX, max, available));
+            applySize(root);
+            if (settings.placement === "floating") {
+                settings.x = Math.max(8, Math.min(settings.x, window.innerWidth - root.offsetWidth - 8));
+                settings.y = Math.max(8, Math.min(settings.y, window.innerHeight - root.offsetHeight - 8));
+                root.style.left = `${Math.round(settings.x)}px`;
+                root.style.top = `${Math.round(settings.y)}px`;
+            }
+        };
+        const end = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", end);
+            window.removeEventListener("pointercancel", end);
+            saveSettings();
         };
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", end);
@@ -268,7 +325,6 @@ function sparkline(label) {
 function renderLite(panel, snapshot) {
     panel.className = "dasiwa-monitor-display is-lite";
     panel.innerHTML = snapshotMetrics(snapshot).map(({ kind, label, value, text, detail }) => metric(kind, label, value, text, detail)).join("");
-    requestAnimationFrame(() => fitPanel(panel));
 }
 
 function renderFull(panel, snapshot) {
@@ -282,6 +338,7 @@ function renderFull(panel, snapshot) {
             fullOverlay = document.createElement("div");
             fullOverlay.id = "dasiwa-monitor-full-overlay";
             document.body.appendChild(fullOverlay);
+            applyOpacity();
         }
         fullOverlay.hidden = false;
         const rect = root.getBoundingClientRect();
@@ -338,20 +395,54 @@ function render(snapshot = latestSnapshot) {
     }
 }
 
-function fitPanel(panel) {
-    const extensionsButton = document.querySelector('button[aria-label="Extensions"]');
-    const metrics = [...panel.children];
-    metrics.forEach((metric) => metric.hidden = false);
-    if (settings.mode !== "lite" || settings.placement === "floating" || settings.dockSide !== "top") return;
-    while (metrics.length && extensionsButton && panel.getBoundingClientRect().left < extensionsButton.getBoundingClientRect().right + 8) {
-        metrics.pop().hidden = true;
+function opacityValue(id) {
+    const saved = app.ui.settings.getSettingValue(id);
+    const value = Number(saved);
+    return saved != null && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 100;
+}
+
+function applyOpacity() {
+    const background = `${opacityValue(BACKGROUND_OPACITY_SETTING)}%`;
+    const content = opacityValue(CONTENT_OPACITY_SETTING) / 100;
+    for (const element of [monitorRoot, fullOverlay]) {
+        if (!element) continue;
+        element.style.setProperty("--dasiwa-monitor-bg-opacity", background);
+        element.style.setProperty("--dasiwa-monitor-content-opacity", content);
+        element.style.setProperty("--dasiwa-monitor-content-alpha", `${Math.round(content * 100)}%`);
     }
+    for (const [id, value] of [[BACKGROUND_OPACITY_SETTING, background], [CONTENT_OPACITY_SETTING, `${Math.round(content * 100)}%`]]) {
+        const input = document.querySelector(`#dasiwa-monitor-settings-menu input[data-opacity-setting="${id}"]`);
+        if (input) {
+            input.value = opacityValue(id);
+            input.nextElementSibling.textContent = value;
+        }
+    }
+}
+
+function positionMenu(button, menu) {
+    const rect = button.getBoundingClientRect();
+    const margin = 8;
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const below = window.innerHeight - rect.bottom - margin;
+    const above = rect.top - margin;
+    const preferredTop = below >= height || below >= above ? rect.bottom + 4 : rect.top - height - 4;
+    menu.style.left = `${Math.round(Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin)))}px`;
+    menu.style.top = `${Math.round(Math.max(margin, Math.min(preferredTop, window.innerHeight - height - margin)))}px`;
 }
 
 function closeMenu() {
     if (monitorMenuOutsideListener) document.removeEventListener("pointerdown", monitorMenuOutsideListener);
     monitorMenuOutsideListener = null;
+    window.removeEventListener("resize", repositionMenu);
+    window.removeEventListener("scroll", repositionMenu, true);
     document.getElementById("dasiwa-monitor-settings-menu")?.remove();
+}
+
+function repositionMenu() {
+    const button = monitorRoot?.querySelector(".dasiwa-monitor-settings");
+    const menu = document.getElementById("dasiwa-monitor-settings-menu");
+    if (button && menu) positionMenu(button, menu);
 }
 
 function isMonitorEnabled() {
@@ -382,7 +473,7 @@ function unmountMonitor() {
     monitorRoot = null;
     fullOverlay?.remove();
     fullOverlay = null;
-    ["dasiwa-monitor-dock-left", "dasiwa-monitor-dock-right", "dasiwa-monitor-dock-target-top", "dasiwa-monitor-dock-target-left", "dasiwa-monitor-dock-target-right"].forEach((id) => document.getElementById(id)?.remove());
+    ["dasiwa-monitor-dock-top", "dasiwa-monitor-dock-left", "dasiwa-monitor-dock-right", "dasiwa-monitor-dock-target-top", "dasiwa-monitor-dock-target-left", "dasiwa-monitor-dock-target-right"].forEach((id) => document.getElementById(id)?.remove());
     latestSnapshot = null;
     history = [];
 }
@@ -412,6 +503,7 @@ function openMenu(button) {
     menu.setAttribute("role", "menu");
     menu.innerHTML = `
         <div class="dasiwa-monitor-menu-label">Display mode</div>
+        <button type="button" class="dasiwa-monitor-reset">Reset to default Lite bar</button>
         <label><input type="radio" name="dasiwa-monitor-mode" value="lite" ${settings.mode === "lite" ? "checked" : ""}> Lite <small>toolbar meters</small></label>
         <label><input type="radio" name="dasiwa-monitor-mode" value="full" ${settings.mode === "full" ? "checked" : ""}> Full <small>all metrics + 60s graphs</small></label>
         <div class="dasiwa-monitor-menu-label">Dock</div>
@@ -419,12 +511,29 @@ function openMenu(button) {
         <label><input type="radio" name="dasiwa-monitor-dock" value="left" ${settings.dockSide === "left" ? "checked" : ""}> Left side</label>
         <label><input type="radio" name="dasiwa-monitor-dock" value="right" ${settings.dockSide === "right" ? "checked" : ""}> Right side</label>
         <div class="dasiwa-monitor-menu-note">Layout is automatic: horizontal at top; vertical at either side.</div>
+        <div class="dasiwa-monitor-menu-label">Transparency</div>
+        <label class="dasiwa-monitor-opacity-row">Background <span><input type="range" min="0" max="100" step="1" data-opacity-setting="${BACKGROUND_OPACITY_SETTING}" value="${opacityValue(BACKGROUND_OPACITY_SETTING)}" aria-label="Monitor background opacity"><output>${opacityValue(BACKGROUND_OPACITY_SETTING)}%</output></span></label>
+        <label class="dasiwa-monitor-opacity-row">Drawing / text / lines <span><input type="range" min="0" max="100" step="1" data-opacity-setting="${CONTENT_OPACITY_SETTING}" value="${opacityValue(CONTENT_OPACITY_SETTING)}" aria-label="Monitor content opacity"><output>${opacityValue(CONTENT_OPACITY_SETTING)}%</output></span></label>
         <div class="dasiwa-monitor-menu-label">Widgets</div>
         <div class="dasiwa-monitor-widgets-list">${widgetControls}</div>`;
     document.body.appendChild(menu);
-    const rect = button.getBoundingClientRect();
-    menu.style.left = `${Math.round(rect.left)}px`;
-    menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+    positionMenu(button, menu);
+    window.addEventListener("resize", repositionMenu);
+    window.addEventListener("scroll", repositionMenu, true);
+    menu.querySelector(".dasiwa-monitor-reset").addEventListener("click", () => {
+        settings.mode = "lite";
+        settings.width = null;
+        settings.placement = "top";
+        applySize(root);
+        placePanel(root, "top");
+        saveSettings();
+        render();
+        closeMenu();
+    });
+    menu.querySelectorAll("[data-opacity-setting]").forEach((input) => input.addEventListener("input", () => {
+        input.nextElementSibling.textContent = `${input.value}%`;
+        void app.ui.settings.setSettingValue(input.dataset.opacitySetting, Number(input.value));
+    }));
     menu.querySelectorAll('input[name="dasiwa-monitor-mode"]').forEach((input) => input.addEventListener("change", (event) => {
         settings.mode = event.target.value;
         saveSettings();
@@ -437,6 +546,7 @@ function openMenu(button) {
         placePanel(root, settings.dockSide);
         saveSettings();
         render();
+        closeMenu();
     }));
 
     menu.querySelectorAll('[data-widget-id]').forEach((input) => input.addEventListener("change", (event) => {
@@ -459,12 +569,12 @@ function addStyles() {
         #dasiwa-monitor-dock-left, #dasiwa-monitor-dock-right { position: fixed; z-index: 1002; top: 120px; bottom: 8px; display: flex; align-items: flex-start; pointer-events: none; } #dasiwa-monitor-dock-left { left: 72px; } #dasiwa-monitor-dock-right { right: 72px; } #dasiwa-monitor-dock-left > #${ROOT_ID}, #dasiwa-monitor-dock-right > #${ROOT_ID} { pointer-events: auto; margin: 0; } #${ROOT_ID}.is-vertical .dasiwa-monitor-display.is-lite { flex-direction: column; align-items: stretch; } #${ROOT_ID}.is-horizontal .dasiwa-monitor-display.is-lite { flex-direction: row; }
         .dasiwa-monitor-dock-target { position: fixed; z-index: 1005; box-sizing: border-box; border: 2px dashed #22d3ee; background: #0891b533; color: #cffafe; font: 700 12px/38px var(--font-inter, sans-serif); letter-spacing: .04em; text-align: center; pointer-events: none; } .dasiwa-monitor-dock-target.is-active { background: #0891b588; border-style: solid; } #dasiwa-monitor-dock-target-top { top: 0; left: 0; width: 100vw; height: 42px; } #dasiwa-monitor-dock-target-left, #dasiwa-monitor-dock-target-right { top: 48px; bottom: 0; width: 56px; writing-mode: vertical-rl; padding-top: 12px; } #dasiwa-monitor-dock-target-left { left: 0; } #dasiwa-monitor-dock-target-right { right: 0; }
         #${PANEL_ID}.is-lite { display: flex; align-items: center; gap: 3px; min-width: 0; }
-        #${ROOT_ID} .dasiwa-monitor-metric { position: relative; box-sizing: border-box; display: grid; grid-template-columns: max-content max-content; gap: 4px; align-items: center; flex: none; min-width: 56px; height: 36px; overflow: hidden; padding: 0 3px; border: 1px solid color-mix(in srgb, var(--meter) 65%, var(--border-color)); background: var(--comfy-input-bg); white-space: nowrap; }
+        #${ROOT_ID} .dasiwa-monitor-metric { position: relative; box-sizing: border-box; display: grid; grid-template-columns: max-content max-content; gap: 4px; align-items: center; flex: none; min-width: 56px; height: 36px; overflow: hidden; padding: 0 6px 0 4px; border: 1px solid color-mix(in srgb, var(--meter) 65%, var(--border-color)); background: var(--comfy-input-bg); white-space: nowrap; }
         #${ROOT_ID} .dasiwa-monitor-metric::before, #${ROOT_ID} .dasiwa-monitor-full-metric i { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--fill); opacity: .38; background: var(--meter); transition: width .35s ease; }
         #${ROOT_ID} span, #${ROOT_ID} strong { position: relative; z-index: 1; font-variant-numeric: tabular-nums; }
         #${ROOT_ID} .dasiwa-monitor-metric span { color: var(--input-text); font-size: 9px; letter-spacing: .01em; }
-        #${ROOT_ID} .dasiwa-monitor-metric strong { display: inline-block; width: 4ch; text-align: right; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace; }
-        #${ROOT_ID} .dasiwa-monitor-metric.disk-rd strong, #${ROOT_ID} .dasiwa-monitor-metric.disk-wr strong { width: 10ch; }
+        #${ROOT_ID} .dasiwa-monitor-metric strong { display: inline-block; width: 5ch; text-align: right; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace; }
+        #${ROOT_ID} .dasiwa-monitor-metric.disk-rd strong, #${ROOT_ID} .dasiwa-monitor-metric.disk-wr strong { width: 12ch; }
         #${ROOT_ID} .cpu { --meter: #38bdf8; } #${ROOT_ID} .ram { --meter: #a78bfa; } #${ROOT_ID} .swap { --meter: #f59e0b; } #${ROOT_ID} .disk { --meter: #fb7185; } #${ROOT_ID} .disk-rd { --meter: #34d399; } #${ROOT_ID} .disk-wr { --meter: #f472b6; }
         #${ROOT_ID} .gpu-util { --meter: #4ade80; } #${ROOT_ID} .gpu-vram { --meter: #22d3ee; } #${ROOT_ID} .gpu-temp { --meter: #fb923c; }
         #${ROOT_ID} [hidden] { display: none !important; }
@@ -484,6 +594,21 @@ function addStyles() {
         #${ROOT_ID} .dasiwa-monitor-graph-wrap, #dasiwa-monitor-full-overlay .dasiwa-monitor-graph-wrap { position: relative; z-index: 1; height: 46px; margin-top: 7px; border-bottom: 1px solid color-mix(in srgb, var(--meter) 25%, transparent); }
         #${ROOT_ID} .dasiwa-monitor-graph, #dasiwa-monitor-full-overlay .dasiwa-monitor-graph { width: 100%; height: 100%; overflow: visible; fill: none; stroke: var(--meter); stroke-width: 3; vector-effect: non-scaling-stroke; }
         #${ROOT_ID} .dasiwa-monitor-empty-graph, #dasiwa-monitor-full-overlay .dasiwa-monitor-empty-graph { color: var(--descrip-text, #aaa); font-size: 10px; padding-top: 18px; text-align: center; }
+        #dasiwa-monitor-dock-top { box-sizing: border-box; display: flex; align-self: stretch; min-width: 0; max-width: 100%; padding: 4px 0; pointer-events: none; } #dasiwa-monitor-dock-top[hidden] { display: none; } #dasiwa-monitor-dock-top > #${ROOT_ID} { pointer-events: auto; }
+        #${ROOT_ID} { box-sizing: border-box; width: max-content; max-width: min(100%, calc(100vw - 16px)); min-height: 36px; align-items: flex-start; } #${ROOT_ID}.is-floating { max-width: calc(100vw - 16px); } #${ROOT_ID}.is-dock-left, #${ROOT_ID}.is-dock-right { max-height: calc(100vh - 128px); }
+        #${ROOT_ID} .dasiwa-monitor-drag-handle { box-sizing: border-box; align-self: flex-start; height: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center; flex: none; } #${ROOT_ID} .dasiwa-monitor-drag-handle::after { padding: 0; line-height: 1; }
+        #${PANEL_ID}.is-lite { box-sizing: border-box; flex: 1 1 auto; width: max-content; max-width: 100%; min-width: 0; min-height: 36px; flex-wrap: wrap; align-content: flex-start; overflow: visible; } #${ROOT_ID} .dasiwa-monitor-settings { flex: none; } #${ROOT_ID} .dasiwa-monitor-resize-handle { position: absolute; z-index: 1004; right: 0; bottom: 0; width: 15px; height: 15px; cursor: ew-resize; touch-action: none; background: linear-gradient(135deg, transparent 55%, var(--border-color) 55% 62%, transparent 62% 74%, var(--border-color) 74% 81%, transparent 81%); }
+        #${ROOT_ID}.is-resized { padding-right: 15px; }
+        #${ROOT_ID}:not(.is-resized) { height: 36px; } #${ROOT_ID}:not(.is-resized) #${PANEL_ID}.is-lite { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
+        #${ROOT_ID}:not(.is-resized).is-vertical { height: auto; } #${ROOT_ID}:not(.is-resized).is-vertical #${PANEL_ID}.is-lite { overflow-x: hidden; overflow-y: auto; }
+        #dasiwa-monitor-settings-menu .dasiwa-monitor-reset { padding: 5px; text-align: left; color: var(--input-text); border: 1px solid var(--border-color); background: var(--comfy-input-bg); cursor: pointer; }
+        #dasiwa-monitor-settings-menu { box-sizing: border-box; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; color: var(--input-text); } #dasiwa-monitor-settings-menu label.dasiwa-monitor-opacity-row { display: grid; grid-template-columns: 1fr; gap: 4px; } #dasiwa-monitor-settings-menu .dasiwa-monitor-opacity-row > span { display: flex; align-items: center; gap: 8px; } #dasiwa-monitor-settings-menu .dasiwa-monitor-opacity-row input { flex: 1; min-width: 0; } #dasiwa-monitor-settings-menu .dasiwa-monitor-opacity-row output { min-width: 4ch; text-align: right; }
+        #${ROOT_ID} .dasiwa-monitor-drag-handle, #${ROOT_ID} .dasiwa-monitor-settings, #${ROOT_ID} .dasiwa-monitor-metric, #${ROOT_ID} .dasiwa-monitor-full-metric, #${PANEL_ID}.is-full, #dasiwa-monitor-full-overlay, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-metric { background: color-mix(in srgb, var(--comfy-input-bg) var(--dasiwa-monitor-bg-opacity, 100%), transparent); }
+        #${PANEL_ID}.is-full, #dasiwa-monitor-full-overlay { background: color-mix(in srgb, var(--comfy-menu-bg, #202020) var(--dasiwa-monitor-bg-opacity, 100%), transparent); }
+        #${ROOT_ID} .dasiwa-monitor-drag-handle, #${ROOT_ID} .dasiwa-monitor-settings, #${ROOT_ID} .dasiwa-monitor-metric, #${ROOT_ID} .dasiwa-monitor-full-metric, #${PANEL_ID}.is-full, #dasiwa-monitor-full-overlay, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-metric { border-color: color-mix(in srgb, var(--border-color) var(--dasiwa-monitor-content-alpha, 100%), transparent); }
+        #${ROOT_ID} .dasiwa-monitor-settings { color: color-mix(in srgb, var(--input-text) var(--dasiwa-monitor-content-alpha, 100%), transparent); }
+        #${ROOT_ID} .dasiwa-monitor-drag-handle::after, #${ROOT_ID} .dasiwa-monitor-metric > span, #${ROOT_ID} .dasiwa-monitor-metric > strong, #${ROOT_ID} .dasiwa-monitor-full-header, #${ROOT_ID} .dasiwa-monitor-full-metric > div, #${ROOT_ID} .dasiwa-monitor-full-metric > small, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-header, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-metric > div, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-metric > small { opacity: var(--dasiwa-monitor-content-opacity, 1); }
+        #${ROOT_ID} .dasiwa-monitor-metric::before, #${ROOT_ID} .dasiwa-monitor-full-metric > i, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-metric > i { opacity: calc(.38 * var(--dasiwa-monitor-content-opacity, 1)); }
         @media (max-width: 640px) { #${PANEL_ID}.is-full, #dasiwa-monitor-full-overlay { width: calc(100vw - 12px); padding: 9px; } #${ROOT_ID} .dasiwa-monitor-full-grid, #dasiwa-monitor-full-overlay .dasiwa-monitor-full-grid { grid-template-columns: 1fr; } }
     `;
     document.head.appendChild(style);
@@ -495,7 +620,9 @@ async function mountMonitor() {
     const root = document.createElement("div");
     monitorRoot = root;
     root.id = ROOT_ID;
-    root.innerHTML = `<span class="dasiwa-monitor-drag-handle" aria-label="Drag system monitor"></span><div id="${PANEL_ID}" class="dasiwa-monitor-display is-lite">Loading…</div><button class="dasiwa-monitor-settings" type="button" title="DaSiWa monitor settings" aria-label="DaSiWa monitor settings">⚙</button>`;
+    root.innerHTML = `<span class="dasiwa-monitor-drag-handle" aria-label="Drag system monitor"></span><div id="${PANEL_ID}" class="dasiwa-monitor-display is-lite">Loading…</div><button class="dasiwa-monitor-settings" type="button" title="DaSiWa monitor settings" aria-label="DaSiWa monitor settings">⚙</button><span class="dasiwa-monitor-resize-handle" role="button" aria-label="Resize system monitor" title="Drag to resize monitor"></span>`;
+    applySize(root);
+    applyOpacity();
     const settingsButton = root.querySelector("button");
     settingsButton.addEventListener("click", () => openMenu(settingsButton));
     document.body.insertAdjacentHTML("beforeend", `
@@ -506,19 +633,20 @@ async function mountMonitor() {
         <div id="dasiwa-monitor-dock-target-right" class="dasiwa-monitor-dock-target" hidden>Dock right</div>`);
     applyOrientation(root);
     enablePanelDrag(root);
-    if (placePanel(root)) {
-        if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
-    } else {
-        document.body.appendChild(root);
-        monitorToolbarObserver = new MutationObserver(() => {
-            if (placePanel(root)) {
-                if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
-                monitorToolbarObserver?.disconnect();
-                monitorToolbarObserver = null;
-            }
-        });
-        monitorToolbarObserver.observe(document.body, { childList: true, subtree: true });
-    }
+    enablePanelResize(root);
+    if (!placePanel(root)) document.body.appendChild(root);
+    // ComfyUI can replace the action-bar parent when its side panels toggle.
+    // Keep the same monitor element and its listeners; remount only its dock.
+    monitorToolbarObserver = new MutationObserver(() => {
+        if (settings.placement === "floating" || settings.dockSide !== "top") return;
+        const row = document.querySelector('[data-testid="top-menu-actionbars"]');
+        const dock = document.getElementById("dasiwa-monitor-dock-top");
+        if (row?.parentElement && (!root.isConnected || dock?.previousElementSibling !== row || dock.parentElement !== row.parentElement)) {
+            placePanel(root, "top");
+        }
+    });
+    monitorToolbarObserver.observe(document.body, { childList: true, subtree: true });
+    if (settings.placement === "floating") floatPanel(root, settings.x, settings.y);
     monitorEventListener = (event) => {
         latestSnapshot = event.detail;
         history = [...history, historyPoint(latestSnapshot)].slice(-HISTORY_LENGTH);
@@ -526,6 +654,13 @@ async function mountMonitor() {
     };
     api.addEventListener(EVENT_NAME, monitorEventListener);
     monitorResizeObserver = new ResizeObserver(() => {
+        applySize(root);
+        if (settings.placement === "floating") {
+            const x = Math.max(8, Math.min(settings.x, window.innerWidth - root.offsetWidth - 8));
+            const y = Math.max(8, Math.min(settings.y, window.innerHeight - root.offsetHeight - 8));
+            root.style.left = `${Math.round(x)}px`;
+            root.style.top = `${Math.round(y)}px`;
+        }
         const panel = document.getElementById(PANEL_ID);
         if (!panel) return;
         if (settings.mode === "full") {
@@ -537,7 +672,6 @@ async function mountMonitor() {
                 positionFullPanel(panel);
             }
         }
-        else fitPanel(panel);
     });
     monitorResizeObserver.observe(document.documentElement);
     try {
@@ -562,6 +696,16 @@ app.registerExtension({
             defaultValue: true,
             onChange: (enabled) => { void setMonitorEnabled(enabled !== false); },
         });
+        for (const [id, name, tooltip] of [
+            [BACKGROUND_OPACITY_SETTING, "Background opacity", "Opacity of the monitor's background surfaces (0% is transparent)."],
+            [CONTENT_OPACITY_SETTING, "Drawing / text / lines opacity", "Opacity of the monitor's meters, labels, graph lines and borders."],
+        ]) {
+            app.ui.settings.addSetting({
+                id, name, category: ["DaSiWa", "System Monitor", name], tooltip,
+                type: "slider", defaultValue: 100, attrs: OPACITY_ATTRS,
+                onChange: applyOpacity,
+            });
+        }
     },
     async setup() {
         const enabled = isMonitorEnabled();

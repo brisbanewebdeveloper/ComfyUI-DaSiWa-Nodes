@@ -62,12 +62,25 @@ def prune(node, publisher, current, token):
         path = prefix + urllib.parse.quote(version["id"], safe="")
         request("PUT", path, token, {"deprecated": True})
         print(f"Deprecated {version['version']}")
+    undeleted = []
     for version in versions[4:]:
         path = prefix + urllib.parse.quote(version["id"], safe="")
-        request("DELETE", path, token)
-        print(f"Unpublished {version['version']}")
+        if not undeleted:
+            try:
+                request("DELETE", path, token)
+            except RuntimeError as error:
+                if not isinstance(error.__cause__, urllib.error.HTTPError) or error.__cause__.code != 401:
+                    raise
+                print("Registry rejected DELETE with HTTP 401; keeping older versions deprecated instead", file=sys.stderr)
+            else:
+                print(f"Unpublished {version['version']}")
+                continue
+        undeleted.append(version)
+        if not version["deprecated"]:
+            request("PUT", path, token, {"deprecated": True})
+            print(f"Deprecated {version['version']}")
     remaining = [v for v in list_versions(node) if v["status"] != DELETED and v["version"] != current]
-    expected = {v["id"] for v in versions[:4]}
+    expected = {v["id"] for v in versions[:4] + undeleted}
     if {v["id"] for v in remaining} != expected or any(not v["deprecated"] for v in remaining):
         raise RuntimeError("Registry cleanup verification failed")
     print(f"Verified {len(remaining)} deprecated predecessors remain; excluded newly published {current}")

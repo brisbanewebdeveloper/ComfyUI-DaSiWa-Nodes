@@ -8,14 +8,9 @@ let observer;
 function placeButton() {
     const root = document.getElementById(ID);
     if (!root) return false;
-    const monitor = document.getElementById("dasiwa-system-monitor");
-    if (monitor && !monitor.classList.contains("is-floating") && monitor.parentElement?.id !== "dasiwa-monitor-dock-left" && monitor.parentElement?.id !== "dasiwa-monitor-dock-right") {
-        if (monitor.nextElementSibling !== root) monitor.after(root);
-        return true;
-    }
     const toolbar = document.querySelector('[data-testid="legacy-topbar-container"] > .flex');
     if (toolbar) {
-        if (root.parentElement !== toolbar) toolbar.prepend(root);
+        if (toolbar.firstElementChild !== root) toolbar.prepend(root);
         return true;
     }
     const extensions = document.querySelector('button[aria-label="Extensions"]');

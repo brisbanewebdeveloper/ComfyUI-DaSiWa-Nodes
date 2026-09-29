@@ -361,15 +361,26 @@ def load_video(path: str, input_directory: str, *, trim_start: float = 0.0,
             raise ValueError("video trim range produced no frames")
         frames = []
         source_times = []
+        prior_frame = None
+        prior_time = None
         for frame in container.decode(stream):
             timestamp = float(frame.pts * frame.time_base) if frame.pts is not None else None
-            if timestamp is None or timestamp < trim_start or timestamp >= end:
+            if timestamp is None or timestamp >= end:
+                continue
+            if timestamp < trim_start:
+                prior_frame, prior_time = frame, timestamp
                 continue
             frames.append(torch.from_numpy(frame.to_rgb().to_ndarray()).float() / 255.0)
             source_times.append(timestamp)
+        if prior_frame is not None:
+            assert isinstance(prior_frame, av.VideoFrame)
+            frames.insert(0, torch.from_numpy(prior_frame.to_rgb().to_ndarray()).float() / 255.0)
+            source_times.insert(0, prior_time)
         if not frames:
             raise ValueError("video trim range produced no frames")
         source = torch.stack(frames)
+        if len(frames) == 1:
+            return source.expand(len(timestamps), -1, -1, -1)
         # Sample by presentation time, not by source index: for each target
         # tick pick the source frame with the nearest PTS (VHS-style
         # force_rate). The former (timestamps * target_fps) index collapsed

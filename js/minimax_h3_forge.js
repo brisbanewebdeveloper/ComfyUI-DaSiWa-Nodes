@@ -32,6 +32,7 @@ const STORE_KEY = "dasiwa.h3forge";
 const openDialogs = new WeakMap();
 const briefs = new Map(); // node id -> last brief, for a reroll after closing
 const HISTORY_KEY = "dasiwaH3ForgeHistory";
+const GROUPS_KEY = "dasiwaH3ForgeSubjectGroups";
 function forgeHistory(node) {
   const saved = node.properties?.[HISTORY_KEY];
   return Array.isArray(saved) ? saved.filter(entry => entry && typeof entry.simple_prompt === "string" && entry.simple_prompt.trim() && typeof entry.mode === "string" && entry.fields && typeof entry.fields === "object").slice(0, 3) : [];
@@ -85,6 +86,7 @@ function installStyles() {
   .ds-forge .muted{color:#8fa3b2;font-size:12px}
   .ds-forge .refs{display:flex;flex-direction:column;gap:6px}
   .ds-forge .ref{display:grid;grid-template-columns:48px 90px 130px 1fr;gap:8px;align-items:center}
+  .ds-forge .ref.has-group{grid-template-columns:48px 76px 105px 145px minmax(90px,1fr)}
   .ds-forge .ref img{width:48px;height:36px;object-fit:cover;border-radius:3px;background:#090d11}
   .ds-forge pre{white-space:pre-wrap;background:#0b1015;border:1px solid #344452;border-radius:4px;padding:8px;margin:0;max-height:320px;overflow:auto;font:12px/1.45 ui-monospace,monospace}
   .ds-forge .history{display:flex;flex-direction:column;gap:5px;border-top:1px solid #344452;padding-top:9px}
@@ -101,13 +103,14 @@ const el = (tag, props = {}, ...children) => { const n = Object.assign(document.
 const viewUrl = path => api.apiURL(`/view?filename=${encodeURIComponent(path)}&type=input`);
 const BASE_ROLE = { I2VA: "first frame", FL2VA: "first / last frame", L2VA: "last frame" };
 
-function referencesFor(hook) {
+function referencesFor(hook, node) {
   const mode = hook.mode();
+  const groups = node.properties?.[GROUPS_KEY] || {};
   const laneOrder = { image: 0, video: 1, audio: 2 };
   return hook.items()
     .sort((a, b) => (laneOrder[a.lane] - laneOrder[b.lane]) || (a.slot - b.slot))
     .map(item => {
-      if (item.lane === "image") return { item, kind: "image", path: item.value, role: mode === "REF2VA" ? (item.forge_role || "subject") : "keyframe" };
+      if (item.lane === "image") return { item, kind: "image", path: item.value, role: mode === "REF2VA" ? (item.forge_role || "subject") : "keyframe", subject_group: mode === "REF2VA" ? (groups[item.id] || "") : "" };
       if (item.lane === "audio" && item.type === "audio") return { item, kind: "audio", duration_seconds: item.duration };
       return { item, kind: "video", role: "motion", stream: item.media_mode === "audio" ? "audio" : item.media_mode === "video_audio" ? "both" : "video", duration_seconds: item.duration };
     });
@@ -144,26 +147,76 @@ async function open(node) {
 
   // References from the timeline. REF2VA pictures need a role; base-mode
   // pictures are frames by definition.
-  const refs = continuity ? [] : referencesFor(hook);
+  const refs = continuity ? [] : referencesFor(hook, node);
+  const groupControls = [];
   if (continuity) box.append(el("div", { className: "muted", textContent: "The source ending and Duration guide this draft. A vision model uses tail frames internally; audio is not analyzed. Review the result, then Apply to node." }));
   if (refs.length) {
     const list = el("div", { className: "refs" });
+    const groupable = mode === "REF2VA" && refs.filter(r => r.kind === "image").length >= 2;
+    const groupNote = el("div", { className: "muted" });
+    const updateGroupNote = () => {
+      const groups = new Map();
+      let number = 0;
+      for (const ref of refs) {
+        if (ref.kind !== "image") continue;
+        number++;
+        if (ref.role === "subject" && ref.subject_group) groups.set(ref.subject_group, [...(groups.get(ref.subject_group) || []), number]);
+      }
+      groupNote.textContent = [...groups].map(([id, numbers]) => numbers.length > 1
+        ? `Group ${id}: Pictures ${numbers.join(", ")}`
+        : `Group ${id}: choose another picture to group`).join(" · ") || "No subject groups. Pictures stay separate.";
+    };
     let counts = { image: 0, video: 0, audio: 0 };
     for (const ref of refs) {
       counts[ref.kind] += 1;
       const name = `${ref.kind === "image" ? "Picture" : ref.kind === "video" ? "Video" : "Audio"} ${counts[ref.kind]}`;
       const thumb = ref.kind === "image" ? el("img", { src: viewUrl(ref.path) }) : el("span", { className: "muted", textContent: ref.kind });
       let roleCell;
+      let groupCell = null;
       if (ref.kind === "image" && mode === "REF2VA") {
-        roleCell = el("select", { onchange: e => { ref.role = e.target.value; ref.item.forge_role = e.target.value; } });
+        roleCell = el("select", { onchange: e => {
+          ref.role = e.target.value;
+          ref.item.forge_role = e.target.value;
+          if (e.target.value !== "subject" && ref.subject_group) {
+            ref.subject_group = "";
+            delete node.properties?.[GROUPS_KEY]?.[ref.item.id];
+            if (groupCell) groupCell.value = "";
+          }
+          if (groupCell) groupCell.disabled = e.target.value !== "subject";
+          node.graph?.setDirtyCanvas(true, true);
+          updateGroupNote();
+        } });
         for (const r of ["subject", "style", "keyframe"]) roleCell.append(el("option", { value: r, textContent: r, selected: ref.role === r }));
+        if (groupable) {
+          groupCell = el("select", { title: "Subject-aware grouping: give pictures of the SAME subject the same letter. Leave Separate for unrelated pictures.", disabled: ref.role !== "subject", onchange: e => {
+            ref.subject_group = e.target.value;
+            node.properties ||= {};
+            node.properties[GROUPS_KEY] ||= {};
+            if (e.target.value) node.properties[GROUPS_KEY][ref.item.id] = e.target.value;
+            else delete node.properties[GROUPS_KEY][ref.item.id];
+            node.graph?.setDirtyCanvas(true, true);
+            updateGroupNote();
+          } });
+          groupCell.append(el("option", { value: "", textContent: "Separate" }));
+          for (let i = 0; i < Math.min(26, refs.filter(r => r.kind === "image").length); i++) {
+            const id = String.fromCharCode(65 + i);
+            groupCell.append(el("option", { value: id, textContent: `Group ${id}` }));
+          }
+          groupCell.value = ref.subject_group || "";
+          groupControls.push([groupCell, ref]);
+        }
       } else {
         roleCell = el("span", { className: "muted", textContent: ref.kind === "image" ? BASE_ROLE[mode] || "frame" : ref.kind === "video" ? `motion · ${ref.stream}` : "voice" });
       }
       const keep = el("input", { type: "text", placeholder: "keep (optional)", oninput: e => { ref.keep = e.target.value.trim(); } });
-      list.append(el("div", { className: "ref" }, thumb, el("span", { textContent: name }), roleCell, ref.kind === "audio" ? el("span") : keep));
+      list.append(el("div", { className: groupable ? "ref has-group" : "ref" }, thumb, el("span", { textContent: name }), roleCell, ...(groupable ? [groupCell || el("span")] : []), ref.kind === "audio" ? el("span") : keep));
     }
     box.append(el("div", { className: "field" }, el("label", { textContent: "References on the timeline" }), list));
+    if (groupable) {
+      updateGroupNote();
+      box.append(el("div", { className: "field" }, el("label", { textContent: "Subject-aware grouping (optional)" }),
+        el("span", { className: "muted", textContent: "Assign the same Subject letter to pictures of the same person or object. Separate leaves each picture independent; two pictures are needed for a group." }), groupNote));
+    }
   } else if (mode !== "T2VA" && !continuity) {
     box.append(el("div", { className: "muted", textContent: `${mode} expects pictures on the timeline; none are loaded, so the model writes from the idea alone.` }));
   }
@@ -176,7 +229,6 @@ async function open(node) {
     el("div", { className: "field" }, el("label", { textContent: "Model" }), modelSel),
     el("div", { className: "field" }, el("label", { textContent: "Creativity" }), creativity)));
   box.append(el("div", { className: "field" }, el("label", {}, "Detail ", detailLabel), detail));
-
   const status = el("span", { className: "status" });
   const setStatus = (msg, err = false) => { status.textContent = msg; status.classList.toggle("error", err); };
   const genBtn = el("button", { className: "primary", textContent: "Generate", disabled: true });
@@ -188,7 +240,11 @@ async function open(node) {
   box.append(historyBox);
   const referenceControls = Array.from(box.querySelectorAll(".refs input, .refs select"));
   const controls = [brief, modelSel, detail, creativity, ...referenceControls];
-  controls.forEach(c => { c.disabled = true; });
+  const setControlsDisabled = disabled => {
+    controls.forEach(c => { c.disabled = disabled; });
+    if (!disabled) groupControls.forEach(([control, ref]) => { control.disabled = ref.role !== "subject"; });
+  };
+  setControlsDisabled(true);
   let result = null;
   const showResult = entry => {
     if (closed) return;
@@ -264,7 +320,7 @@ async function open(node) {
   }
   if (closed) return;
   loadingModels = false;
-  controls.forEach(c => { c.disabled = false; });
+  setControlsDisabled(false);
   brief.focus();
   const syncDetail = () => { detailLabel.textContent = `${detail.value} of 10 — ${levels[detail.value] || ""}`; };
   detail.oninput = syncDetail; syncDetail();
@@ -290,7 +346,7 @@ async function open(node) {
     remember({ model: modelSel.value, creativity: creativity.value, detail: Number(detail.value) });
     result = null; output.hidden = true; output.textContent = ""; renderHistory();
     applyBtn.disabled = true;
-    controls.forEach(c => { c.disabled = true; });
+    setControlsDisabled(true);
     const draftOptions = { model: modelSel.value, detail: Number(detail.value), creativity: creativity.value };
     const requestId = `forge-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     running = requestId; renderHistory();
@@ -323,7 +379,7 @@ async function open(node) {
     } finally {
       clearInterval(statusTimer); statusTimer = null;
       running = null;
-      controls.forEach(c => { c.disabled = false; });
+      setControlsDisabled(false);
       applyBtn.disabled = !result || !compatible(result);
       genBtn.disabled = false;
       genBtn.textContent = "Regenerate";

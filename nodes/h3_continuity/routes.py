@@ -1,6 +1,5 @@
 """Read-only H3 continuity listings, bounded tail JPEGs and Forge drafts."""
 import asyncio
-import subprocess
 from aiohttp import web
 from .core import ClipStore, safe_id
 from .video_source import prepare_video, read_manifest, manifest_dir
@@ -20,7 +19,7 @@ def register_routes(server=None):
                 raise ValueError("Video request must be an object.")
             result = await asyncio.to_thread(prepare_video, body["filename"])
             return web.json_response(result)
-        except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError) as exc:
+        except (ValueError, KeyError, OSError, TypeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
     @routes.get("/df_h3_continuity/video/{source}/{index}")

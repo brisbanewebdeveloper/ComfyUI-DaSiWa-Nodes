@@ -26,10 +26,12 @@ from .vendor.continuation_nodes import (
 
 VERSION = "1.2.5"
 DEFAULT_PROMPT = (
-    "Continue the same uninterrupted shot naturally. Preserve the subjects' identity, "
-    "clothing, positions, lighting and environment. Maintain the established motion "
-    "direction, camera trajectory and ambient sound. Do not restart the action, "
-    "repeat completed dialogue, introduce a cut, fade, title, freeze or loop."
+    "Continue the same uninterrupted shot. Preserve the subjects' identity, clothing, "
+    "lighting and environment. Match their positions and instantaneous motion, the "
+    "camera, and sound at the seam. After the overlap, the next action may change "
+    "tempo, intensity, performance, sound, or camera movement when requested. "
+    "Do not restart the action, repeat completed dialogue, introduce a cut, fade, "
+    "title, freeze, loop, or swap identity."
 )
 _ID = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 _LOCK = threading.RLock()
@@ -123,16 +125,24 @@ def compose_prompt(settings):
     head = settings["overlap_frames"] / 24
     visible = settings["extension_frames"] / 24
     text = settings["continuation_prompt"]
-    if settings.get("version", 2) >= 3:
-        text = DEFAULT_PROMPT + ("\nNext action: " + text if text else "")
     idea = settings.get("idea", "").strip()
+    if settings.get("version", 2) >= 3:
+        if text:
+            text = DEFAULT_PROMPT + "\nNext action: " + text
+        elif idea:
+            text = DEFAULT_PROMPT
+        else:
+            text = DEFAULT_PROMPT + "\nWith no next action, continue the established action, camera motion, and sound naturally."
     if idea:
         text += "\nNext action: " + idea
     return (
         f"This is a continuation window. Its opening {head:.3f} seconds are hidden "
-        "overlapping context from the end of the preceding shot. Match that context's "
-        "motion and sound before advancing. "
-        f"The following {visible:.3f} seconds are the new visible continuation.\n\n{text}"
+        "overlapping context from the end of the preceding shot. Weld to that tail "
+        "at the seam: same subjects, space, and instantaneous motion, camera, and sound. "
+        "Do not freeze its tempo or camera for the rest of the clip. "
+        f"The following {visible:.3f} seconds are the new visible continuation. "
+        "After the overlap, follow the next action if given; otherwise continue naturally.\n\n"
+        f"{text}"
     )
 
 

@@ -1,6 +1,5 @@
 // Pure frontend counterparts of nodes/h3_continuity/core.py. Tested for parity.
 export const CONTINUITY_DEFAULTS = { version: 3, source_kind: "checkpoint", source_id: "", source_video_id: "", source_video: null, use_references: false, operation: "new", capture: false, session: "", overlap_frames: 22, continuation_prompt: "", idea: "" };
-export const CONTINUITY_LEGACY_PROMPT = "Continue the same uninterrupted shot naturally. Preserve the subjects' identity, clothing, positions, lighting and environment. Maintain the established motion direction, camera trajectory and ambient sound. Do not restart the action, repeat completed dialogue, introduce a cut, fade, title, freeze or loop.";
 export const sourceId = c => c?.source_kind === "video" ? c.source_video_id : c?.source_id;
 export function continuityTiming(seconds, preferred = 22, sourceFrames = null) {
   seconds = Number(seconds);
@@ -11,21 +10,10 @@ export function continuityTiming(seconds, preferred = 22, sourceFrames = null) {
   if (overlap == null) throw new Error("The source needs at least 5 H3 frames.");
   return { duration_seconds: seconds, overlap_frames: overlap, extension_frames: extension, added_seconds: extension / 24, window_frames: overlap + extension };
 }
-export function migrateContinuity(c, durationWidget) {
+export function normalizeContinuity(c) {
   if (!c || typeof c !== "object") return { ...CONTINUITY_DEFAULTS };
-  if (Number(c.version || 2) < 3) {
-    if (c.operation === "continue" && sourceId(c)) {
-      if (durationWidget && Number(c.extension_frames) > 0) durationWidget.value = Number(c.extension_frames) / 24;
-    } else {
-      // Old UI allowed a preselected, inactive source. Do not start it on upgrade.
-      c.source_id = ""; c.source_video_id = "";
-    }
-    if (c.continuation_prompt === CONTINUITY_LEGACY_PROMPT) c.continuation_prompt = "";
-    if (c.idea?.trim()) c.continuation_prompt = [c.continuation_prompt, c.idea.trim()].filter(Boolean).join("\n");
-    c.idea = ""; c.version = 3;
-  }
   for (const [key, value] of Object.entries(CONTINUITY_DEFAULTS)) if (c[key] === undefined) c[key] = value;
-  // The old independent control must never survive as a second timing authority.
+  // Duration is the sole timing authority; remove any stale derived fields.
   delete c.extension_frames; delete c.window_frames; delete c.added_seconds; delete c.duration_seconds;
   c.operation = sourceId(c) ? "continue" : "new";
   return c;

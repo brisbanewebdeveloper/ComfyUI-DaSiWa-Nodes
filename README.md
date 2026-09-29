@@ -22,7 +22,7 @@ Use **ComfyUI → Settings → Other → DaSiWa → ...** to enable or disable e
 - ⏱️ **Reference trims:** draggable crop markers and preview range, ▶ Play crop; 2–15s per reference window and ≤15s combined visual / ≤15s combined audio, with input-path validation.
 - 📸 **RefMods:** image/video/audio files and upstream v5 bundles from `models/refmods/`; overlay selection, strength scaling, workflow-local descriptions, runtime `<RefMod N>` → native-label resolution.
 - ✍️ **Prompt editor:** one free-text field per mode; optional structure, shot/RefMod insertion and reference-label prefill; legacy prompts migrate into that field.
-- ✨ **Prompt Forge:** review/apply H3 drafts from `models/llm`, Ollama or an OpenAI-compatible server; vision models can see reference pictures. [Model setup and limitations →](docs/minimax_h3_director.md#prompt-forge-connect-an-llm-and-apply-a-draft).
+- ✨ **Prompt Forge:** review/apply H3 drafts from `models/llm`, Ollama or an OpenAI-compatible server; vision models can see reference pictures. REF2VA can explicitly group multiple pictures of one subject (default: separate) and warn when a draft splits the group. [Model setup and limitations →](docs/minimax_h3_director.md#prompt-forge-optional).
 - ♾️ **Continuity (opt-in):** extend a completed 24-fps H3 video/audio take from a pinned latent checkpoint; separate next-action prompt, explicit source advancement, optional Forge draft. [Wiring and limits →](docs/h3_continuity.md).
 - 📐 **Smart resolution:** Auto/custom aspect, resolution and megapixel presets; input scaling via Torch Resize (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop).
 - 💾 **Save/Load packs:** reference files, prompt and RefMod selections; append/overwrite with mode-limit and missing-file checks.
@@ -237,17 +237,18 @@ IMAGE ────────────────────────�
 
 ### 🖥️ System Monitor
 
-A compact system telemetry bar integrated directly into the ComfyUI top toolbar. The adjacent DaSiWa settings button lets you hide the monitor or choose its display mode.
+A compact telemetry bar that defaults to its own row below ComfyUI's top controls, leaving Run, panel navigation, and custom-node buttons accessible.
 
 - **Multi-GPU Support:** Separate metrics per GPU device (NVIDIA, AMD, Intel) labeled as GPU0, GPU1, etc.
 - **Resource Metrics:** CPU, RAM, SWAP/Pagefile, DISK, GPU Utilization, GPU VRAM, and GPU Temperature.
 - **Visual Feedback:** Color-coded borders and proportional background fills (0–100%) for instant at-a-glance assessment.
-- **Lite / Full Modes:** Lite is the default compact toolbar view; Full shows every available metric with detailed values and a live 60-second graph.
-- **Responsive Layout:** Lite automatically hides lower-priority metrics when toolbar space is limited; Full is a scrollable panel that adapts to narrow screens. Each Lite chip sizes to its label and value (`max-content`) so text never clips, at any resolution, font, or DPI.
+- **Lite / Full Modes:** Lite defaults to one row of meters; Full shows detailed values and live 60-second graphs.
+- **Resizable Lite Bar:** Drag its corner horizontally; meters keep their size and wrap into new rows as the bar narrows. Reset to default Lite bar from its menu.
+- **Dock or Float:** Keep the separate top row, dock left or right, or drag the dotted grip to float the monitor. Placement and width persist across reloads.
+- **Viewport-Aware Menu:** The settings menu opens toward available screen space; separate background and drawing/text/lines opacity sliders are also available in ComfyUI Settings.
 - **Cross-Platform:** Works on Linux and Windows with automatic fallback detection for GPU tools.
 - **Container-safe:** In containers and sandboxes where parts of `/proc` are missing (e.g. `/proc/vmstat`), probes degrade to `n/a` instead of warning every second. Set `DASWA_SYSTEM_MONITOR=0` (also `false`/`no`/`off`/`disable`) to fully stop the backend polling thread.
-- **Independent Placement:** Renders as its own toolbar element, not dependent on third-party extensions.
-- **Free Memory Button:** Separate DaSiWa-logo toolbar button beside the top-docked monitor (or in the toolbar when the monitor is off). Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Hide the button independently under **Settings → Other → DaSiWa → Free Memory**.
+- **Free Memory Button:** Separate DaSiWa-logo button stays beside the top controls regardless of monitor placement. Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Hide it independently under **Settings → Other → DaSiWa → Free Memory**.
 
 **Lite mode**
 

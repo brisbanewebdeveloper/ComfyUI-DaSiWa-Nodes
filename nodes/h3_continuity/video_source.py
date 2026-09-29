@@ -8,11 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import shutil
-import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import numpy as np
@@ -22,46 +19,7 @@ from comfy.nested_tensor import NestedTensor
 from .core import ClipStore, atomic_json, mode_family, safe_id
 from .vendor.continuation_nodes import validate_h3_av_latent
 
-IMPORT_VERSION = 1
-
-
-def executable(name):
-    value = shutil.which(name)
-    if not value:
-        raise ValueError(f"Install {name} on PATH to import an ordinary video.")
-    return value
-
-
-def run_media(args, timeout=1800, interrupt=False):
-    # Disk spooling avoids accumulating conversion logs in RAM. Queue cancellation
-    # terminates ffmpeg instead of leaving a potentially long conversion running.
-    check = (lambda: None)
-    if interrupt:
-        from comfy.model_management import throw_exception_if_processing_interrupted
-        check = throw_exception_if_processing_interrupted
-    check()
-    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=output, stderr=errors)
-        try:
-            started = time.monotonic()
-            while process.poll() is None:
-                check()
-                if time.monotonic() - started > timeout:
-                    raise subprocess.TimeoutExpired(args, timeout)
-                try:
-                    process.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    pass
-            check()
-        except BaseException:
-            process.kill()
-            process.wait()
-            raise
-        if process.returncode:
-            errors.seek(max(0, errors.tell() - 2000))
-            raise ValueError("Video conversion failed: " + errors.read().decode(errors="replace")[-1200:])
-        output.seek(0)
-        return output.read()
+IMPORT_VERSION = 2  # New media normalization backend; keep old checkpoints immutable.
 
 
 def input_video(filename, input_root=None):
@@ -92,22 +50,8 @@ def file_digest(path, interrupt=False):
 
 
 def probe_video(path):
-    data = json.loads(run_media([
-        executable("ffprobe"), "-v", "error", "-show_streams", "-show_format",
-        "-of", "json", str(path)], timeout=45))
-    streams = data.get("streams", [])
-    video = next((s for s in streams if s.get("codec_type") == "video"
-                  and not s.get("disposition", {}).get("attached_pic")), None)
-    if not video:
-        raise ValueError("The selected file has no decodable video stream.")
-    duration = float(video.get("duration") or data.get("format", {}).get("duration") or 0)
-    if not math.isfinite(duration) or duration <= 0:
-        raise ValueError("Could not determine the source video's duration.")
-    numerator, _, denominator = str(video.get("avg_frame_rate", "0/1")).partition("/")
-    fps = float(numerator) / (float(denominator or 1) or 1)
-    return {"width": int(video["width"]), "height": int(video["height"]),
-            "fps": fps, "seconds": duration, "video_stream": int(video["index"]),
-            "has_audio": any(s.get("codec_type") == "audio" for s in streams)}
+    from .pyav_media import probe
+    return probe(path)
 
 
 def manifest_dir(store, source_id):
@@ -174,18 +118,14 @@ def encode_source(path, info, width, height, vae, audio_vae):
         raise ValueError("Connect the MiniMax H3 audio VAE to import video, including silent video.")
     if int(getattr(audio_vae, "audio_sample_rate", 32000)) != 32000:
         raise ValueError("Source import requires the MiniMax H3 audio VAE (32000 Hz).")
-    ffmpeg = executable("ffmpeg")
+    from .pyav_media import guard, write_video, write_audio
+    check = guard(interrupt=True)
     with tempfile.TemporaryDirectory(prefix="dasiwa-h3-import-") as work:
         work = Path(work)
         from .inspection import check_import_space
         check_import_space(info["seconds"], width, height, work)
         raw_video = work / "video.rgb"
-        # ffmpeg applies rotation, timebase conversion and aspect-preserving fit.
-        vf = (f"fps=24,scale={width}:{height}:force_original_aspect_ratio=decrease,"
-              f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
-        run_media([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(path),
-                   "-map", f"0:{info['video_stream']}", "-an", "-vf", vf,
-                   "-pix_fmt", "rgb24", "-f", "rawvideo", str(raw_video)], interrupt=True)
+        write_video(path, info, width, height, raw_video, check)
         size = raw_video.stat().st_size
         frame_bytes = width * height * 3
         if not size or size % frame_bytes:
@@ -205,11 +145,7 @@ def encode_source(path, info, width, height, vae, audio_vae):
         audio_path = work / "audio.f32"
         if info["has_audio"]:
             leading_samples = round(leading / 24 * 32000)
-            af = (f"aresample=32000:async=1:first_pts=0,adelay={leading_samples}S:all=1,"
-                  f"apad,atrim=end_sample={audio_samples}")
-            run_media([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(path),
-                       "-map", "0:a:0", "-vn", "-af", af, "-ac", "2", "-ar", "32000",
-                       "-f", "f32le", str(audio_path)], interrupt=True)
+            write_audio(path, leading_samples, audio_samples, audio_path, check)
             waveform = np.fromfile(audio_path, dtype="<f4")
             if waveform.size != audio_samples * 2:
                 raise ValueError("Could not align source audio with its video.")

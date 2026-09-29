@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, migrateContinuity, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
+import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, normalizeContinuity, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
 
 let h3VaeErrorPopupInstalled = false;
 
@@ -514,7 +514,7 @@ function install(node) {
   }
 
   function continuityState() {
-    state.continuity = migrateContinuity(state.continuity, node.widgets?.find(w => w.name === "duration"));
+    state.continuity = normalizeContinuity(state.continuity);
     if (state.continuity.capture && !state.continuity.session) state.continuity.session = newContinuitySession();
     return state.continuity;
   }
@@ -536,7 +536,7 @@ function install(node) {
     const c = continuityState();
     if (!continuitySourceId(c)) return null;
     return { session: c.session, source_kind: c.source_kind, source_id: continuitySourceId(c),
-      mode: mode(), width: Number(widthWidget?.value), height: Number(heightWidget?.value),
+      mode: mode(), width: Number(node.widgets?.find(w => w.name === "width")?.value), height: Number(node.widgets?.find(w => w.name === "height")?.value),
       frame_rate: Number(node.widgets?.find(w => w.name === "frame_rate")?.value ?? 24),
       duration: Number(node.widgets?.find(w => w.name === "duration")?.value), overlap_frames: c.overlap_frames,
       external_canvas: hasExternalCanvas() };
@@ -1450,7 +1450,7 @@ function install(node) {
     if (settings.aspect === "custom") return Math.max(1, Number(settings.custom_aspect_w) || 16) / Math.max(1, Number(settings.custom_aspect_h) || 9);
     const [w, h] = String(settings.aspect).split(":").map(Number); return w > 0 && h > 0 ? w / h : null;
   };
-  const setCanvasWidgets = (width, height) => { for (const [widget, value] of [[widthWidget, width], [heightWidget, height]]) { if (widget) { widget.value = value; widget.callback?.(value); } } node.setDirtyCanvas?.(true, true); };
+  const setCanvasWidgets = (width, height) => { let changed = false; for (const [name, value] of [["width", width], ["height", height]]) { const widget = node.widgets?.find(w => w.name === name); if (widget && Number(widget.value) !== value) { widget.value = value; widget.callback?.(value); changed = true; } } if (changed) node.setDirtyCanvas?.(true, true); };
   const resolveCanvas = settings => {
     if (settings.resolution === "custom" && settings.custom_mode === "fixed") return [snap16(settings.custom_width), snap16(settings.custom_height)];
     const aspect = selectedAspect(settings); if (!aspect) return null;
@@ -1772,6 +1772,7 @@ function install(node) {
       builderState.mode = m;
     }
     migratePromptToSingleField();
+    applyResolution();
     emit();
     syncNodeBounds();
     render();
@@ -1780,6 +1781,22 @@ function install(node) {
       const thumb = await captureFirstFrame(viewUrl(item.value));
       if (thumb) mutate(s => { const x = s.items.find(i => i.id === item.id); if (x) x.thumbnail = thumb; });
     })).then(render);
+  };
+  const oldSerialize = node.onSerialize;
+  node.onSerialize = function (...args) {
+    applyResolution();
+    oldSerialize?.apply(this, args);
+    // LiteGraph snapshots widget values before onSerialize runs. Keep the
+    // serialized copy in sync if the restored canvas was stale at queue time.
+    const saved = args[0];
+    if (!saved || hasExternalCanvas()) return;
+    for (const name of ["width", "height"]) {
+      const widgets = node.widgets?.filter(w => w.serialize !== false) || [];
+      const index = widgets.findIndex(w => w.name === name);
+      if (index < 0) continue;
+      if (Array.isArray(saved.widgets_values)) saved.widgets_values[index] = widgets[index].value;
+      if (saved.widgets_values_named) saved.widgets_values_named[name] = widgets[index].value;
+    }
   };
   const oldConfigure = node.onConfigure;
   node.onConfigure = function (...args) {

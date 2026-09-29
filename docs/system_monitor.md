@@ -1,6 +1,6 @@
 # DaSiWa System Monitor
 
-A compact, non-intrusive system telemetry bar integrated directly into the ComfyUI top toolbar.
+A compact system telemetry bar integrated into ComfyUI, on its own row below the Extensions/Run toolbar so it does not push Run or the Free Memory button aside.
 
 ## Overview
 
@@ -9,16 +9,19 @@ The System Monitor displays real-time resource utilization in the ComfyUI header
 The current settings are stored in the browser, so they remain active after a ComfyUI page reload:
 
 - **Enable System Monitor:** the global DaSiWa switch. Off removes the monitor toolbar/floating UI, dock targets, frontend listeners, and backend telemetry polling. On starts and mounts them again.
-- **Lite:** the default compact fixed-width, color-coded toolbar meters. Each meter shows a label, a numeric value, and a proportional background fill representing 0–100% usage.
+- **Lite:** the default single-line, fixed-height bar with color-coded meters. Each meter shows a label, a numeric value, and a proportional background fill representing 0–100% usage. On narrow screens, scroll the bar horizontally to see the rest.
+- **Resize:** drag the lower-right corner horizontally to change the monitor's width. Its height follows the number of meter rows automatically, and the dotted grip stays one meter tall. Narrowing the bar wraps whole meters to new rows; expanding stops when they all fit on one row. Size persists after reload.
+- **Reset to default Lite bar:** the monitor settings menu restores the single-line default dimensions and top dock without changing widget visibility or opacity.
 - **Full:** a spacious monitor panel with every available metric, its current value and detail, plus a live graph covering the most recent 60 telemetry samples (normally about one minute).
-- **Dock:** choose the top toolbar, left side, or right side from the settings menu. The selection is retained after reload.
+- **Dock:** the default is a separate row below ComfyUI's top controls, so the monitor does not displace Run, panel navigation, or the independent Free Memory button. Choose top, left, or right from the settings menu; the selection persists after reload. The menu opens toward available viewport space and scrolls if the window is too short.
+- **Transparency:** two 0–100% opacity sliders are available both in ComfyUI Settings and in the monitor's settings menu. Background controls the monitor surfaces; Drawing / text / lines controls meters, labels, graphs, and borders independently. 0% is invisible, 100% is opaque (the default). Both values persist after reload.
 - **Widget layout:** choose horizontal or vertical meter flow. This is especially useful in left/right side docks.
 - **Widgets:** enable or disable individual CPU, memory, disk, I/O, and GPU meters. Every widget is enabled by default and choices are retained after reload.
 - **Placement:** drag the monitor freely anywhere on the ComfyUI canvas. Floating placement uses pixel-aligned coordinates to keep its text sharp. Drop it on the visible top, left, or right target to dock it.
 
 ## Free Memory toolbar button
 
-The DaSiWa-logo button sits beside the monitor when it is docked in the top toolbar. It remains in the toolbar if the monitor is floating, side-docked, or disabled. Click it to choose:
+The DaSiWa-logo button sits beside the other top controls, independent of the monitor's dock, size, or floating position. It stays in the toolbar even if the monitor is disabled. Click it to choose:
 
 - **Free VRAM:** asks ComfyUI to unload its managed models (`POST /free` with `unload_models: true`, `free_memory: false`).
 - **Free System RAM:** unloads managed models **and** resets ComfyUI's execution cache (`unload_models: true`, `free_memory: true`). This is not an operating-system-wide RAM purge.
@@ -29,7 +32,9 @@ The request is queued by ComfyUI and processed by its prompt worker; the button 
 
 ### Lite (default)
 
-Lite keeps the monitor in the toolbar as compact, content-sized meters. Each chip sizes to its label and value (`max-content`) so text never clips at any resolution, font, or DPI. It is intended for continuous at-a-glance monitoring while working in ComfyUI.
+Lite uses an independent bar below the main ComfyUI action toolbar, leaving Extensions, Run, and other actions in place. It reattaches to that row if ComfyUI rebuilds the toolbar when the Properties panel opens or closes. At the default size it keeps its meters on one line; at reduced viewport width, the bar scrolls horizontally instead of crowding the actions above it.
+
+Resize the bar horizontally from its lower-right corner. The meters retain their font and chip size, move to additional rows as width decreases, and determine the bar's height automatically. **Reset to default Lite bar** restores the single-line top layout.
 
 Use the small grip at the monitor's left edge to float it above the canvas. To dock it again, drag that grip to a visible top, left, or right dock target and release it there. The settings menu provides the same dock controls without dragging.
 
@@ -37,7 +42,7 @@ Use the small grip at the monitor's left edge to float it above the canvas. To d
 
 ### Full
 
-Full opens a larger panel directly below the monitor controls. It shows all available CPU, memory, disk, and GPU metrics at once, including each metric's detailed value and a graph of the most recent 60 telemetry samples. The settings button remains available above the panel to switch back to Lite or disable the monitor.
+Full opens a larger panel anchored to the monitor controls. It shows all available CPU, memory, disk, and GPU metrics at once, including each metric's detailed value and a graph of the most recent 60 telemetry samples. The settings button remains available to switch back to Lite or disable the monitor. Horizontal corner resizing applies to Lite, not the Full graph panel; if a floating Full panel extends below the viewport, move the monitor higher or dock it at the top.
 
 ![Full system monitor](../assets/DaSiWa_System_Monitor-full.png)
 
@@ -88,15 +93,7 @@ AMD telemetry on Windows goes through ADLX, the AMD driver's own telemetry libra
 
 ## Responsive Behavior
 
-When toolbar width is insufficient to display all metrics, lower-priority chips are hidden first. The priority order (highest to lowest):
-
-1. CPU
-2. RAM
-3. GPU metrics (Util, VRAM, Temp per GPU)
-4. SWAP
-5. DISK
-
-A ResizeObserver monitors window changes and adjusts visibility dynamically without user interaction. Full mode uses a scrollable panel and collapses to one metric column on narrow screens.
+At the default size the monitor remains one line, with horizontal scrolling when the viewport is narrower than its meters. Resizing the corner wraps whole fixed-size meters into additional rows and grows the bar's height automatically, rather than clipping content. The Full panel remains independently scrollable and collapses to one metric column on narrow screens.
 
 ## Backend Requirements
 
@@ -124,7 +121,7 @@ Updates are broadcast via WebSocket event `dasiwa.system_monitor` approximately 
 | Monitor shows "Loading..." | Backend route not registered | Ensure `nodes/nodes_system_monitor.py` is imported in `__init__.py` |
 | No GPU metrics shown | Missing GPU query tool | Verify `python -c "import pynvml; pynvml.nvmlInit()"` or `nvidia-smi --query-gpu=index,name --format=csv` runs successfully |
 | Swap shows "n/a" | No swap configured | Normal behavior; indicates swap/pagefile is disabled |
-| Panel overlaps other toolbar items | Insufficient toolbar width | Lower-priority metrics auto-hide; check browser developer console for errors |
+| Panel overlaps other toolbar items | Monitor restored from an older placement | Use **Reset to default Lite bar** in its settings menu; the default top dock occupies a separate row below ComfyUI's controls |
 
 ## Disabling
 

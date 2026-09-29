@@ -17,7 +17,7 @@ def import_scratch_bytes(seconds, width, height):
     """Conservative raw RGB + stereo float PCM + 10%/64 MiB working reserve.
 
     It is a disk estimate, not a RAM/VRAM promise. VFR/media duration errors
-    still require ffmpeg's ordinary error handling.
+    still require the decoder's ordinary error handling.
     """
     seconds = float(seconds)
     if not math.isfinite(seconds) or seconds <= 0:

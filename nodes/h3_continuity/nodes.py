@@ -1,5 +1,6 @@
 """Technical post-sampler continuation nodes; Director owns all controls."""
 import logging
+import math
 from pathlib import Path
 from .core import ClipStore, append_tail
 log = logging.getLogger(__name__)
@@ -50,14 +51,15 @@ class DaSiWaH3ContinuityPublish:
         # Also catch an incorrect playback rate or a downstream time trim. FPS
         # interpolation is fine when the exported duration remains unchanged.
         import av
+        from .pyav_media import open_media, video_stream
         metadata = store.inspect(ticket["session"], ticket["clip_id"], ready=False)
-        with av.open(str(path)) as media:
-            video = next(iter(media.streams.video), None)
+        with open_media(path) as media:
+            video = video_stream(media)
             if video is None:
                 raise ValueError("Continuity export has no video stream.")
             seconds = (float(video.duration * video.time_base) if video.duration is not None
                        else float(media.duration or 0) / av.time_base)
-            if abs(seconds - metadata["seconds"]) > max(0.125, 2 / float(video.average_rate or 24)):
+            if not math.isfinite(seconds) or seconds <= 0 or abs(seconds - metadata["seconds"]) > max(0.125, 2 / float(video.average_rate or 24)):
                 raise ValueError("Export duration differs from the saved H3 timeline. Check FPS, interpolation and trimming; checkpoint remains staged.")
         data = store.publish(ticket, path)
         message = f"Saved {data['frames']} frames ({data['seconds']:.3f}s), clip {data['clip_id'][:8]}."
