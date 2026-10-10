@@ -107,7 +107,7 @@ NVIDIA RTX Video SDK enhancement with Denoise, Deblur and VSR/High Bitrate upsca
 - **Smart Sizing:** Multiple resize modes including Constant Megapixel targets.
 - **Efficiency:** Internal `chunking` (on, 16 frames by default) bounds processing intermediates; the final output remains a single `IMAGE` batch.
 - **Lossless output storage:** `lossless_fp16` (on by default) uses FP16 only if every output value round-trips exactly and memory headroom permits; typical VSR output remains FP32.
-- **Memory Control:** Full input and output batches still scale with video duration and may be cached by ComfyUI; internal chunking is not constant-memory streaming. The output is allocated lazily in VRAM or RAM. Optional `use_mmap` enables a disk-backed last resort (off by default); `auto_unload_models` is on by default.
+- **Memory Control:** Full input and output batches still scale with video duration and may be cached by ComfyUI; internal chunking is not constant-memory streaming. GPU output is budgeted with a conservative per-frame/SDK working reserve and a 24 GiB output cap; RAM output is capacity-checked and aborts clearly if insufficient. `torch.empty` avoids zero-fill, not the full storage requirement. Optional `use_mmap` enables a disk-backed last resort (off by default); `auto_unload_models` requests target-device ComfyUI memory reclamation under pressure, not global model unloading.
 
 ![RTX_UpscalerRefiner.png](assets/RTX_UpscalerRefiner.png)
 

@@ -275,7 +275,7 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 
 ### RTX Upscaler & Refiner
 
-- **08-23:** output batch now allocated lazily (kernel-decided, no up-front memory pressure); `use_mmap` **off by default**.
+- **08-23:** output batch switched to `torch.empty` (no zero-fill); `use_mmap` **off by default**. Clarification: CUDA still reserves full storage immediately; CPU lazy page commitment does not protect a fully written oversized batch. Current RTX allocation capacity-checks RAM and budgets GPU working memory.
 - **08-17:** **`use_mmap` disk-backed fallback** as a permission switch (VRAM → RAM → disk chain) plus default-on `auto_unload_models`.
 - **08-14:** `empty_cache` made optional to restore API workflow compatibility (fixes #24, PR #26).
 - **08-06:** VRAM-aware output allocation; optional `empty_cache` switch; fixed `use_mmap` swap bloat.

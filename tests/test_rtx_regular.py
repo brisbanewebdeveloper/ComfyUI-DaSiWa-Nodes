@@ -18,7 +18,6 @@ def test_regular_node_keeps_single_image_batch_with_default_chunking(monkeypatch
     monkeypatch.setattr(rtx, "_import_vfx", lambda: (object(), object()))
     monkeypatch.setattr(rtx, "_maybe_vfx_effect", lambda *args, **kwargs: __import__("contextlib").nullcontext(FakeEffect() if args[1] else None))
     monkeypatch.setattr(rtx, "_cleanup_cuda", lambda **kwargs: None)
-    monkeypatch.setattr(rtx, "force_gc_and_cleanup", lambda *args: None)
     options = rtx.DaSiWa_RTX_UpscalerRefiner.INPUT_TYPES()["optional"]
     assert options["chunking"][1]["default"] is True
     assert options["lossless_fp16"][1]["default"] is True
@@ -161,7 +160,6 @@ def cpu_execution(monkeypatch, modern_sdk):
         return original_to(self, *args, **kwargs)
     monkeypatch.setattr(torch.Tensor, "to", to_cpu)
     monkeypatch.setattr(rtx, "_allocate_output_tensor", lambda shape, dtype, device, **kw: (torch.empty(shape, dtype=dtype), None))
-    monkeypatch.setattr(rtx, "force_gc_and_cleanup", lambda *a: None)
     monkeypatch.setattr(rtx, "_model_management", None)
 
 
@@ -365,3 +363,226 @@ def test_core_input_preparation_preserves_unsupported_requests(monkeypatch, extr
     with pytest.raises(RuntimeError, match=message):
         rtx.DaSiWa_RTX_UpscalerRefiner().execute(**options(
             torch.zeros(1, 8, 8, 3), **{name: value[0] for name, value in prepared.items()}))
+
+
+# Memory allocation, staging and stream ownership regression contracts.
+def test_gpu_budget_includes_working_reserve_and_targeted_reclaim(monkeypatch):
+    device = torch.device("cuda:0")
+    budgets, requests = [], []
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda dev: (0, 8 * 1024 ** 3))
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda size, dev: budgets.append((size, dev)) or len(budgets) > 1)
+    monkeypatch.setattr(torch.cuda, "device", lambda dev: nullcontext())
+    monkeypatch.setattr(rtx, "_model_management", SimpleNamespace(free_memory=lambda size, dev: requests.append((size, dev))))
+    original_empty = torch.empty
+    monkeypatch.setattr(torch, "empty", lambda *a, **kw: original_empty(*a, **{k: v for k, v in kw.items() if k != "device"}))
+    rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, device, working_reserve_bytes=1000)
+    assert budgets == [(1768, device), (1768, device)]
+    assert requests == [(2080, device)]
+
+
+@pytest.mark.parametrize("workspace_fits", [True, False])
+def test_below_cap_but_over_device_capacity_skips_output_eviction(monkeypatch, workspace_fits):
+    device = torch.device("cuda:0")
+    requests = []
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda dev: (0, 8 * 1024 ** 3))
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda size, dev: size == 1000 and workspace_fits)
+    monkeypatch.setattr(rtx, "_dasiwa_rtx_free_memory", lambda size, dev: requests.append(size))
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: True)
+    marker = object()
+    original_empty = torch.empty
+    monkeypatch.setattr(torch, "empty", lambda shape, **kw: original_empty(shape, **kw) if shape == () else marker)
+    shape = (1, 32768, 32768, 3)  # 12 GiB, below fixed 24 GiB cap but impossible on 8 GiB GPU.
+    if workspace_fits:
+        assert rtx._allocate_output_tensor(shape, torch.float32, device, working_reserve_bytes=1000) == (marker, None)
+        assert requests == []
+    else:
+        with pytest.raises(RuntimeError, match="working reserve"):
+            rtx._allocate_output_tensor(shape, torch.float32, device, working_reserve_bytes=1000)
+        assert requests == [1000]  # Only the small compute workspace may request reclamation.
+
+
+def test_cap_impossible_does_not_evict_models(monkeypatch):
+    monkeypatch.setattr(rtx, "MAX_GPU_OUTPUT_BYTES", 1)
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: True)
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda size, dev: True)
+    monkeypatch.setattr(rtx, "_dasiwa_rtx_free_memory", lambda *a: pytest.fail("above-cap eviction"))
+    result, _ = rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cuda:0"), working_reserve_bytes=1000)
+    assert result.device.type == "cpu"
+
+
+def test_cap_impossible_workspace_abort_without_eviction(monkeypatch):
+    monkeypatch.setattr(rtx, "MAX_GPU_OUTPUT_BYTES", 1)
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda *a: False)
+    monkeypatch.setattr(rtx, "_dasiwa_rtx_free_memory", lambda *a: pytest.fail("above-cap eviction"))
+    with pytest.raises(RuntimeError, match="working reserve"):
+        rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cuda:0"), working_reserve_bytes=1000)
+
+
+def test_cpu_output_requires_compute_workspace(monkeypatch):
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda *a: False)
+    requests = []
+    monkeypatch.setattr(rtx, "_dasiwa_rtx_free_memory", lambda size, dev: requests.append((size, dev)))
+    with pytest.raises(RuntimeError, match="working reserve"):
+        rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cpu"),
+                                    compute_device=torch.device("cuda:1"), working_reserve_bytes=1000)
+    assert requests == [(1000, torch.device("cuda:1"))]
+
+
+def test_separate_gpu_output_and_compute_budgets(monkeypatch):
+    checked = []
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda size, dev: checked.append((size, dev)) or True)
+    original_empty = torch.empty
+    monkeypatch.setattr(torch, "empty", lambda *a, **kw: original_empty(*a, **{k: v for k, v in kw.items() if k != "device"}))
+    rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cuda:1"),
+                                compute_device=torch.device("cuda:0"), working_reserve_bytes=1000)
+    assert checked == [(1000, torch.device("cuda:0")), (768, torch.device("cuda:1"))]
+
+
+@pytest.mark.parametrize("allow_mmap", [False, True])
+def test_ram_short_controlled_abort_or_explicit_mmap(monkeypatch, allow_mmap):
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: False)
+    marker = object()
+    monkeypatch.setattr(rtx, "allocate_cpu_output", lambda *a, **kw: (marker, "mapped") if kw["force_mmap"] else pytest.fail("not forced"))
+    if allow_mmap:
+        assert rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cpu"), allow_mmap=True) == (marker, "mapped")
+    else:
+        with pytest.raises(RuntimeError, match="enable use_mmap"):
+            rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cpu"))
+
+
+def test_no_routine_cleanup_and_explicit_selected_device(monkeypatch):
+    called = []
+    monkeypatch.setattr(rtx, "_cleanup_cuda", lambda soft, dev: called.append((soft, dev)))
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: True)
+    for explicit in (False, True):
+        rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cpu"),
+                                    soft_empty_cache=explicit, compute_device=torch.device("cuda:1"))
+    assert called == [(True, torch.device("cuda:1"))]
+
+
+def test_reserve_scales_for_source_padding_and_effect_residency():
+    reserve = rtx._dasiwa_rtx_working_reserve
+    base = reserve(64, 64, 128, 128, "Center Crop (Fill)", 1)
+    assert reserve(512, 512, 128, 128, "Center Crop (Fill)", 1) > base
+    assert reserve(64, 64, 128, 128, "Center Crop (Fill)", 3) > base
+    assert reserve(64, 64, 128, 128, "Center Crop (Fill)", 1, True) > base
+    assert reserve(512, 64, 64, 512, "Letterbox (Fit)", 1) > reserve(512, 64, 64, 512, "Center Crop (Fill)", 1)
+
+
+@pytest.mark.parametrize("modern", [False, True])
+def test_stream_signature_blocking_default_and_ownership(monkeypatch, modern):
+    events = []
+    stream = SimpleNamespace(cuda_stream=123, synchronize=lambda: events.append("stream-sync"))
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda *a: stream)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda *a: events.append("device-sync"))
+    buffer = torch.empty(3, 8, 8)
+    def perform(frame):
+        buffer.copy_(frame)
+        events.append("run")
+        return SimpleNamespace(image=buffer)
+    class Modern:
+        def run(self, frame, *, stream_ptr=0, non_blocking=False):
+            assert stream_ptr == 123 and non_blocking is False
+            return perform(frame)
+    class Legacy:
+        def run(self, frame):
+            return perform(frame)
+    effect = Modern() if modern else Legacy()
+    source = torch.full_like(buffer, .25)
+    owned = rtx._run_vfx_effect(effect, source, torch.device("cuda:0"))
+    row = torch.empty(8, 8, 3)
+    rtx._run_vfx_effect_into(effect, source, row, torch.device("cuda:0"))
+    buffer.fill_(1)
+    assert torch.all(owned == .25) and torch.all(row == .25) and torch.all(source == .25)
+    assert ("device-sync" not in events) if modern else (events[:3] == ["stream-sync", "run", "device-sync"])
+
+
+def test_fp16_capacity_checked_before_temporaries(monkeypatch):
+    images = torch.full((1, 8, 8, 3), .25)
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: False)
+    monkeypatch.setattr(torch.Tensor, "to", lambda *a, **kw: pytest.fail("temporary before budget"))
+    assert rtx._lossless_fp16_image_batch(images, 16) is images
+
+
+def test_fp16_bounded_spatial_checks_noncontiguous_and_last_pixel(monkeypatch):
+    images = torch.full((2, 64, 4096, 4), .25)[..., :3]
+    seen = []
+    original_to = torch.Tensor.to
+    def track(self, *a, **kw):
+        if a and a[0] == torch.float16 and self.ndim == 3:
+            seen.append(self.numel())
+        return original_to(self, *a, **kw)
+    monkeypatch.setattr(torch.Tensor, "to", track)
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: True)
+    exact = rtx._lossless_fp16_image_batch(images, 1024)
+    assert exact.dtype == torch.float16 and torch.equal(exact.float(), images)
+    assert max(seen) * 8 <= 1024 * 1024
+    images[-1, -1, -1, -1] = .1
+    assert rtx._lossless_fp16_image_batch(images, 1024) is images
+
+
+def test_stages_single_source_frame_and_terminal_avoids_clone(cpu_execution, monkeypatch):
+    shapes = []
+    original_to = torch.Tensor.to
+    def track(self, *a, **kw):
+        if str(kw.get("device", "")).startswith("cuda"):
+            shapes.append(tuple(self.shape))
+        return original_to(self, *a, **kw)
+    monkeypatch.setattr(torch.Tensor, "to", track)
+    monkeypatch.setattr(rtx, "_run_vfx_effect", lambda *a: pytest.fail("terminal clone"))
+    images = torch.stack([torch.full((8, 8, 4), .25), torch.full((8, 8, 4), .75)])
+    original = images.clone()
+    result, = rtx.DaSiWa_RTX_UpscalerRefiner().execute(**options(images, denoise=True, preserve_alpha=True, chunk_frames=16))
+    assert torch.equal(result, original) and torch.equal(images, original)
+    assert all(len(shape) == 3 for shape in shapes) and len(shapes) == 4
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_modern_stream_cuda_no_global_barrier_and_buffer_reuse(monkeypatch):
+    class Effect:
+        def __init__(self):
+            self.buffer = torch.empty(3, 8, 8, device="cuda")
+        def run(self, frame, *, stream_ptr=0, non_blocking=False):
+            assert stream_ptr == torch.cuda.current_stream().cuda_stream
+            assert not non_blocking
+            self.buffer.copy_(frame)
+            return SimpleNamespace(image=self.buffer)
+    effect = Effect()
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda *a: pytest.fail("global barrier"))
+    with torch.cuda.stream(torch.cuda.Stream()):
+        source = torch.full((3, 8, 8), .25, device="cuda")
+        owned = rtx._run_vfx_effect(effect, source, torch.device("cuda:0"))
+        row = torch.empty(8, 8, 3, device="cuda")
+        rtx._run_vfx_effect_into(effect, source, row, torch.device("cuda:0"))
+        effect.run(torch.ones_like(source), stream_ptr=torch.cuda.current_stream().cuda_stream)
+        assert torch.all(owned == .25) and torch.all(row == .25)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_packed_helpers_match_int64_reference_exactly_cuda():
+    rgb = torch.rand(3, 37, 53, device="cuda") * 1.2 - .1
+    values = (rgb.clamp(0, 1) * 1023).round().to(torch.int64)
+    expected = (values[0] | (values[1] << 10) | (values[2] << 20) | (3 << 30)).to(torch.uint32)
+    packed = rtx._dasiwa_rtx_pack_rgb10a2(rgb)
+    assert torch.equal(packed, expected)
+    words = packed.to(torch.int64)
+    expected_rgb = torch.stack([(words >> shift) & 1023 for shift in (0, 10, 20)]).float() / 1023
+    assert torch.equal(rtx._dasiwa_rtx_unpack_rgb10a2(packed), expected_rgb)
+
+
+@pytest.mark.parametrize("native_version", [True, False])
+def test_known_native_stream_compatibility_handoff(monkeypatch, native_version):
+    events = []
+    caller = SimpleNamespace(synchronize=lambda: events.append("caller-sync"))
+    default = SimpleNamespace(synchronize=lambda: events.append("default-sync"))
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda dev: caller)
+    monkeypatch.setattr(torch.cuda, "default_stream", lambda dev: default)
+    monkeypatch.setattr(torch.cuda, "stream", lambda stream: nullcontext())
+    class Native:
+        __module__ = "nvvfx.effects.video_super_res"
+        def run(self, frame, *, stream_ptr=0):
+            pass
+    with rtx._dasiwa_rtx_execution_stream((Native, Levels),
+            {"version": "0.2.0.0" if native_version else "future"}, torch.device("cuda:0")):
+        assert events == (["caller-sync"] if native_version else [])
+    assert events == (["caller-sync", "default-sync"] if native_version else [])

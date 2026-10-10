@@ -12,13 +12,11 @@ import folder_paths
 try:
     from .helper_batch_output import (
         allocate_cpu_output, can_allocate_in_ram, tensor_nbytes,
-        force_gc_and_cleanup, unload_all_comfy_models,
     )
     from .helper_logging import log_dasiwa
 except ImportError:
     from helper_batch_output import (
         allocate_cpu_output, can_allocate_in_ram, tensor_nbytes,
-        force_gc_and_cleanup, unload_all_comfy_models,
     )
     from helper_logging import log_dasiwa
 
@@ -39,7 +37,7 @@ COMMON_RATIOS = ["1:1", "4:3", "3:2", "16:9", "21:9"]
 RESIZE_METHODS = ["Center Crop (Fill)", "Letterbox (Fit)"]
 MAX_CHUNK_OUTPUT_PIXELS = 1024 * 1024 * 16
 # Ceiling for output kept on the GPU. Sized for a 32 GB card: a large batch can
-# stay in VRAM when free VRAM allows (the 15% headroom check still self-limits),
+# stay in VRAM when output plus pipeline reserve fits with 15% headroom,
 # instead of being bounced to RAM just because the old 8 GiB cap was hit.
 MAX_GPU_OUTPUT_BYTES = 24 * 1024 * 1024 * 1024
 
@@ -90,13 +88,13 @@ def _dasiwa_rtx_capabilities():
 
 def _dasiwa_rtx_pack_rgb10a2(rgb):
     """Normalized CHW RGB -> contiguous HxW uint32 R10G10B10A2."""
-    values = (rgb[:3].clamp(0, 1) * 1023).round().to(torch.int64)
-    return (values[0] | (values[1] << 10) | (values[2] << 20) | (3 << 30)).to(torch.uint32).contiguous()
+    values = (rgb[:3].clamp(0, 1) * 1023).round().to(torch.int32)
+    return (values[0] | (values[1] << 10) | (values[2] << 20) | -1073741824).view(torch.uint32).contiguous()
 
 
 def _dasiwa_rtx_unpack_rgb10a2(packed):
     """Packed words -> CHW float32; retain PQ signal values for HDR."""
-    words = packed.to(torch.int64)
+    words = packed.view(torch.int32)
     return torch.stack([(words >> shift) & 1023 for shift in (0, 10, 20)]).float().div_(1023).contiguous()
 
 
@@ -117,9 +115,10 @@ def _dasiwa_rtx_integrity(input_frame, output_frame, stage):
                            "this heuristic may flag legitimate color changes. Disable the opt-in check to compare.")
 
 
-def _dasiwa_rtx_run_pass(effect, frame, cuda_device, packed=False, check=False, stage="VSR", hdr=False):
+def _dasiwa_rtx_run_pass(effect, frame, cuda_device, packed=False, check=False, stage="VSR", hdr=False, terminal=False):
     sdk_input = _dasiwa_rtx_pack_rgb10a2(frame) if packed else frame
-    owned = _run_vfx_effect(effect, sdk_input, cuda_device)
+    owned = (_dasiwa_rtx_borrow_output(effect, sdk_input, cuda_device) if terminal
+             else _run_vfx_effect(effect, sdk_input, cuda_device))
     result = _dasiwa_rtx_unpack_rgb10a2(owned) if packed or hdr else owned
     if check:
         if hdr:
@@ -131,6 +130,34 @@ def _dasiwa_rtx_run_pass(effect, frame, cuda_device, packed=False, check=False, 
         else:
             _dasiwa_rtx_integrity(frame, result, stage)
     return result
+
+
+@contextlib.contextmanager
+def _dasiwa_rtx_execution_stream(vfx_api, capabilities, cuda_device):
+    """Isolate the verified 0.2 native-wrapper non-default-stream limitation.
+
+    Binding before load avoids SDK error -12 but did not preserve distinct
+    frames reliably in multipass HDR. Use its tested default-stream path, with
+    stream-local handoff, rather than retrying corrupt output or globally syncing.
+    Other SDKs retain the caller's current stream.
+    """
+    cls = vfx_api[0]
+    if (capabilities["version"] == "0.2.0.0" and
+            getattr(cls, "__module__", "") == "nvvfx.effects.video_super_res" and
+            "stream_ptr" in _dasiwa_rtx_parameters(cls.run)):
+        caller = torch.cuda.current_stream(cuda_device)
+        default = torch.cuda.default_stream(cuda_device)
+        if caller != default:
+            caller.synchronize()
+            log_dasiwa("RTX Upscaler & Refiner", "SDK 0.2 native effects use the verified default CUDA stream; "
+                       "performing stream-local input/output handoff.")
+            with torch.cuda.stream(default):
+                try:
+                    yield
+                finally:
+                    default.synchronize()
+            return
+    yield
 
 
 @contextlib.contextmanager
@@ -165,128 +192,97 @@ def _temporary_output_directory() -> str:
     return directory
 
 
-def _cleanup_cuda(soft_empty_cache: bool) -> None:
-    """Lightweight VRAM cleanup; optionally asks ComfyUI nicely."""
+def _cleanup_cuda(soft_empty_cache: bool, device=None) -> None:
+    """Explicit/pressure cleanup on the selected CUDA device only."""
     gc.collect()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    if soft_empty_cache and _model_management and hasattr(_model_management, "soft_empty_cache"):
-        try:
-            _model_management.soft_empty_cache()
-        except Exception:
-            pass
+        with torch.cuda.device(device):
+            if soft_empty_cache and _model_management and hasattr(_model_management, "soft_empty_cache"):
+                _model_management.soft_empty_cache()
+            else:
+                torch.cuda.empty_cache()
 
 
 def _can_fit_in_vram(required_bytes: int, device: torch.device) -> bool:
-    """Check whether required_bytes comfortably fits in current free VRAM."""
     if not torch.cuda.is_available():
         return False
     free_bytes, _ = torch.cuda.mem_get_info(device)
-    # Leave headroom for VFX effects, intermediate buffers, etc.
-    headroom_factor = 0.15
-    usable_free = int(free_bytes * (1.0 - headroom_factor))
-    return required_bytes <= max(0, usable_free)
+    return required_bytes <= max(0, int(free_bytes * 0.85))
 
 
-def _allocate_output_tensor(
-    shape: Tuple[int, int, int, int],
-    dtype: torch.dtype,
-    device: torch.device,
-    soft_empty_cache: bool = False,
-    allow_mmap: bool = False,
-    auto_unload_models: bool = True,
-):
-    """Allocate the output tensor.
+def _dasiwa_rtx_working_reserve(source_width, source_height, target_width, target_height,
+                               resize_method, effect_count, packed=False, hdr=False):
+    """Conservative heuristic, not measured/guaranteed opaque SDK workspace."""
+    sw, sh = source_width, source_height
+    if resize_method == "Letterbox (Fit)":
+        rw, rh = _aspect_ratio_parts(target_width, target_height)
+        scale = max(math.ceil(sw / rw), math.ceil(sh / rh))
+        sw, sh = max(sw, scale * rw), max(sh, scale * rh)
+    largest = max(sw * sh, target_width * target_height)
+    staging = source_width * source_height * 3 * 4
+    intermediates = largest * (64 if packed or hdr else 48)
+    sdk_estimate = effect_count * (512 * 1024 ** 2 + largest * 16)
+    return staging + intermediates + sdk_estimate
 
-    Allocation is LAZY (``torch.empty``, no zero-fill) to match the reference
-    NVIDIA RTX node: physical pages are faulted in only as frames are written,
-    so reserving a large video batch never forces the full footprint up front.
-    This is what keeps the node from OOMing at allocation time on long videos.
 
-    Preference order: VRAM -> RAM -> disk.
-    - VRAM tier self-limits to a 24 GiB ceiling plus a 15% free-VRAM headroom.
-    - ``auto_unload_models``: when the active tier is short, fully unload
-      ComfyUI-managed models and re-check before dropping a tier.
-    - ``allow_mmap`` (the ``use_mmap`` switch, OFF by default): disk is used
-      only when enabled AND the batch will not fit in available RAM. When off,
-      the node always allocates lazily in memory and lets the kernel decide
-      (matching the reference); a genuine OOM surfaces naturally rather than
-      being pre-empted by a temp file.
+def _dasiwa_rtx_free_memory(required_bytes, device):
+    """Request only enough space on this device; never globally unload models."""
+    if _model_management is None or not hasattr(_model_management, "free_memory"):
+        return False
+    with torch.cuda.device(device):
+        _model_management.free_memory(math.ceil(required_bytes / 0.85), device)
+    return True
 
-    Returns ``(tensor, mmap_path)`` where ``mmap_path`` is None for in-memory
-    tensors and the temp file path for the disk-backed fallback.
+
+def _allocate_output_tensor(shape, dtype, device, soft_empty_cache=False, allow_mmap=False,
+                            auto_unload_models=True, working_reserve_bytes=0, compute_device=None):
+    """Full output allocation: GPU (24 GiB cap + working reserve), RAM, opt-in mmap.
+
+    CUDA empty reserves its full size immediately. CPU empty avoids zero-fill,
+    but does not make writing an oversized batch safe.
     """
     required_bytes = tensor_nbytes(shape, dtype)
-
-    # Always run lightweight cleanup before deciding allocation strategy.
-    _cleanup_cuda(soft_empty_cache=soft_empty_cache)
-
-    def gpu_fits() -> bool:
-        return (
-            device.type == "cuda"
-            and required_bytes <= MAX_GPU_OUTPUT_BYTES
-            and _can_fit_in_vram(required_bytes, device)
-        )
-
-    def ram_will_fit() -> bool:
-        # Used only to decide whether the opt-in disk tier is actually needed.
-        return can_allocate_in_ram(required_bytes)
-
-    def try_mmap():
-        return allocate_cpu_output(
-            shape, dtype, _temporary_output_directory(),
-            force_mmap=True,
-            before_mmap=lambda: log_dasiwa(
-                "RTX Upscaler & Refiner",
-                f"Creating disk-backed (mmap) output file for "
-                f"{required_bytes / 1024 ** 3:.2f} GiB tensor.",
-            ),
-        )
-
-    def disk_needed_and_allowed() -> bool:
-        """Disk is the fallback only when enabled and RAM will not back the batch."""
-        return allow_mmap and not ram_will_fit()
-
-    def alloc_vram():
-        return torch.empty(shape, device=device, dtype=dtype), None
-
-    if device.type == "cuda":
-        # Tier 1: VRAM.
-        if gpu_fits():
-            return alloc_vram()
-        # First remediation: auto-unload, re-check VRAM.
-        if auto_unload_models and unload_all_comfy_models():
-            log_dasiwa("RTX Upscaler & Refiner",
-                       "Auto-unload: VRAM insufficient; unloaded ComfyUI-managed models and re-checking.")
-            if gpu_fits():
-                log_dasiwa("RTX Upscaler & Refiner",
-                           "VRAM sufficient after auto-unload; keeping GPU output.")
-                return alloc_vram()
-        # Tier 2: RAM (lazy; preferred over disk).
-        if disk_needed_and_allowed():
-            log_dasiwa("RTX Upscaler & Refiner",
-                       f"VRAM and RAM short for {required_bytes / 1024 ** 3:.2f} GiB; "
-                       "falling back to disk-backed (mmap) output.")
-            return try_mmap()
-        log_dasiwa("RTX Upscaler & Refiner",
-                   f"VRAM short for {required_bytes / 1024 ** 3:.2f} GiB; "
-                   "allocating lazily in RAM (CPU).")
+    compute_device = compute_device or device
+    if soft_empty_cache:
+        _cleanup_cuda(True, compute_device)
+    gpu_eligible = device.type == "cuda" and required_bytes <= MAX_GPU_OUTPUT_BYTES
+    # An input/output GPU can differ from the SDK compute GPU. Budget each
+    # separately instead of charging workspace on the wrong card.
+    if compute_device != device and working_reserve_bytes and compute_device.type == "cuda":
+        if not _can_fit_in_vram(working_reserve_bytes, compute_device):
+            if auto_unload_models and (device.type != "cuda" or gpu_eligible):
+                _dasiwa_rtx_free_memory(working_reserve_bytes, compute_device)
+            if not _can_fit_in_vram(working_reserve_bytes, compute_device):
+                raise RuntimeError("Insufficient CUDA memory for estimated RTX working reserve. "
+                                   "Free GPU memory or reduce source/target resolution or enabled passes.")
+    budget = required_bytes + (working_reserve_bytes if device == compute_device else 0)
+    if gpu_eligible:
+        if _can_fit_in_vram(budget, device):
+            return torch.empty(shape, device=device, dtype=dtype), None
+        # Do not evict models for an output budget that cannot fit even on
+        # an otherwise empty card. Workspace-only reclamation remains separate.
+        _, total_bytes = torch.cuda.mem_get_info(device)
+        if (auto_unload_models and budget <= int(total_bytes * 0.85)
+                and _dasiwa_rtx_free_memory(budget, device)):
+            if _can_fit_in_vram(budget, device):
+                return torch.empty(shape, device=device, dtype=dtype), None
+    # Preserve input-device output policy. Above-cap GPU output must not
+    # trigger eviction, even if its compute workspace will need memory.
+    if working_reserve_bytes and compute_device == device and compute_device.type == "cuda":
+        if not _can_fit_in_vram(working_reserve_bytes, compute_device):
+            if auto_unload_models and (device.type != "cuda" or gpu_eligible):
+                _dasiwa_rtx_free_memory(working_reserve_bytes, compute_device)
+            if not _can_fit_in_vram(working_reserve_bytes, compute_device):
+                raise RuntimeError("Insufficient CUDA memory for estimated RTX working reserve. "
+                                   "Free GPU memory or reduce source/target resolution or enabled passes.")
+    if can_allocate_in_ram(required_bytes):
         return torch.empty(shape, dtype=dtype), None
-
-    # CPU device: Tier 1 is RAM (lazy; no up-front pre-check, the kernel decides).
-    if auto_unload_models and not ram_will_fit():
-        if unload_all_comfy_models():
-            log_dasiwa("RTX Upscaler & Refiner",
-                       "Auto-unload: RAM short; unloaded ComfyUI-managed models to make room.")
-    if disk_needed_and_allowed():
-        log_dasiwa("RTX Upscaler & Refiner",
-                   f"RAM short for {required_bytes / 1024 ** 3:.2f} GiB; "
-                   "falling back to disk-backed (mmap) output.")
-        return try_mmap()
-    log_dasiwa("RTX Upscaler & Refiner",
-               f"Output is {required_bytes / 1024 ** 3:.2f} GiB; "
-               "allocating lazily in RAM (CPU, kernel decides).")
-    return torch.empty(shape, dtype=dtype), None
+    if not allow_mmap:
+        raise RuntimeError(
+            f"RTX output requires {required_bytes / 1024 ** 3:.2f} GiB; insufficient "
+            "available RAM after safety reserve. Reduce frame count/target resolution "
+            "or explicitly enable use_mmap with sufficient temp disk space.")
+    return allocate_cpu_output(shape, dtype, _temporary_output_directory(), force_mmap=True)
 
 def _aligned_aspect_size(
     target_width: float,
@@ -555,17 +551,26 @@ def _lossless_fp16_image_batch(images, chunk_frames):
     """Check exactness in bounded windows before making a full-size FP16 copy."""
     if images.dtype != torch.float32:
         return images
-    window_frames = min(chunk_frames, max(1, MAX_CHUNK_OUTPUT_PIXELS // max(1, images.shape[1] * images.shape[2])))
-    for start in range(0, len(images), window_frames):
-        part = images[start:start + window_frames]
-        if not torch.equal(part.to(torch.float16).to(torch.float32), part):
-            return images
     half_bytes = images.numel() * 2
+    # Capacity BEFORE exactness temporaries, not just before the full copy.
+    check_bytes = min(images.numel(), 1024 * 1024 // 8) * 8
+    needed = half_bytes + check_bytes
     if images.device.type == "cuda":
-        if not _can_fit_in_vram(half_bytes, images.device):
+        if not _can_fit_in_vram(needed, images.device):
             return images
-    elif images.device.type == "cpu" and not can_allocate_in_ram(half_bytes):
+    elif not can_allocate_in_ram(needed):
         return images
+    # Bounded spatial slices also work for noncontiguous RGB views of RGBA;
+    # flattening the full batch could allocate a complete extra tensor.
+    pixels = max(1, 1024 * 1024 // (8 * images.shape[-1]))
+    columns = min(images.shape[2], pixels)
+    rows = max(1, pixels // max(1, columns))
+    for frame in images:
+        for y in range(0, frame.shape[0], rows):
+            for x in range(0, frame.shape[1], max(1, columns)):
+                part = frame[y:y + rows, x:x + columns]
+                if not torch.equal(part.to(torch.float16).to(torch.float32), part):
+                    return images
     return images.to(torch.float16)
 
 
@@ -576,28 +581,34 @@ def _close_vfx_effect(effect):
             method()
             return
 
-def _run_vfx_effect(effect, frame, cuda_device):
-    if not frame.is_contiguous():
-        frame = frame.contiguous()
+def _dasiwa_rtx_borrow_output(effect, frame, cuda_device):
+    frame = frame.contiguous()
+    stream = torch.cuda.current_stream(cuda_device)
+    if "stream_ptr" in _dasiwa_rtx_parameters(effect.run):
+        # Keep SDK blocking default; Torch copies use the same stream.
+        result = effect.run(frame, stream_ptr=stream.cuda_stream)
+    else:
+        stream.synchronize()
+        result = effect.run(frame)
+        torch.cuda.synchronize(cuda_device)
+    return torch.from_dlpack(result.image)
 
-    # nvvfx owns its execution stream and may reuse output buffers. Synchronize
-    # before and after each handoff, then clone the DLPack tensor so the next
-    # effect/frame cannot overwrite data that has not been assembled yet.
+
+def _run_vfx_effect(effect, frame, cuda_device):
+    borrowed = _dasiwa_rtx_borrow_output(effect, frame, cuda_device)
+    owned = borrowed.clone().contiguous()
+    # Complete ownership before another SDK context/run/close.
     torch.cuda.current_stream(cuda_device).synchronize()
-    res = effect.run(frame)
-    torch.cuda.synchronize(cuda_device)
-    return torch.from_dlpack(res.image).clone().contiguous()
+    return owned
+
 
 def _run_vfx_effect_into(effect, frame, row, cuda_device):
-    """Copy the SDK-owned output directly before the next SDK call reuses it."""
-    if not frame.is_contiguous():
-        frame = frame.contiguous()
-    torch.cuda.current_stream(cuda_device).synchronize()
-    result = effect.run(frame)
-    torch.cuda.synchronize(cuda_device)
-    borrowed = torch.from_dlpack(result.image)
+    borrowed = _dasiwa_rtx_borrow_output(effect, frame, cuda_device)
     row.copy_(borrowed.permute(1, 2, 0))
     row.clamp_(0.0, 1.0)
+    torch.cuda.current_stream(cuda_device).synchronize()
+    if row.device.type == "cuda" and row.device != cuda_device:
+        torch.cuda.current_stream(row.device).synchronize()
 
 
 @contextlib.contextmanager
@@ -669,9 +680,9 @@ class DaSiWa_RTX_UpscalerRefiner:
                 "device_id": ("INT", {"default": 0, "min": 0, "max": 8, "step": 1, "description": "GPU Index for RTX VFX computation."}),
             },
             "optional": {
-                "empty_cache": ("BOOLEAN", {"default": False, "description": "Run a lightweight GC + empty_cache before allocation; also calls model_management.soft_empty_cache() to ask ComfyUI models to unload, which can free VRAM but may slow subsequent nodes."}),
-                "use_mmap": ("BOOLEAN", {"default": False, "description": "OFF (default): never use disk — the output is allocated lazily in memory (VRAM when it fits, otherwise RAM) and the kernel decides, like the reference NVIDIA node. **WARN:** enable this ONLY for very long video batches that genuinely exceed available RAM; when on, disk is used as the last tier of the VRAM -> RAM -> disk chain and a multi-giB .mmap temp file is written to your temp drive for the whole run."}),
-                "auto_unload_models": ("BOOLEAN", {"default": True, "description": "When VRAM/RAM is insufficient for the output, automatically unload ComfyUI-managed models (like the manual 'empty cache' but a full unload) and re-check before falling back to disk. Off: skip the unload and fall back directly."}),
+                "empty_cache": ("BOOLEAN", {"default": False, "description": "Run a lightweight GC + empty_cache before allocation; also calls model_management.soft_empty_cache() on the selected device (does not unload models)."}),
+                "use_mmap": ("BOOLEAN", {"default": False, "description": "OFF (default): never use disk; fail clearly if neither budgeted VRAM nor available RAM can hold the complete output. **WARN:** enable this ONLY for very long video batches that genuinely exceed available RAM; when on, disk is used as the last tier of the VRAM -> RAM -> disk chain and a multi-giB .mmap temp file is written to your temp drive for the whole run."}),
+                "auto_unload_models": ("BOOLEAN", {"default": True, "description": "When eligible GPU output plus working reserve does not fit, request targeted ComfyUI memory reclamation and re-check. Never globally unload models or evict for output above the 24 GiB cap."}),
                 "chunking": ("BOOLEAN", {"default": True, "description": "Process frames in bounded internal chunks; output remains one standard IMAGE batch."}),
                 "lossless_fp16": ("BOOLEAN", {"default": True, "description": "Use FP16 for output storage only when every FP32 pixel round-trips exactly; otherwise keep FP32. May provide no saving for typical VSR output."}),
                 "chunk_frames": ("INT", {"default": 16, "min": 1, "max": 1024, "step": 1, "description": "Maximum frames per internal output-processing chunk."}),
@@ -809,7 +820,6 @@ class DaSiWa_RTX_UpscalerRefiner:
 
         vfx_api = _import_vfx()
         cuda_device = torch.device(f"cuda:{device_id}")
-        frames_per_chunk = max(1, MAX_CHUNK_OUTPUT_PIXELS // max(1, target_width * target_height))
         fit_to_target_aspect = upscale_enabled and not _same_aspect(
             source_width, source_height, target_width, target_height
         )
@@ -827,11 +837,17 @@ class DaSiWa_RTX_UpscalerRefiner:
             soft_empty_cache=empty_cache,
             allow_mmap=use_mmap,
             auto_unload_models=auto_unload_models,
+            compute_device=cuda_device,
+            working_reserve_bytes=_dasiwa_rtx_working_reserve(
+                source_width, source_height, target_width, target_height, resize_method,
+                sum(map(bool, (denoise, deblur, upscale_enabled, hdr_enabled))), packed, hdr_enabled),
         )
         if mmap_path:
             log_dasiwa("RTX Upscaler & Refiner", f"Disk-backed output: {mmap_path}")
 
-        with torch.cuda.device(cuda_device), torch.inference_mode(), _dasiwa_rtx_hdr_effect(
+        with torch.cuda.device(cuda_device), torch.inference_mode(), _dasiwa_rtx_execution_stream(
+            vfx_api, capabilities, cuda_device
+        ), _dasiwa_rtx_hdr_effect(
             capabilities, hdr_enabled, device_id, hdr_contrast, hdr_saturation,
             hdr_middle_gray, hdr_luminance, hdr_debanding
         ) as hdr_effect:
@@ -856,17 +872,12 @@ class DaSiWa_RTX_UpscalerRefiner:
                         step = chunk_frames if chunking else (batch_size or 1)
                         for start in range(0, batch_size, step):
                             stop = min(start + step, batch_size)
-                            for batch_start in range(start, stop, frames_per_chunk):
-                                batch_end = min(batch_start + frames_per_chunk, stop)
-                                chunk = (
-                                    images[batch_start:batch_end, :, :, :3]
-                                    .to(device=cuda_device, dtype=torch.float32, non_blocking=True)
-                                    .permute(0, 3, 1, 2)
-                                    .contiguous()
-                                )
-                                for local_index in range(batch_end - batch_start):
-                                    global_index = batch_start + local_index
-                                    frame = chunk[local_index]
+                            for global_index in range(start, stop):
+                                # Convert host layout before H2D and stage one frame,
+                                # avoiding two chunk-sized CUDA layout buffers.
+                                frame = images[global_index, :, :, :3].permute(2, 0, 1).contiguous().to(
+                                    device=cuda_device, dtype=torch.float32)
+                                try:
                                     assert out is not None
                                     row = out[global_index]
                                     if _model_management and hasattr(_model_management, "throw_exception_if_processing_interrupted"):
@@ -876,15 +887,17 @@ class DaSiWa_RTX_UpscalerRefiner:
                                         for effect, stage in ((denoise_effect, "Denoise"), (deblur_effect, "Deblur")):
                                             if effect is not None:
                                                 frame = _dasiwa_rtx_run_pass(effect, frame, cuda_device,
-                                                    packed, channel_integrity_check, stage)
+                                                    packed, channel_integrity_check, stage,
+                                                    terminal=(not upscale_enabled and not hdr_enabled and
+                                                              (stage == "Deblur" or deblur_effect is None)))
                                         if fit_to_target_aspect:
                                             frame = _fit_frame_to_target_aspect(frame, target_width, target_height, resize_method)
                                         if upscale_effect is not None:
                                             frame = _dasiwa_rtx_run_pass(upscale_effect, frame, cuda_device,
-                                                packed, channel_integrity_check, "Upscale")
+                                                packed, channel_integrity_check, "Upscale", terminal=not hdr_enabled)
                                         if hdr_effect is not None:
                                             frame = _dasiwa_rtx_run_pass(hdr_effect, frame, cuda_device,
-                                                check=channel_integrity_check, stage="HDR", hdr=True)
+                                                check=channel_integrity_check, stage="HDR", hdr=True, terminal=True)
                                         row[:, :, :3].copy_(frame.permute(1, 2, 0).clamp(0, 1))
                                         if output_channels == 4:
                                             alpha = images[global_index, :, :, 3:4].to(
@@ -918,22 +931,24 @@ class DaSiWa_RTX_UpscalerRefiner:
                                             _run_vfx_effect_into(upscale_effect, frame, row, cuda_device)
                                             continue
 
-                                    if out_device == cuda_device and out_dtype == frame.dtype:
+                                    if out.device == cuda_device and out_dtype == frame.dtype:
                                         row.copy_(frame.permute(1, 2, 0), non_blocking=True)
                                         row.clamp_(0.0, 1.0)
                                     else:
                                         row.copy_(
                                             frame.permute(1, 2, 0).clamp(0.0, 1.0),
-                                            non_blocking=(out_device.type == "cuda"),
+                                            non_blocking=(out.device.type == "cuda"),
                                         )
 
-                                torch.cuda.synchronize(cuda_device)
-                                if out_device.type == "cuda":
-                                    torch.cuda.synchronize(out_device)
-                                del chunk
+                                finally:
+                                    torch.cuda.current_stream(cuda_device).synchronize()
+                                    if out is not None and out.device.type == "cuda" and out.device != cuda_device:
+                                        torch.cuda.current_stream(out.device).synchronize()
+                                    frame = row = alpha = None
 
         # Cleanup only after the effect has finished; outputs remain owned by ComfyUI.
-        force_gc_and_cleanup(_temporary_output_directory())
+        if empty_cache:
+            _cleanup_cuda(True, cuda_device)
 
         if lossless_fp16:
             out = _lossless_fp16_image_batch(out, chunk_frames)
