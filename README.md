@@ -41,6 +41,7 @@ One node that upscales a completed MiniMax H3 video/audio latent and refines it 
 
 - Independent `spatial_tiling` (diffusion) and `temporal_chunking` (upscale + refinement), both on by default. Refinement uses tile-local H3 coordinates and a preferred automatic layout capped at 2.1 MP per tile. If that layout cannot fit the memory estimate, smaller spatial tiles are planned down to the existing 512px floor; no additional tile controls or wiring are needed.
 - Learned safetensors upscaling from `models/latent_upscale_models/`, or `interpolation`; no automatic choice, no fallback.
+- Optional **Spike Guard**, default off: experimental Talon V4 burn-signature correction before refinement, with sensitivity/strength and signed or both-direction detection. Uses frame-wise FP32 correction, includes RAM checks and cancellation, and reports the actual changed output area. Calibrated on `3d_conv_v1`; not a general image-quality fix.
 - Factor-only scaling (default **2.0**), refinement defaults CFG 1, 1 step, denoise 0.2 (`0` skips refinement). Native packed video/audio `LATENT` output; the original audio stream is returned unchanged.
 - Optional Director guide + H3 video VAE re-encode endpoint images at the enlarged resolution; works without a Director.
 - Continuity: keep Append & Stage before the upscaler and feed it the cumulative latent.
