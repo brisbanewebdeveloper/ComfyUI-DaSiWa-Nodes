@@ -1,6 +1,6 @@
 # DaSiWa: RTX Upscaler & Refiner
 
-This node leverages NVIDIA RTX Video SDK features to provide professional-grade image/video enhancement directly within ComfyUI. It executes up to three sequential passes in a single node, processing frame-by-frame to keep VRAM usage predictable and low.
+NVIDIA VFX enhancement for image and video batches, with optional Denoise, Deblur, Upscale and TrueHDR passes in one node. Processing uses bounded frame windows and returns one standard ComfyUI `IMAGE` batch. The node keeps its own `DaSiWa_RTX_UpscalerRefiner` ID and can coexist with Comfy-Org's NVIDIA VFX nodes; it does not replace or patch them.
 
 ```mermaid
 flowchart LR
@@ -14,7 +14,18 @@ flowchart LR
 The node executes effects in this order:
 1.  **Denoise (Pass 1):** Cleans up grain and compression artifacts at the source resolution.
 2.  **Deblur (Pass 2):** Sharpens focus and reduces motion blur at the source resolution.
-3.  **Upscale (Pass 3):** Scales the image to the target resolution using AI (VSR) or High Bitrate processing.
+3.  **Upscale (Pass 3):** Scales the image to the target resolution using AI (VSR, High Bitrate or an available Streaming mode).
+4.  **TrueHDR (optional final pass):** Converts the final SDR RGB frame to normalized BT.2020/PQ HDR values. Disabled by default; it can also run without Denoise, Deblur or Upscale.
+
+## SDK capabilities, precision and HDR
+
+The node uses the installed `nvidia-vfx` package (`nvvfx`) and detects available effects, quality levels and constructor parameters without loading an effect during schema discovery. Newer APIs are used when installed; supported older VSR APIs remain usable. There is no automatic package installation or live SDK switching. Restart ComfyUI after changing the package. API availability does not guarantee GPU/driver support for inference.
+
+- **10-bit SDK encoding** is optional. RGB10A2 packs RGB into 10-bit channels for SDK processing; intermediate results are unpacked before ordinary resizing or another processing pass. It does not turn SDR into HDR, restore precision already lost in an 8-bit source, or reduce the complete float IMAGE batch's memory footprint.
+- **TrueHDR** is a separate opt-in decision. Its packed output is unpacked into a normal ComfyUI IMAGE tensor, but the values remain BT.2020/PQ rather than SDR/sRGB. Available SDK controls cover contrast, saturation, middle gray, target luminance and debanding.
+- **HDR export:** IMAGE carries no transfer-function or color-primary metadata. The saver must explicitly encode and tag BT.2020/PQ, normally using a suitable 10-bit video format. Enhanced Video Combine is not yet verified for this HDR export contract; ordinary SDR previews or saves must not be interpreted as proof of valid HDR output.
+- Unsupported features requested by an API prompt must fail clearly instead of silently substituting 8-bit or SDR processing. Existing DaSiWa registration and old input/output positions remain unchanged; the official Comfy-Org pack can remain installed.
+- This node does not change frame count or FPS and does not replace RIFE interpolation.
 
 ## 📐 Resize Types Explained
 
@@ -49,7 +60,16 @@ Check these settings first when users report degraded quality:
 
 | Parameter | Description |
 | :--- | :--- |
-| **upscale** | `VSR` is best for clean AI upscaling. `High Bitrate` is specifically tuned for sources that are noisy or heavily compressed. |
+| **upscale** | `VSR` handles typical compressed sources. `High Bitrate` is tuned for clean, high-bitrate or lossless sources and avoids unnecessary artifact suppression. |
+| **image_encoding** | `8-bit RGB` by default; optional `10-bit RGB (RGB10A2)` when supported. VFX output starts in FP32 for the 10-bit path. |
+| **denoise_strength / deblur_strength / upscale_strength** | Independent SDK effect strengths, 0–1, default 1.0. Available when the installed VSR constructor supports strength. |
+| **preserve_alpha** | Off by default to retain the legacy RGB output. On preserves input alpha through the same crop/letterbox and spatial resize, without SDK filtering. |
+| **channel_integrity_check** | Off by default. Checks small samples before clamp for NaN/Inf and suspicious SDR channel collapse. It is a heuristic and may flag legitimate color changes; HDR only receives the finite-value check. |
+| **hdr_enabled** | Off by default; available with TrueHDR. Final PQ/BT.2020 conversion, also usable by itself. |
+| **hdr_contrast / hdr_saturation** | 0–200, default 100. |
+| **hdr_middle_gray** | 10–100, default 50. |
+| **hdr_luminance** | Target peak luminance 400–2000 nits, default 650. |
+| **hdr_debanding** | On by default; enables the SDK debander. |
 | **divisible_by** | Use **8** for RTX-style image/video upscaling. Use **32** only when the next model in the workflow requires it. |
 | **resize_method** | When the source and target aspect ratios don't match: `Center Crop` fills the whole target frame by cutting edges; `Letterbox` fits the whole image inside and adds black bars. |
 | **device_id** | If you have multiple GPUs, set this to the index of your RTX card (usually `0`). |
@@ -58,11 +78,17 @@ Check these settings first when users report degraded quality:
 | **chunking / chunk_frames** | **On** (default), 16 frames: internally bound the processing loop while retaining the regular node's **one IMAGE batch** output for standard ComfyUI nodes. This does **not** bound the total input/output allocation. |
 | **lossless_fp16** | **On** (default): store the complete output as FP16 only if *all* FP32 pixels round-trip exactly; otherwise keep FP32. It checks in windows and skips the full conversion if memory headroom is insufficient. NVIDIA VFX still receives FP32; typical VSR output usually remains FP32. |
 
+## Pro safeguards and large-output limits
+
+The optional sampled channel diagnosis follows the Pro project's safeguard idea, implemented locally without depending on its node pack or replacing any official registration. Existing SDK-buffer copy protection and the VRAM/RAM/opt-in mmap policy remain in place.
+
+No 15360 intermediate or 16K hybrid output is enabled in this release. The Pro project's reported boundary fault came from a different Windows/SDK setup; it has not been reproduced on this target. A fixed intermediate would silently replace part of AI upscaling with bicubic resizing. Manual target controls therefore retain their existing limits.
+
 ## Regular IMAGE workflow (local test)
 
 `Load Video → Get Video Components → DaSiWa RTX Upscaler & Refiner → Enhanced Video Combine` uses one ordinary ComfyUI `IMAGE` batch throughout. Link `Get Video Components.audio` to the Combine node's `audio` input and its `fps` to `frame_rate`. The RTX node processes bounded internal frame windows and copies the final SDK output directly into each output frame before the SDK can reuse its buffer. Existing saved node and widget positions remain unchanged; the three optional controls were appended.
 
-**Memory limit:** `Get Video Components` materializes the entire input, the RTX node allocates the entire output batch, and ComfyUI may cache both after the run. Internal `chunking` limits only processing intermediates—not total RAM or VRAM across a long video. `lossless_fp16` reduces output storage only when **every FP32 pixel survives FP32 → FP16 → FP32 exactly** and memory headroom permits the conversion; otherwise the complete output remains FP32. NVIDIA VFX still receives FP32. Typical VSR output is unlikely to qualify. Neither switch provides constant-memory upscaling of arbitrarily long videos.
+**Memory limit:** `Get Video Components` materializes the entire input, the RTX node allocates the entire output batch, and ComfyUI may cache both after the run. Internal `chunking` limits only processing intermediates—not total RAM or VRAM across a long video. `lossless_fp16` reduces output storage only when **every FP32 pixel survives FP32 → FP16 → FP32 exactly** and memory headroom permits the conversion; otherwise the complete output remains FP32. RGB8 VFX processing receives FP32; RGB10A2 uses packed CUDA uint32 tensors. Typical VSR output is unlikely to qualify. Neither switch provides constant-memory upscaling of arbitrarily long videos.
 
 Workflows saved with the removed experimental `(Chunked)` RTX and `(Chunks)` Combine nodes must be rewired to the regular RTX and Enhanced Video Combine nodes; the old node IDs are no longer registered.
 
@@ -86,4 +112,4 @@ CPU output batches use the currently available RAM reported by `psutil`, not a f
 - **`auto_unload_models`** (on by default) is the first remediation when the active tier (VRAM, or RAM on CPU) is short: it fully unloads ComfyUI-managed models, re-checks that tier, and only then drops to a lower tier.
 
 ---
-*Note: This node requires the NVIDIA RTX Video SDK / Broadcast SDK to be installed on your system.*
+*Requires an NVIDIA CUDA GPU and the `nvidia-vfx` package in the Python environment used by ComfyUI. Current package distributions bundle the VFX runtime libraries. Optional features depend on the installed bindings and GPU/driver support.*

@@ -2,9 +2,11 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-09**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-10**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **RTX SDK-aware enhancement (10-10, 0.5.9):** RTX Upscaler & Refiner adds optional RGB10A2 10-bit processing, per-pass strengths, available Streaming modes and a final TrueHDR pass. SDK capabilities determine availability; old DaSiWa workflow interfaces and official NVIDIA VFX node coexistence are retained. HDR outputs normalized BT.2020/PQ values, not an automatically tagged HDR video. High Bitrate guidance is corrected for clean/lossless sources. [Options and limits →](rtx_upscaler_refiner.md)
 
 - **H3 local-tile refinement and video RefMod fixes (10-09, 0.5.8):** Enhanced Upscale uses native tile-local H3 coordinates and prefers the Talon V2 automatic layout under a 2.1 MP tile cap. If the preferred geometry cannot fit the estimate, smaller spatial tiles remain available. Existing sockets, Director/CFGGuider integration, protected Continuity prefix and original audio are retained; pending Continuity guides are reserved in planning. Video RefMods use native 2 fps Qwen sampling with matching timestamps while retaining the full DiT reference latent. No new controls. [Wiring and limits →](minimax_h3_tiled_upscale.md)
 
@@ -126,6 +128,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.9 | 10-10 | SDK-aware RTX enhancement: optional 10-bit processing, strengths, Streaming and TrueHDR; preserved workflow interfaces |
 | 0.5.8 | 10-09 | H3 tile-local refinement, automatic tile layout and Continuity planning reserve; video RefMod Qwen sampling and timestamps |
 | 0.5.7 | 10-09 | Automatic saved LLM server settings; combined local/remote choices and complete nested local discovery |
 | 0.5.3 | 10-07 | Joint target-grid tile/chunk selection, edge-overlap cost and per-tile keyframe budget |

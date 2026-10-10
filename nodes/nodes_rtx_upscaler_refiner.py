@@ -4,7 +4,9 @@ import os
 import torch
 import torch.nn.functional as F
 import contextlib
-from typing import Optional, Tuple
+import inspect
+from importlib import metadata
+from typing import Any, Optional, Tuple
 
 import folder_paths
 try:
@@ -43,6 +45,109 @@ MAX_GPU_OUTPUT_BYTES = 24 * 1024 * 1024 * 1024
 
 # --- Helpers ---
 
+def _dasiwa_rtx_parameters(cls):
+    try:
+        return inspect.signature(cls).parameters
+    except (TypeError, ValueError):
+        return {}
+
+
+def _dasiwa_rtx_capabilities():
+    """API-only probe: never instantiate effects or initialize CUDA."""
+    capabilities: dict[str, Any] = dict(version="unavailable", strength=False, encoding=False,
+                        hdr=False, streaming=[], image_encoding=None, true_hdr=None)
+    try:
+        import nvvfx
+        try:
+            capabilities["version"] = metadata.version("nvidia-vfx")
+        except metadata.PackageNotFoundError:
+            capabilities["version"] = "unknown"
+        vsr = getattr(nvvfx, "VideoSuperRes", None)
+        params = _dasiwa_rtx_parameters(vsr)
+        encoding = getattr(nvvfx, "ImageEncoding", None)
+        quality = getattr(getattr(nvvfx, "effects", None), "QualityLevel", None)
+        if quality is None:
+            quality = getattr(vsr, "QualityLevel", None)
+        hdr = getattr(nvvfx, "TrueHDR", None)
+        hdr_params = _dasiwa_rtx_parameters(hdr)
+        capabilities.update(
+            strength="strength" in params,
+            encoding=("image_encoding" in params and encoding is not None
+                      and hasattr(encoding, "RGB8") and hasattr(encoding, "RGB10A2")),
+            image_encoding=encoding,
+            hdr=(callable(hdr) and all(name in hdr_params for name in
+                 ("contrast", "saturation", "middle_gray", "luminance", "debanding_off", "device"))),
+            true_hdr=hdr,
+            streaming=[label for label, attr in
+                       (("Streaming Medium", "STREAMING_MEDIUM"), ("Streaming Ultra", "STREAMING_ULTRA"))
+                       if quality is not None and hasattr(quality, attr)],
+        )
+    except Exception:
+        # Broken/missing optional SDK must not break pack import or schema.
+        pass
+    return capabilities
+
+
+def _dasiwa_rtx_pack_rgb10a2(rgb):
+    """Normalized CHW RGB -> contiguous HxW uint32 R10G10B10A2."""
+    values = (rgb[:3].clamp(0, 1) * 1023).round().to(torch.int64)
+    return (values[0] | (values[1] << 10) | (values[2] << 20) | (3 << 30)).to(torch.uint32).contiguous()
+
+
+def _dasiwa_rtx_unpack_rgb10a2(packed):
+    """Packed words -> CHW float32; retain PQ signal values for HDR."""
+    words = packed.to(torch.int64)
+    return torch.stack([(words >> shift) & 1023 for shift in (0, 10, 20)]).float().div_(1023).contiguous()
+
+
+def _dasiwa_rtx_integrity(input_frame, output_frame, stage):
+    """Bounded diagnostic heuristics, not a proof of image corruption."""
+    def sample(frame):
+        h, w = frame.shape[-2:]
+        return frame[:, ::max(1, math.ceil(h / 64)), ::max(1, math.ceil(w / 64))]
+    source, result = sample(input_frame), sample(output_frame)
+    if not torch.isfinite(result).all():
+        raise RuntimeError(f"RTX channel integrity diagnosis ({stage}): sampled NaN/Inf output.")
+    before = source.abs().mean(dim=(1, 2))
+    after = result.abs().mean(dim=(1, 2))
+    # Only flag a strong formerly populated channel disappearing while another survives.
+    collapse = (before > 0.05) & (after < before * 0.001)
+    if bool(collapse.any()) and bool((after > 0.05).any()):
+        raise RuntimeError(f"RTX channel integrity diagnosis ({stage}): suspected channel collapse; "
+                           "this heuristic may flag legitimate color changes. Disable the opt-in check to compare.")
+
+
+def _dasiwa_rtx_run_pass(effect, frame, cuda_device, packed=False, check=False, stage="VSR", hdr=False):
+    sdk_input = _dasiwa_rtx_pack_rgb10a2(frame) if packed else frame
+    owned = _run_vfx_effect(effect, sdk_input, cuda_device)
+    result = _dasiwa_rtx_unpack_rgb10a2(owned) if packed or hdr else owned
+    if check:
+        if hdr:
+            # Tone mapping is not SDR channel collapse; check finite values only.
+            sample = result[:, ::max(1, math.ceil(result.shape[1] / 64)),
+                            ::max(1, math.ceil(result.shape[2] / 64))]
+            if not torch.isfinite(sample).all():
+                raise RuntimeError("RTX channel integrity diagnosis (HDR): sampled NaN/Inf output.")
+        else:
+            _dasiwa_rtx_integrity(frame, result, stage)
+    return result
+
+
+@contextlib.contextmanager
+def _dasiwa_rtx_hdr_effect(capabilities, enabled, device_index, contrast, saturation,
+                           middle_gray, luminance, debanding):
+    if not enabled:
+        yield None
+        return
+    effect = capabilities["true_hdr"](contrast=contrast, saturation=saturation,
+        middle_gray=middle_gray, luminance=luminance, debanding_off=int(not debanding), device=device_index)
+    try:
+        # TrueHDR pins dimensions on run and loads lazily. No VSR resize fields.
+        yield effect
+    finally:
+        _close_vfx_effect(effect)
+
+
 def round_up(value: float, alignment: int) -> int:
     return int(math.ceil(float(value) / alignment) * alignment)
 
@@ -50,8 +155,8 @@ def round_nearest(value: float, alignment: int) -> int:
     return max(alignment, int(math.floor((float(value) / alignment) + 0.5) * alignment))
 
 
-def _projected_output_bytes(batch_size: int, width: int, height: int, dtype: torch.dtype) -> int:
-    return tensor_nbytes((batch_size, height, width, 3), dtype)
+def _projected_output_bytes(batch_size: int, width: int, height: int, dtype: torch.dtype, channels: int = 3) -> int:
+    return tensor_nbytes((batch_size, height, width, channels), dtype)
 
 
 def _temporary_output_directory() -> str:
@@ -111,7 +216,7 @@ def _allocate_output_tensor(
     Returns ``(tensor, mmap_path)`` where ``mmap_path`` is None for in-memory
     tensors and the temp file path for the disk-backed fallback.
     """
-    required_bytes = _projected_output_bytes(shape[0], shape[2], shape[1], dtype)
+    required_bytes = tensor_nbytes(shape, dtype)
 
     # Always run lightweight cleanup before deciding allocation strategy.
     _cleanup_cuda(soft_empty_cache=soft_empty_cache)
@@ -241,6 +346,8 @@ def compute_aligned_ratio_dims(ratio_preset: str, megapixels: float, alignment: 
 def _quality_attr(mode: str, quality: str) -> str:
     """Maps UI strings to nvvfx QualityLevel attributes."""
     q = quality.upper()
+    if mode in ("Streaming Medium", "Streaming Ultra"):
+        return mode.upper().replace(" ", "_")
     if mode == "High Bitrate":
         return f"HIGHBITRATE_{q}"
     elif mode in ["Denoise", "Deblur"]:
@@ -414,7 +521,21 @@ def _resolve_quality_level(QualityLevel, mode: str, quality: str):
         f"Available levels: {available}"
     )
 
-def _create_vfx_effect(VideoSuperRes, q_level, device_index: int):
+def _create_vfx_effect(VideoSuperRes, q_level, device_index: int, strength=1.0, image_encoding="8-bit RGB"):
+    params = _dasiwa_rtx_parameters(VideoSuperRes)
+    extras = {}
+    if "strength" in params:
+        extras["strength"] = strength
+    elif strength != 1.0:
+        raise RuntimeError("RTX SDK strength is unavailable.")
+    if "image_encoding" in params:
+        capabilities = _dasiwa_rtx_capabilities()
+        enum = capabilities["image_encoding"]
+        if enum is not None:
+            extras["image_encoding"] = getattr(enum, "RGB10A2" if image_encoding != "8-bit RGB" else "RGB8")
+    if extras:
+        # Concrete supported signatures: never silently retry without requested settings/device.
+        return VideoSuperRes(quality=q_level, device=device_index, **extras)
     attempts = (
         ((), {"quality": q_level, "device": device_index}),
         ((q_level,), {"device": device_index}),
@@ -480,7 +601,7 @@ def _run_vfx_effect_into(effect, frame, row, cuda_device):
 
 
 @contextlib.contextmanager
-def _maybe_vfx_effect(vfx_api, enabled, mode, quality, device_index, out_width, out_height):
+def _maybe_vfx_effect(vfx_api, enabled, mode, quality, device_index, out_width, out_height, strength=1.0, image_encoding="8-bit RGB"):
     if not enabled:
         yield None
         return
@@ -494,7 +615,7 @@ def _maybe_vfx_effect(vfx_api, enabled, mode, quality, device_index, out_width, 
     effect_cm = None
     effect = None
     try:
-        effect = _create_vfx_effect(VideoSuperRes, q_level, device_index)
+        effect = _create_vfx_effect(VideoSuperRes, q_level, device_index, strength, image_encoding)
         if hasattr(effect, "__enter__") and hasattr(effect, "__exit__"):
             effect_cm = effect
             effect = effect_cm.__enter__()
@@ -519,22 +640,23 @@ def _maybe_vfx_effect(vfx_api, enabled, mode, quality, device_index, out_width, 
 
 class DaSiWa_RTX_UpscalerRefiner:
     DESCRIPTION = (
-        "DaSiWa RTX Upscaler & Refiner: A high-performance 3-pass processing node.\n"
-        "1. Refine Pass: Runs at source resolution to clean up noise or blur using NVIDIA RTX VFX.\n"
-        "2. Upscale Pass: Scales the image up to 4x using VSR or High Bitrate modes.\n"
-        "Processes frame-by-frame to maintain low VRAM usage for video batches."
+        "DaSiWa RTX Upscaler & Refiner: SDK-aware image/video enhancement.\n"
+        "Optional Denoise and Deblur at source resolution, then VSR/High Bitrate/Streaming upscale.\n"
+        "Optional final TrueHDR returns BT.2020/PQ values; IMAGE carries no HDR metadata.\n"
+        "Frame-by-frame processing with one complete IMAGE output batch."
     )
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        capabilities = _dasiwa_rtx_capabilities()
+        schema = {
             "required": {
                 "images": ("IMAGE", {"description": "Input image or video batch to process."}),
                 "denoise": ("BOOLEAN", {"default": False, "description": "Enable NVIDIA RTX Denoise pass to clean up image grain and noise."}),
                 "denoise_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Quality tier for the Denoise pass. Higher tiers use more GPU compute."}),
                 "deblur": ("BOOLEAN", {"default": False, "description": "Enable NVIDIA RTX Deblur pass to reduce motion or focus blur."}),
                 "deblur_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Quality tier for the Deblur pass."}),
-                "upscale": (UPSCALE_MODES, {"default": "VSR", "description": "Upscale Mode:\n- VSR: Standard AI upscaling.\n- High Bitrate: Optimized for heavily compressed/noisy sources.\n- Off: Skip scaling."}),
+                "upscale": (UPSCALE_MODES + capabilities["streaming"], {"default": "VSR", "description": "Upscale Mode:\n- VSR: Standard AI upscaling.\n- High Bitrate: For clean high-bitrate/lossless sources.\n- Streaming Medium/Ultra: SDK streaming levels; ignore upscale_quality.\n- Off: Skip scaling."}),
                 "upscale_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Quality tier for the Upscale pass."}),
                 "resize_type": (RESIZE_TYPES, {"default": "Scale", "description": "Target Size Logic:\n- Same Size: Keep original dimensions.\n- Scale: Multiply resolution by 'scale'.\n- Keep Ratio: Match 'megapixels' while keeping original shape.\n- Preset Ratio: Match 'megapixels' but force to 'ratio_preset'.\n- Manual: Exact pixels."}),
                 "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05, "description": "Multiplier for resolution (used by 'Scale' type). 2.0 = 4x the total pixels."}),
@@ -555,6 +677,26 @@ class DaSiWa_RTX_UpscalerRefiner:
                 "chunk_frames": ("INT", {"default": 16, "min": 1, "max": 1024, "step": 1, "description": "Maximum frames per internal output-processing chunk."}),
             },
         }
+
+        optional = schema["optional"]
+        optional["image_encoding"] = (["8-bit RGB", "10-bit RGB (RGB10A2)"] if capabilities["encoding"] else ["8-bit RGB"], {
+            "default": "8-bit RGB", "dasiwa_unavailable": not capabilities["encoding"],
+            "description": "Opt-in packed 10-bit SDR SDK processing. Not HDR or smaller IMAGE storage."})
+        for stage in ("denoise", "deblur", "upscale"):
+            optional[f"{stage}_strength"] = ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0,
+                "step": 0.01, "dasiwa_unavailable": not capabilities["strength"],
+                "description": "SDK effect strength; 1.0 retains the SDK default."})
+        optional["preserve_alpha"] = ("BOOLEAN", {"default": False, "description": "Keep input alpha separately, applying the same crop/letterbox/resize; no SDK filtering."})
+        optional["channel_integrity_check"] = ("BOOLEAN", {"default": False, "description": "Sampled NaN/Inf and channel-collapse diagnosis before clamp. Heuristic: legitimate color changes can trigger it."})
+        optional["hdr_enabled"] = ("BOOLEAN", {"default": False, "dasiwa_unavailable": not capabilities["hdr"],
+            "description": "Final TrueHDR pass: normalized BT.2020/PQ HDR10 values, NOT SDR. IMAGE carries no HDR metadata; use a verified HDR encoder."})
+        for name, default, lo, hi in (("contrast", 100, 0, 200), ("saturation", 100, 0, 200),
+                ("middle_gray", 50, 10, 100), ("luminance", 650, 400, 2000)):
+            optional[f"hdr_{name}"] = ("INT", {"default": default, "min": lo, "max": hi, "step": 1,
+                "dasiwa_unavailable": not capabilities["hdr"], "description": "TrueHDR SDK tunable (luminance in nits)."})
+        optional["hdr_debanding"] = ("BOOLEAN", {"default": True, "dasiwa_unavailable": not capabilities["hdr"],
+            "description": "Enable the TrueHDR DL-Debander (NVIDIA default)."})
+        return schema
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("images",)
@@ -598,7 +740,34 @@ class DaSiWa_RTX_UpscalerRefiner:
         chunking=True,
         lossless_fp16=True,
         chunk_frames=16,
+        image_encoding="8-bit RGB",
+        denoise_strength=1.0,
+        deblur_strength=1.0,
+        upscale_strength=1.0,
+        preserve_alpha=False,
+        channel_integrity_check=False,
+        hdr_enabled=False,
+        hdr_contrast=100,
+        hdr_saturation=100,
+        hdr_middle_gray=50,
+        hdr_luminance=650,
+        hdr_debanding=True,
     ):
+        capabilities = _dasiwa_rtx_capabilities()
+        if image_encoding not in ("8-bit RGB", "10-bit RGB (RGB10A2)"):
+            raise ValueError(f"Unsupported RTX image_encoding: {image_encoding}")
+        packed = image_encoding != "8-bit RGB"
+        if packed and not capabilities["encoding"]:
+            raise RuntimeError("RTX SDK RGB10A2 processing is unavailable; restart after installing a supported SDK.")
+        if hdr_enabled and not capabilities["hdr"]:
+            raise RuntimeError("RTX SDK TrueHDR is unavailable; restart after installing a supported SDK.")
+        if upscale.startswith("Streaming") and upscale not in capabilities["streaming"]:
+            raise RuntimeError(f"RTX SDK {upscale} is unavailable.")
+        for strength in (denoise_strength, deblur_strength, upscale_strength):
+            if not math.isfinite(strength) or not 0 <= strength <= 1:
+                raise ValueError("RTX strengths must be finite and between 0 and 1.")
+            if strength != 1.0 and not capabilities["strength"]:
+                raise RuntimeError("RTX SDK strength control is unavailable.")
         if not torch.cuda.is_available():
             raise RuntimeError("NVIDIA RTX VFX requires CUDA. No CUDA devices found.")
 
@@ -608,7 +777,9 @@ class DaSiWa_RTX_UpscalerRefiner:
 
         alignment = int(divisible_by)
         upscale_enabled = upscale != "Off"
-        has_effects = denoise or deblur or upscale_enabled
+        has_effects = denoise or deblur or upscale_enabled or hdr_enabled
+        output_channels = 4 if preserve_alpha and channels >= 4 else 3
+        enhanced = packed or hdr_enabled or preserve_alpha or channel_integrity_check
 
         # Calculate target dimensions
         if upscale_enabled:
@@ -625,7 +796,7 @@ class DaSiWa_RTX_UpscalerRefiner:
         if not isinstance(chunk_frames, int) or chunk_frames < 1:
             raise ValueError("chunk_frames must be at least 1")
         if not has_effects:
-            frames = images[:, :, :, :3]
+            frames = images[:, :, :, :output_channels]
             return (_lossless_fp16_image_batch(frames, chunk_frames) if lossless_fp16 else frames,)
 
         if upscale_enabled and target_width * target_height < source_width * source_height:
@@ -644,15 +815,15 @@ class DaSiWa_RTX_UpscalerRefiner:
         )
 
         out_device = images.device
-        out_dtype = images.dtype
-        projected_bytes = _projected_output_bytes(batch_size, target_width, target_height, out_dtype)
+        out_dtype = torch.float32 if packed or hdr_enabled else images.dtype
+        projected_bytes = _projected_output_bytes(batch_size, target_width, target_height, out_dtype, output_channels)
         log_dasiwa(
             "RTX Upscaler & Refiner",
             f"Input={source_width}x{source_height}, target={target_width}x{target_height}, "
             f"frames={batch_size}, output={projected_bytes / 1024 ** 3:.2f} GiB.",
         )
         out, mmap_path = _allocate_output_tensor(
-            (batch_size, target_height, target_width, 3), out_dtype, out_device,
+            (batch_size, target_height, target_width, output_channels), out_dtype, out_device,
             soft_empty_cache=empty_cache,
             allow_mmap=use_mmap,
             auto_unload_models=auto_unload_models,
@@ -660,23 +831,26 @@ class DaSiWa_RTX_UpscalerRefiner:
         if mmap_path:
             log_dasiwa("RTX Upscaler & Refiner", f"Disk-backed output: {mmap_path}")
 
-        with torch.cuda.device(cuda_device), torch.inference_mode():
+        with torch.cuda.device(cuda_device), torch.inference_mode(), _dasiwa_rtx_hdr_effect(
+            capabilities, hdr_enabled, device_id, hdr_contrast, hdr_saturation,
+            hdr_middle_gray, hdr_luminance, hdr_debanding
+        ) as hdr_effect:
             # Pass 1: Denoise
             with _maybe_vfx_effect(
                 vfx_api, denoise, "Denoise", denoise_quality,
-                device_id, source_width, source_height
+                device_id, source_width, source_height, denoise_strength, image_encoding
             ) as denoise_effect:
 
                 # Pass 2: Deblur
                 with _maybe_vfx_effect(
                     vfx_api, deblur, "Deblur", deblur_quality,
-                    device_id, source_width, source_height
+                    device_id, source_width, source_height, deblur_strength, image_encoding
                 ) as deblur_effect:
 
                     # Pass 3: Upscale
                     with _maybe_vfx_effect(
                         vfx_api, upscale_enabled, upscale, upscale_quality,
-                        device_id, target_width, target_height
+                        device_id, target_width, target_height, upscale_strength, image_encoding
                     ) as upscale_effect:
 
                         step = chunk_frames if chunking else (batch_size or 1)
@@ -695,6 +869,33 @@ class DaSiWa_RTX_UpscalerRefiner:
                                     frame = chunk[local_index]
                                     assert out is not None
                                     row = out[global_index]
+                                    if _model_management and hasattr(_model_management, "throw_exception_if_processing_interrupted"):
+                                        _model_management.throw_exception_if_processing_interrupted()
+
+                                    if enhanced:
+                                        for effect, stage in ((denoise_effect, "Denoise"), (deblur_effect, "Deblur")):
+                                            if effect is not None:
+                                                frame = _dasiwa_rtx_run_pass(effect, frame, cuda_device,
+                                                    packed, channel_integrity_check, stage)
+                                        if fit_to_target_aspect:
+                                            frame = _fit_frame_to_target_aspect(frame, target_width, target_height, resize_method)
+                                        if upscale_effect is not None:
+                                            frame = _dasiwa_rtx_run_pass(upscale_effect, frame, cuda_device,
+                                                packed, channel_integrity_check, "Upscale")
+                                        if hdr_effect is not None:
+                                            frame = _dasiwa_rtx_run_pass(hdr_effect, frame, cuda_device,
+                                                check=channel_integrity_check, stage="HDR", hdr=True)
+                                        row[:, :, :3].copy_(frame.permute(1, 2, 0).clamp(0, 1))
+                                        if output_channels == 4:
+                                            alpha = images[global_index, :, :, 3:4].to(
+                                                device=cuda_device, dtype=torch.float32).permute(2, 0, 1)
+                                            if fit_to_target_aspect:
+                                                alpha = _fit_frame_to_target_aspect(alpha, target_width, target_height, resize_method)
+                                            if alpha.shape[-2:] != (target_height, target_width):
+                                                alpha = F.interpolate(alpha.unsqueeze(0), size=(target_height, target_width),
+                                                    mode="bilinear", align_corners=False)[0]
+                                            row[:, :, 3:4].copy_(alpha.permute(1, 2, 0).clamp(0, 1))
+                                        continue
 
                                     if denoise_effect:
                                         if not deblur and not upscale_enabled:

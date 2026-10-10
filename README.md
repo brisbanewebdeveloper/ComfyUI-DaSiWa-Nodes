@@ -99,7 +99,11 @@ One `IMAGE` batch in, one `IMAGE` batch out. A native RIFE/FILM safetensors comb
 NVIDIA RTX Video SDK enhancement with Denoise, Deblur and VSR/High Bitrate upscaling. Processing uses bounded frame windows and produces one standard ComfyUI `IMAGE` batch.
 
 - **Refine:** Independent Denoise and Deblur passes (both off by default).
-- **Upscale:** AI-powered VSR and High Bitrate upscaling.
+- **Upscale:** VSR for typical compressed sources and High Bitrate for clean, high-bitrate/lossless sources; SDK-supported Streaming modes.
+- **SDK-aware options:** Available effects and parameters are detected from the installed SDK. Optional RGB10A2 10-bit processing and per-pass strengths preserve the legacy default path; no automatic SDK installation.
+- **TrueHDR (opt-in):** Final SDR → BT.2020/PQ conversion, also usable on its own. IMAGE does not carry HDR metadata; correct HDR encoding/tagging must be provided downstream, and Enhanced Video Combine HDR export is not yet verified.
+- **Alpha and diagnostics (opt-in):** Preserve alpha through matching crop/resize, or check small samples for invalid pixels and suspected SDR channel collapse. Both are off by default.
+- **Compatibility:** Keeps its own DaSiWa node ID and existing workflow inputs/outputs, without replacing the official NVIDIA VFX nodes. Frame count/FPS stay unchanged; RIFE remains separate.
 - **Smart Sizing:** Multiple resize modes including Constant Megapixel targets.
 - **Efficiency:** Internal `chunking` (on, 16 frames by default) bounds processing intermediates; the final output remains a single `IMAGE` batch.
 - **Lossless output storage:** `lossless_fp16` (on by default) uses FP16 only if every output value round-trips exactly and memory headroom permits; typical VSR output remains FP32.
