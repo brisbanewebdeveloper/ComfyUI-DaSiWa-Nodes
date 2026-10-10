@@ -980,5 +980,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "DaSiWa_RTX_UpscalerRefiner": "DaSiWa RTX Upscaler & Refiner",
+    "DaSiWa_RTX_UpscalerRefiner": "RTX Upscaler & Refiner",
 }

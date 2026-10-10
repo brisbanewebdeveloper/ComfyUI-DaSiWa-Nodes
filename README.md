@@ -113,6 +113,14 @@ NVIDIA RTX Video SDK enhancement with Denoise, Deblur and VSR/High Bitrate upsca
 
 [Full documentation →](docs/rtx_upscaler_refiner.md)
 
+### 🎞️ RTX Frame Generation
+
+Separate NVIDIA pair interpolation node: multiplier 2–16 or a specific timestep, LOW/MEDIUM/HIGH quality, automatic/manual cut detection and optional RGB10A2 10-bit SDR processing. Keeps every source frame and both endpoints: `(N-1)*M+1` frames; encode multiplier output at source FPS × M. Specific non-midpoint timesteps have nonuniform spacing. RGB only (alpha discarded), one complete IMAGE output batch, bounded pair staging, budgeted VRAM/RAM and opt-in mmap. Requires an installed SDK with `VideoFrameGeneration`; existing upscaler SDK compatibility is unchanged.
+
+Visible RTX names have no DaSiWa prefix. Saved/API identifiers remain unique: `DaSiWa_RTX_UpscalerRefiner` (unchanged) and `DaSiWa_RTX_FrameGeneration` (new).
+
+[Frame generation controls, timing and limits →](docs/rtx_frame_generation.md)
+
 ---
 
 ### 📐 Resolution Scale Calculator

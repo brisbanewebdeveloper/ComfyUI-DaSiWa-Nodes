@@ -1,4 +1,6 @@
-# DaSiWa: RTX Upscaler & Refiner
+# RTX Upscaler & Refiner
+
+The visible name has no DaSiWa prefix; saved/API node ID `DaSiWa_RTX_UpscalerRefiner`, execution interface and existing JavaScript registration target are unchanged. For separate temporal interpolation see [RTX Frame Generation](rtx_frame_generation.md).
 
 NVIDIA VFX enhancement for image and video batches, with optional Denoise, Deblur, Upscale and TrueHDR passes in one node. Processing uses bounded frame windows and returns one standard ComfyUI `IMAGE` batch. The node keeps its own `DaSiWa_RTX_UpscalerRefiner` ID and can coexist with Comfy-Org's NVIDIA VFX nodes; it does not replace or patch them.
 
