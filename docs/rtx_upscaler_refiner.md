@@ -108,7 +108,7 @@ When `use_mmap` is **enabled**, disk remains the last output tier, only used whe
 
 ## CPU Batch Storage
 
-CPU output batches use the currently available RAM reported by `psutil`, not a fixed RAM cap. The node reserves 25% of total RAM with a minimum of 1 GiB and maximum of 8 GiB. The check runs at allocation time, accounting for current workloads. Insufficient RAM aborts safely unless `use_mmap` is explicitly enabled. The RTX node does not globally unload GPU models to make host RAM fit.
+CPU output batches use the currently available RAM reported by `psutil`, not a fixed RAM cap. The RTX-specific reserve is 10% of **available** RAM, bounded to 1–2 GiB, plus two FP32-sized output frames for transient host staging. Existing input/model residency is already reflected in available RAM; installed total RAM does not impose another 8 GiB reservation. The log and error report required, available, reserved and usable GiB. Insufficient RAM still aborts unless `use_mmap` is explicitly enabled. The shared allocator and conservative optional FP16-copy check are unchanged; the RTX node does not globally unload GPU models to make host RAM fit.
 
 ### CUDA working budget and ownership
 

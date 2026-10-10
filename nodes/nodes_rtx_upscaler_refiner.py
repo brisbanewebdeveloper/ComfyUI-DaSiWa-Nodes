@@ -11,12 +11,12 @@ from typing import Any, Optional, Tuple
 import folder_paths
 try:
     from .helper_batch_output import (
-        allocate_cpu_output, can_allocate_in_ram, tensor_nbytes,
+        allocate_cpu_output, can_allocate_in_ram, tensor_nbytes, available_ram_bytes,
     )
     from .helper_logging import log_dasiwa
 except ImportError:
     from helper_batch_output import (
-        allocate_cpu_output, can_allocate_in_ram, tensor_nbytes,
+        allocate_cpu_output, can_allocate_in_ram, tensor_nbytes, available_ram_bytes,
     )
     from helper_logging import log_dasiwa
 
@@ -234,6 +234,20 @@ def _dasiwa_rtx_free_memory(required_bytes, device):
     return True
 
 
+def _dasiwa_rtx_ram_budget(shape, dtype):
+    """Reserve host headroom plus bounded frame staging, not a fraction of total RAM.
+
+    Existing input/model residency is already excluded by MemAvailable. This
+    protects the OS and transient host copies without reserving another 8 GiB
+    simply because the machine has a large installed RAM capacity.
+    """
+    available = available_ram_bytes()
+    system_reserve = max(1024 ** 3, min(2 * 1024 ** 3, available // 10))
+    frame_staging = 2 * max(tensor_nbytes(shape[1:], torch.float32), tensor_nbytes(shape[1:], dtype))
+    reserve = system_reserve + frame_staging
+    return available, reserve, max(0, available - reserve)
+
+
 def _allocate_output_tensor(shape, dtype, device, soft_empty_cache=False, allow_mmap=False,
                             auto_unload_models=True, working_reserve_bytes=0, compute_device=None):
     """Full output allocation: GPU (24 GiB cap + working reserve), RAM, opt-in mmap.
@@ -275,12 +289,19 @@ def _allocate_output_tensor(shape, dtype, device, soft_empty_cache=False, allow_
             if not _can_fit_in_vram(working_reserve_bytes, compute_device):
                 raise RuntimeError("Insufficient CUDA memory for estimated RTX working reserve. "
                                    "Free GPU memory or reduce source/target resolution or enabled passes.")
-    if can_allocate_in_ram(required_bytes):
+    available, reserve, usable = _dasiwa_rtx_ram_budget(shape, dtype)
+    log_dasiwa("RTX Upscaler & Refiner",
+               f"RAM output budget: required={required_bytes / 1024 ** 3:.2f} GiB, "
+               f"available={available / 1024 ** 3:.2f} GiB, "
+               f"reserve={reserve / 1024 ** 3:.2f} GiB, usable={usable / 1024 ** 3:.2f} GiB.")
+    if required_bytes <= usable:
         return torch.empty(shape, dtype=dtype), None
     if not allow_mmap:
         raise RuntimeError(
-            f"RTX output requires {required_bytes / 1024 ** 3:.2f} GiB; insufficient "
-            "available RAM after safety reserve. Reduce frame count/target resolution "
+            f"RTX output requires {required_bytes / 1024 ** 3:.2f} GiB; "
+            f"available RAM={available / 1024 ** 3:.2f} GiB, "
+            f"reserve={reserve / 1024 ** 3:.2f} GiB, usable={usable / 1024 ** 3:.2f} GiB. "
+            "Reduce frame count/target resolution "
             "or explicitly enable use_mmap with sufficient temp disk space.")
     return allocate_cpu_output(shape, dtype, _temporary_output_directory(), force_mmap=True)
 

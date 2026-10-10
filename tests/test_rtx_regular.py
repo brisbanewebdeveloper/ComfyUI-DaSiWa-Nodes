@@ -18,6 +18,8 @@ def test_regular_node_keeps_single_image_batch_with_default_chunking(monkeypatch
     monkeypatch.setattr(rtx, "_import_vfx", lambda: (object(), object()))
     monkeypatch.setattr(rtx, "_maybe_vfx_effect", lambda *args, **kwargs: __import__("contextlib").nullcontext(FakeEffect() if args[1] else None))
     monkeypatch.setattr(rtx, "_cleanup_cuda", lambda **kwargs: None)
+    monkeypatch.setattr(rtx, "_can_fit_in_vram", lambda *args: True)
+    monkeypatch.setattr(rtx, "_dasiwa_rtx_free_memory", lambda *args: pytest.fail("synthetic test must not offload live models"))
     options = rtx.DaSiWa_RTX_UpscalerRefiner.INPUT_TYPES()["optional"]
     assert options["chunking"][1]["default"] is True
     assert options["lossless_fp16"][1]["default"] is True
@@ -34,7 +36,8 @@ def test_regular_node_keeps_single_image_batch_with_default_chunking(monkeypatch
     assert torch.equal(chunked, unchunked)
 
 
-def test_regular_batch_lossless_fp16_only_when_exact():
+def test_regular_batch_lossless_fp16_only_when_exact(monkeypatch):
+    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda *args: True)
     exact = torch.full((5, 8, 8, 3), 0.25, dtype=torch.float32)
     result = rtx._lossless_fp16_image_batch(exact, 2)
     assert result.dtype == torch.float16 and torch.equal(result.float(), exact)
@@ -392,6 +395,7 @@ def test_below_cap_but_over_device_capacity_skips_output_eviction(monkeypatch, w
     original_empty = torch.empty
     monkeypatch.setattr(torch, "empty", lambda shape, **kw: original_empty(shape, **kw) if shape == () else marker)
     shape = (1, 32768, 32768, 3)  # 12 GiB, below fixed 24 GiB cap but impossible on 8 GiB GPU.
+    monkeypatch.setattr(rtx, "_dasiwa_rtx_ram_budget", lambda *args: (64 * 1024 ** 3, 26 * 1024 ** 3, 38 * 1024 ** 3))
     if workspace_fits:
         assert rtx._allocate_output_tensor(shape, torch.float32, device, working_reserve_bytes=1000) == (marker, None)
         assert requests == []
@@ -440,7 +444,7 @@ def test_separate_gpu_output_and_compute_budgets(monkeypatch):
 
 @pytest.mark.parametrize("allow_mmap", [False, True])
 def test_ram_short_controlled_abort_or_explicit_mmap(monkeypatch, allow_mmap):
-    monkeypatch.setattr(rtx, "can_allocate_in_ram", lambda size: False)
+    monkeypatch.setattr(rtx, "available_ram_bytes", lambda: 512 * 1024 ** 2)
     marker = object()
     monkeypatch.setattr(rtx, "allocate_cpu_output", lambda *a, **kw: (marker, "mapped") if kw["force_mmap"] else pytest.fail("not forced"))
     if allow_mmap:
@@ -448,6 +452,33 @@ def test_ram_short_controlled_abort_or_explicit_mmap(monkeypatch, allow_mmap):
     else:
         with pytest.raises(RuntimeError, match="enable use_mmap"):
             rtx._allocate_output_tensor((1, 8, 8, 3), torch.float32, torch.device("cpu"))
+
+
+def test_rtx_ram_budget_accepts_reported_output_without_allocating(monkeypatch):
+    gib = 1024 ** 3
+    monkeypatch.setattr(rtx, "available_ram_bytes", lambda: int(7.3 * gib))
+    shape = (200, 1280, 640, 3)  # 1.83 GiB; never allocate the full batch in this regression test.
+    available, reserve, usable = rtx._dasiwa_rtx_ram_budget(shape, torch.float32)
+    assert available == int(7.3 * gib)
+    assert gib <= reserve < 2 * gib
+    assert int(1.83 * gib) <= usable
+    marker = object()
+    original_empty = torch.empty
+    monkeypatch.setattr(torch, "empty", lambda s, **kw: original_empty(s, **kw) if s == () else marker)
+    assert rtx._allocate_output_tensor(shape, torch.float32, torch.device("cpu")) == (marker, None)
+
+
+@pytest.mark.parametrize("available_gib", [0.5, 7.3, 40])
+def test_ram_budget_preserves_bounded_os_and_frame_headroom(monkeypatch, available_gib):
+    gib = 1024 ** 3
+    available = int(available_gib * gib)
+    monkeypatch.setattr(rtx, "available_ram_bytes", lambda: available)
+    shape = (200, 2160, 3840, 4)
+    reported, reserve, usable = rtx._dasiwa_rtx_ram_budget(shape, torch.float32)
+    staging = 2 * 2160 * 3840 * 4 * 4
+    assert reported == available
+    assert reserve == max(gib, min(2 * gib, available // 10)) + staging
+    assert usable == max(0, available - reserve)
 
 
 def test_no_routine_cleanup_and_explicit_selected_device(monkeypatch):
