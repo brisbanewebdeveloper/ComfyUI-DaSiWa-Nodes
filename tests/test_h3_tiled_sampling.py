@@ -122,6 +122,46 @@ def test_planner_validation_and_budget_response():
         h3.temporal_ranges(20, 5, 1)
 
 
+def test_moderate_headroom_accepts_borderline_full_canvas_without_removing_reserves():
+    kw=dict(model_bytes=128*1024**2,reserved_bytes=16*1024**2,text_tokens=128,
+        ref_tokens=100,audio_tokens=20,keyframe_tokens=1,
+        spatial_tiling=False,temporal_chunking=False)
+    plan=h3.plan_tiles((1,24,5,32,32),1024,1024,960*1024**2,**kw)
+    assert (plan['tile_width'],plan['tile_height'],plan['chunk_tokens']) == (1024,1024,5)
+    assert plan['tile_coordinates'] == 'full_canvas'
+    assert 32*32*6 <= plan['target_rows']
+    assert '25% headroom' in plan['explanation']
+    with pytest.raises(MemoryError):
+        h3.plan_tiles((1,24,5,32,32),1024,1024,800*1024**2,**kw)
+
+
+@pytest.mark.parametrize('spatial,temporal',[(True,True),(False,True),(True,False),(False,False)])
+def test_budget_bypass_uses_real_planner_and_preserves_split_policy(spatial,temporal):
+    kw=dict(model_bytes=38*1024**3,text_tokens=512,ref_tokens=6300,
+        audio_tokens=400,keyframe_tokens=3,streaming_weights=True,
+        spatial_tiling=spatial,temporal_chunking=temporal)
+    with pytest.raises(MemoryError):
+        h3.plan_tiles((1,24,35,90,70),2240,2880,1024**2,**kw)
+    plan=h3.plan_tiles((1,24,35,90,70),2240,2880,1024**2,enforce_budget=False,**kw)
+    assert 'budget enforcement=off' in plan['explanation']
+    if spatial:
+        assert (plan['tile_width'],plan['tile_height'],plan['overlap']) == h3.auto_local_tiles(1120,1440,2240,2880)
+    else:
+        assert (plan['tile_width'],plan['tile_height'],plan['overlap']) == (2240,2880,0)
+    if temporal:
+        assert plan['chunk_tokens'] <= 30
+        assert len(h3.temporal_ranges(35,plan['chunk_tokens'],plan['temporal_overlap_tokens'])) > 1
+    else:
+        assert plan['chunk_tokens'] == 35
+        assert plan['temporal_overlap_tokens'] == 0
+
+
+def test_single_tile_reports_native_full_canvas_coordinates():
+    plan=h3.plan_tiles((1,24,2,16,16),512,512,1024**3)
+    assert plan['tile_coordinates'] == 'full_canvas'
+    assert 'coordinates=full_canvas' in plan['explanation']
+
+
 def test_streamed_bf16_model_larger_than_vram_gets_usable_tiles():
     plan = h3.plan_tiles((1, 24, 35, 90, 70), 2240, 2880, 30 * 1024**3,
                          model_bytes=38444 * 1024**2, text_tokens=512, ref_tokens=6300,
@@ -225,7 +265,7 @@ def test_planner_switches_are_independent_and_never_reenabled(spatial,temporal):
 def test_plan_matches_exhaustive_actual_window_oracle(width,height,total,mib,spatial,temporal):
     import math
     shape=(1,24,total,16,16)
-    budget=mib*1024**2*0.65
+    budget=mib*1024**2*0.75
     chunks=[total] if not temporal else [c for c in range(10,min(total,30)+1,5)]
     if temporal and total<=30 and total not in chunks:
         chunks.append(total)

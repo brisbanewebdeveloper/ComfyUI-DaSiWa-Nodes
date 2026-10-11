@@ -6,7 +6,9 @@ This changelog covers **2026-07-05 → 2026-10-11**. Older history lives in the 
 
 ## News
 
-**Public release 0.5.9 consolidates the changes below.** Intermediate development versions 0.5.10–0.5.12 are not separate public releases. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
+- **H3 memory planning (10-11, 0.5.10):** Enhanced Upscale adds default-on `enforce_memory_budget`, appended after existing widgets/callable parameters. Planning retains model/device/buffer accounting with 25% rather than 35% workspace headroom; disabling enforcement permits attempts beyond the diffusion estimate while retaining split settings and host RAM/spike guard checks. Single full-canvas plans use native sampling. Existing saved values stay in place; automatic geometry and seeded outputs can differ. Adapted from [PR #76](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/76), thanks to @sherics. [Controls and limits →](minimax_h3_tiled_upscale.md)
+
+**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10 entry above is a subsequent Git update. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
 
 - **RTX RAM-pressure cleanup and Free Both (0.5.9):** Both RTX nodes reclaim native execution caches and releasable model pins before rejecting a RAM output allocation, then re-check the safety budget. No running-executor reset or global GPU offload into RAM; cache eviction needs ComfyUI RAM-pressure cache support. The memory toolbar adds **Free Both**, retaining existing Free System RAM behavior. Full input/output batches still require storage.
 
@@ -136,6 +138,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.10 | 10-11 | Git update: H3 optional budget enforcement, 25% workspace headroom, native single-tile sampling and preserved legacy widget/callable positions (#76) |
 | 0.5.9 | 10-11 | Consolidated public release: RTX Frame Generation (HIGH default), SDK-aware RTX 10-bit/TrueHDR enhancement, RAM-pressure cleanup, Free Both, H3 opt-in Spike Guard, complete hover help and updated node screenshots |
 | 0.5.8 | 10-09 | H3 tile-local refinement, automatic tile layout and Continuity planning reserve; video RefMod Qwen sampling and timestamps |
 | 0.5.7 | 10-09 | Automatic saved LLM server settings; combined local/remote choices and complete nested local discovery |
@@ -248,6 +251,10 @@ Quick reference for the version bumps inside this window, newest first:
 - **08-04:** full refresh; helper/JS/test alignment; native generation-length alignment; VAE/CLIP naming corrected to the Comfy-Org repo; wiring diagram added and "Guide replaces native nodes" clarified in docs.
 - **08-03:** initial integration of the timeline-based H3 Director and Guide nodes.
 - **Earlier additions (pre-window):** embedded video audio extraction (a video can supply its own audio reference; V / A / V+A stream switch per video clip), standalone-audio trim support with waveform preview + draggable crop markers, attached soundtracks that share a video's trim window, FL2VA ↔ REF2VA mode-switch safety (incompatible references are preserved, not deleted), and hardened video duration detection with a container-level fallback.
+
+### MiniMaxH3 Enhanced Upscale
+
+- **10-11, 0.5.10:** Adapt #76 with default-on `enforce_memory_budget` appended after existing controls. Retain RAM/guard checks and independent split settings; reduce diffusion workspace headroom from 35% to 25%. Omit the tiled wrapper for a single full-canvas plan. Legacy positional restore and save/reload verified in the frontend; 302 focused tests pass, including native CPU H3 sampling. Large pretrained GPU render quality and OOM margins remain unverified.
 
 ### MiniMax H3 Cache & Patch Comfy Kitchen Attention
 

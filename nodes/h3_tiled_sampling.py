@@ -120,7 +120,8 @@ def plan_tiles(video_shape, target_width, target_height, memory_bytes,
         raise ValueError("Memory and conditioning estimates must be nonnegative")
     pool = max(0, int(memory_bytes) - int(reserved_bytes))
     weight_bytes = min(int(model_bytes), int(pool * 0.4)) if streaming_weights else int(model_bytes)
-    budget = max(0, pool - weight_bytes) * 0.65
+    # Keep a 25% workspace reserve after device reservations and model weights.
+    budget = max(0, pool - weight_bytes) * 0.75
     total = int(video_shape[2])
     period = len(FRAME_PER_TOKEN)
     chunks = list(range(2 * period, min(total, 30) + 1, period)) if temporal_chunking else []
@@ -183,16 +184,18 @@ def plan_tiles(video_shape, target_width, target_height, memory_bytes,
                           "use a smaller diffusion model, or set denoise=0.")
     score, tw, th, overlap, chunk, rows = best
     mode = 'streamed' if streaming_weights else 'resident'
-    return dict(layout_policy=policy, tile_coordinates='local' if spatial_tiling else 'full_canvas',
+    coordinates = 'local' if tw < width or th < height else 'full_canvas'
+    return dict(layout_policy=policy, tile_coordinates=coordinates,
                 tile_width=tw, tile_height=th, overlap=overlap, target_rows=rows,
                 chunk_tokens=chunk, temporal_overlap_tokens=period if chunk < total else 0,
                 forwards_per_step=score[0], processed_video_rows=score[1],
                 keyframe_rows_per_forward=(tw // 32) * (th // 32) * (int(keyframe_tokens) + int(chunk < total)),
                 explanation=(f"Heuristic: target={width}x{height}px, pool={pool / 1024**3:.2f}GiB, {mode} weight reserve="
-                             f"{weight_bytes / 1024**3:.2f}GiB; layout={policy}; coordinates={'local' if spatial_tiling else 'full_canvas'}; "
+                             f"{weight_bytes / 1024**3:.2f}GiB; layout={policy}; coordinates={coordinates}; "
+                             f"budget enforcement={'on' if enforce_budget else 'off'}; "
                              f"{'preferred layout exceeds budget; smaller spatial search; ' if policy == 'memory_fallback' else ''}"
                              f"{rows} target rows after full-window buffers, "
-                             f"text/references/audio and 35% headroom; {tw}x{th}px tiles "
+                             f"text/references/audio and 25% headroom; {tw}x{th}px tiles "
                              f"(minimum {min_w}x{min_h}px), {chunk} temporal tokens; "
                              f"{score[0]} forwards/step, {score[1]} processed video rows. Native period={period}. "
                              "Grid search minimizes calls then repeated rows, not measured runtime. "

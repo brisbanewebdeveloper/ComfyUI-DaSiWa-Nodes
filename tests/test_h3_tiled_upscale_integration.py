@@ -24,6 +24,7 @@ u=importlib.util.module_from_spec(spec)
 sys.modules[spec.name]=u
 spec.loader.exec_module(u)
 helpers=__import__(PACKAGE+'.h3_tiled_sampling',fromlist=['*'])
+REAL_PLAN_TILES=helpers.plan_tiles
 upscale=__import__(PACKAGE+'.h3_latent_upscale',fromlist=['*'])
 
 
@@ -53,9 +54,13 @@ class FakePatcher:
 @pytest.fixture
 def setup_node(monkeypatch):
     monkeypatch.setattr(mm,'get_torch_device',lambda:torch.device('cpu'))
+    monkeypatch.setattr(mm,'get_free_memory',lambda *a,**k:64*1024**3)
+    def forbid_live_offload(*a,**k):
+        raise AssertionError('synthetic tests must not offload real models')
+    monkeypatch.setattr(mm,'unload_model_and_clones',forbid_live_offload)
     monkeypatch.setattr(comfy.model_base,'MiniMaxH3',TestH3Base)
     monkeypatch.setattr(upscale,'upscale_model_names',lambda:[])
-    monkeypatch.setattr(helpers,'plan_tiles',lambda *a,**k:dict(tile_width=64,tile_height=64,overlap=32,
+    monkeypatch.setattr(helpers,'plan_tiles',lambda *a,**k:dict(tile_width=32,tile_height=64,overlap=0,
                          chunk_tokens=10,temporal_overlap_tokens=5,explanation='TEST forced multiwindow plan'))
     from comfy_extras.nodes_custom_sampler import BasicScheduler
     model=FakePatcher()
@@ -70,14 +75,16 @@ def setup_node(monkeypatch):
 
 @pytest.mark.parametrize('spatial,temporal',[(True,True),(False,True),(True,False),(False,False)])
 @pytest.mark.parametrize('denoise',[0,0.2])
-def test_switches_control_learned_upscale_and_diffusion(setup_node,monkeypatch,spatial,temporal,denoise):
+@pytest.mark.parametrize('enforce',[True,False])
+def test_switches_control_learned_upscale_and_diffusion(setup_node,monkeypatch,spatial,temporal,denoise,enforce):
     model=setup_node
     name='test-upscaler.safetensors'
     monkeypatch.setattr(upscale,'upscale_model_names',lambda:[name])
     def plan(shape,*args,**kw):
         assert kw['spatial_tiling'] is spatial
         assert kw['temporal_chunking'] is temporal
-        return dict(tile_width=64,tile_height=64,overlap=32 if spatial else 0,
+        assert kw['enforce_budget'] is (enforce and denoise > 0)
+        return dict(tile_width=32 if spatial else 64,tile_height=64,overlap=0,
                     chunk_tokens=10 if temporal else shape[2],
                     temporal_overlap_tokens=5 if temporal else 0,explanation='TEST switch plan')
     monkeypatch.setattr(helpers,'plan_tiles',plan)
@@ -101,7 +108,7 @@ def test_switches_control_learned_upscale_and_diffusion(setup_node,monkeypatch,s
     audio=torch.randn(1,32,2,120)
     output,report=u.DaSiWaH3TiledUpscale().upscale(model,[],
         {'samples':NestedTensor((video,audio))},upscale_model=name,denoise=denoise,
-        sampler=object(),spatial_tiling=spatial,temporal_chunking=temporal)
+        sampler=object(),spatial_tiling=spatial,temporal_chunking=temporal,enforce_memory_budget=enforce)
     assert closed==[True]
     assert len(lengths)>1 if temporal else lengths==[22]
     assert len(sampled)==(len(lengths) if denoise else 0)
@@ -110,11 +117,64 @@ def test_switches_control_learned_upscale_and_diffusion(setup_node,monkeypatch,s
     assert f"spatial_tiling={'on' if spatial else 'off'}" in report
     assert f"temporal_chunking={'on' if temporal else 'off'}" in report
     schema=u.DaSiWaH3TiledUpscale.INPUT_TYPES()['optional']
-    assert list(schema)[-6:]==['spatial_tiling','temporal_chunking','spike_guard','guard_sensitivity','guard_strength','guard_mode']
+    assert f"enforce_memory_budget={'on' if enforce else 'off'}" in report
+    assert f"spatial_split={'on' if spatial and denoise else 'off'}" in report
+    assert f"temporal_split={'on' if temporal else 'off'}" in report
+    assert list(schema)[-1]=='enforce_memory_budget'
     assert schema['spike_guard'][1]['default'] is False
     assert schema['guard_mode'][0] == ['burn_direction','both']
     assert schema['spatial_tiling'][1]['default'] is True
     assert schema['temporal_chunking'][1]['default'] is True
+    assert schema['enforce_memory_budget'][1]['default'] is True
+
+
+@pytest.mark.parametrize('enforce',[True,False])
+def test_full_canvas_plan_skips_wrapper_even_when_tiling_enabled(setup_node,monkeypatch,enforce):
+    monkeypatch.setattr(helpers,'plan_tiles',lambda *a,**k:dict(tile_width=64,tile_height=64,overlap=0,
+        chunk_tokens=2,temporal_overlap_tokens=0,explanation='TEST full canvas'))
+    def sample(working,positive,negative,cfg,samples,*args):
+        assert 'model_function_wrapper' not in working.model_options
+        return samples
+    monkeypatch.setattr(u,'sample_chunk',sample)
+    output,report=u.DaSiWaH3TiledUpscale().upscale(setup_node,[],
+        {'samples':NestedTensor((torch.zeros(1,24,2,2,2),torch.zeros(1,32,2,8)))},
+        sampler=object(),spatial_tiling=True,temporal_chunking=True,enforce_memory_budget=enforce)
+    assert 'spatial_tiling=on' in report and 'spatial_split=off' in report
+    assert 'temporal_chunking=on' in report and 'temporal_split=off' in report
+
+
+def test_node_budget_toggle_with_real_planner_and_legacy_api_default(setup_node,monkeypatch):
+    monkeypatch.setattr(helpers,'plan_tiles',REAL_PLAN_TILES)
+    sampled=[]
+    def sample(working,positive,negative,cfg,samples,*args):
+        assert 'model_function_wrapper' not in working.model_options
+        sampled.append(samples.tensors[0].shape[2])
+        return samples
+    monkeypatch.setattr(u,'sample_chunk',sample)
+    audio=torch.zeros(1,32,2,200)
+    latent={'samples':NestedTensor((torch.zeros(1,24,35,2,2),audio))}
+    # Old API prompts omit the new input: budget enforcement stays enabled.
+    with pytest.raises(MemoryError,match='H3 refinement budget'):
+        u.DaSiWaH3TiledUpscale().upscale(setup_node,[],latent,memory_budget_mb=1)
+    assert not sampled
+    output,report=u.DaSiWaH3TiledUpscale().upscale(setup_node,[],latent,memory_budget_mb=1,
+        enforce_memory_budget=False,sampler=object())
+    assert output['samples'].tensors[0].shape == (1,24,35,4,4)
+    assert output['samples'].tensors[1] is audio
+    assert len(sampled) > 1 and max(sampled) <= 30
+    assert 'enforce_memory_budget=off' in report
+    assert 'spatial_split=off' in report and 'temporal_split=on' in report
+
+
+@pytest.mark.parametrize('enforce',[True,False])
+def test_budget_toggle_never_bypasses_output_ram_check(setup_node,monkeypatch,enforce):
+    monkeypatch.setattr(mm,'get_free_memory',lambda *a,**k:1)
+    def forbidden(*a,**k):
+        raise AssertionError('RAM rejection must happen before sampling')
+    monkeypatch.setattr(u,'sample_chunk',forbidden)
+    latent={'samples':NestedTensor((torch.zeros(1,24,2,2,2),torch.zeros(1,32,2,8)))}
+    with pytest.raises(MemoryError,match='output/noise staging'):
+        u.DaSiWaH3TiledUpscale().upscale(setup_node,[],latent,enforce_memory_budget=enforce)
 
 
 def test_full_node_multichunk_path_preserves_audio_and_upstream_model(setup_node,monkeypatch):
@@ -194,7 +254,7 @@ def test_refine_schema_and_callable_defaults_without_external_sigmas():
     assert list(schema['optional']) == ['director_guide','vae','start_image','negative','cfg','sampler_name',
         'scheduler','memory_budget_mb','sampler','noise','continuity_context','upscale_precision',
         'continuity_soft_refine','continuity_mask_strength','spatial_tiling','temporal_chunking',
-        'spike_guard','guard_sensitivity','guard_strength','guard_mode']
+        'spike_guard','guard_sensitivity','guard_strength','guard_mode','enforce_memory_budget']
     assert u.DaSiWaH3TiledUpscale.RETURN_TYPES == ('LATENT','STRING')
     assert 'sigmas' not in schema['required']
     assert 'sigmas' not in schema['optional']
@@ -209,6 +269,39 @@ def test_refine_schema_and_callable_defaults_without_external_sigmas():
         config=schema['required'].get(name,schema['optional'].get(name))
         assert config[1]['default']==expected
         assert params[name].default==expected
+
+
+@pytest.mark.parametrize('guard_enabled,mode', [(False,'burn_direction'),(True,'both')])
+def test_legacy_widget_values_keep_their_slots(setup_node,guard_enabled,mode):
+    schema=u.DaSiWaH3TiledUpscale.INPUT_TYPES()
+    legacy_names=['scale','upscale_model','steps','denoise','seed','cfg','sampler_name',
+        'scheduler','memory_budget_mb','upscale_precision','continuity_soft_refine',
+        'continuity_mask_strength','spatial_tiling','temporal_chunking','spike_guard',
+        'guard_sensitivity','guard_strength','guard_mode']
+    # Positional workflow values, including non-default guard and split settings.
+    legacy_values=[2.0,'interpolation',8,0.1,123,1.0,'euler','simple',8192,'bf16',
+        True,0.75,False,False,guard_enabled,5.7,0.4,mode]
+    widget_names=[name for group in ('required','optional') for name,spec in schema[group].items()
+        if isinstance(spec[0],list) or spec[0] in ('INT','FLOAT','BOOLEAN','STRING')]
+    restored=dict(zip(widget_names,legacy_values))
+    assert restored == dict(zip(legacy_names,legacy_values))
+    assert widget_names[-1] == 'enforce_memory_budget'
+    assert schema['optional']['enforce_memory_budget'][1]['default'] is True
+
+
+def test_old_positional_callable_keeps_guard_parameters(setup_node,monkeypatch):
+    import inspect
+    signature=inspect.signature(u.DaSiWaH3TiledUpscale.upscale)
+    values=[object()] * 3
+    bound=signature.bind(None,*values,2.0,'interpolation',8,0.1,123,None,None,None,
+        None,1.0,'euler','simple',8192,None,None,'bf16',None,True,0.75,
+        False,False,True,5.7,0.4,'both')
+    bound.apply_defaults()
+    assert bound.arguments['spike_guard'] is True
+    assert bound.arguments['guard_sensitivity'] == 5.7
+    assert bound.arguments['guard_strength'] == 0.4
+    assert bound.arguments['guard_mode'] == 'both'
+    assert bound.arguments['enforce_memory_budget'] is True
 
 
 def test_model_selector_has_only_explicit_choices(setup_node,monkeypatch):
@@ -410,7 +503,8 @@ def test_guard_wiring_preserves_audio_and_runs_before_refine(setup_node,monkeypa
         assert 'spike guard: off' in report
 
 
-def test_guard_budget_rejects_before_loading_backend(setup_node,monkeypatch):
+@pytest.mark.parametrize('enforce',[True,False])
+def test_guard_budget_rejects_before_loading_backend(setup_node,monkeypatch,enforce):
     guard=types.ModuleType(PACKAGE+'.h3_spike_guard')
     guard.spike_guard_memory_bytes=lambda *a: 32*1024**3
     monkeypatch.setitem(sys.modules,guard.__name__,guard)
@@ -422,7 +516,7 @@ def test_guard_budget_rejects_before_loading_backend(setup_node,monkeypatch):
     with pytest.raises(MemoryError,match='spike guard'):
         u.DaSiWaH3TiledUpscale().upscale(setup_node,[],
             {'samples':NestedTensor((torch.ones(1,24,2,2,2),torch.ones(1,32,2,8)))},
-            upscale_model='test.safetensors',denoise=0,spike_guard=True)
+            upscale_model='test.safetensors',denoise=0,spike_guard=True,enforce_memory_budget=enforce)
 
 
 def test_real_guard_pipeline_aligns_corrected_tail_before_refinement(setup_node,monkeypatch):
