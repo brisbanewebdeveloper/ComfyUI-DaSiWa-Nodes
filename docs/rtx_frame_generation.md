@@ -6,18 +6,20 @@ NVIDIA Video Effects pair interpolation in a separate V1 node. Visible name **RT
 
 `IMAGE batch → RTX Frame Generation → Enhanced Video Combine (or another encoder)`
 
+The input is an ordered batch of decoded frames, **not a native VIDEO object**. Extract images with Get Video Components (or a compatible loader). Route source audio separately to the encoder; the node has no audio/FPS sockets. A native VIDEO input/output mode is a proposal only, not implemented here. Hover each input/control for its meaning and active-mode requirements.
+
 - **frame rate multiplier:** multiplier 2–16. For N source frames, emits `(N-1)*M+1` frames, preserving every original frame and both endpoints exactly. Encode at **source FPS × M** for the original endpoint-to-endpoint playback interval; retaining the last original rather than adding an extra trailing duplicate means container duration can differ by a final frame interval. No FPS or audio is inferred or modified by this IMAGE node.
-- **specific timestep:** inserts one frame between each pair, at 0.01–0.99 of the interval. Emits `2*N-1` frames. Spacing is nonuniform unless timestep is 0.5; IMAGE carries no timestamps, so ordinary constant-FPS encoders cannot represent the original unequal intervals precisely. The node logs a warning for non-midpoint requests. Multiplier is ignored in this mode.
+- **specific timestep:** inserts one frame between each pair, at 0.01–0.99 of the interval. Emits `2*N-1` frames. Spacing is nonuniform unless timestep is 0.5; IMAGE carries no timestamps, so ordinary constant-FPS encoders cannot represent the original unequal intervals precisely. The node logs a warning for non-midpoint requests. Multiplier is ignored in this mode. At timestep 0.5, encode at **source FPS × 2** to preserve the endpoint-to-endpoint interval, with the same final-frame container-duration caveat.
 - One source frame passes through unchanged (RGB only), without loading the SDK or requiring CUDA.
 
 ## Controls
 
-- **mode:** LOW, MEDIUM or HIGH, using the SDK's actual frame-generation modes, not VSR quality levels.
+- **mode:** LOW favors speed, MEDIUM is the middle interpolation tier, HIGH favors quality (default). These select the SDK's actual frame-generation presets, not VSR quality levels. Runtime and visual benefit vary with SDK, hardware and source motion; no fixed throughput or artifact-free quality is promised.
 - **automatic_shot_change_detection:** enabled by default; let the SDK detect cuts.
 - **shot_change:** off by default; explicitly marks **every submitted pair** as a cut. Most useful with a single pair; this is not a list of cut indices.
 - **image_encoding:** default RGB8, or capability-gated packed RGB10A2. 10-bit is SDR precision, not HDR. RGB10A2 output is always float32; RGB8 retains the source floating dtype. Original source frames are copied directly rather than quantized through the SDK.
 - **device_id:** CUDA device index (default 0, matching the existing RTX node). Requires supported NVIDIA hardware/driver at execution.
-- **auto_unload_models:** targeted ComfyUI memory reclamation only when the allocator finds pressure; no unconditional global model unload.
+- **auto_unload_models:** targeted GPU reclamation under pressure. Before RAM output allocation, the shared allocator requests native inactive-cache eviction, releasable model pins and, if necessary, native active-cache eviction, rechecking capacity after each step. Cache eviction requires ComfyUI's RAM-pressure cache callback; older versions/other cache modes retain GC and supported pin cleanup. No running-executor reset or global GPU offload into RAM; referenced input/model storage can remain resident.
 - **use_mmap:** off by default. Opt-in disk-backed last tier if budgeted VRAM and RAM cannot hold the full output; temp disk must have space. Failed/cancelled execution closes the effect and drops/unlinks failed mmap output.
 
 ## RGB, memory and compatibility

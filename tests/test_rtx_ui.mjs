@@ -15,7 +15,7 @@ function data(modern) {
     if (modern) {
         optional.image_encoding = [["8-bit RGB", "10-bit RGB (RGB10A2)"], { default: "8-bit RGB" }];
         for (const name of additions.filter(name => name.startsWith("hdr_") || name.endsWith("_strength"))) {
-            optional[name] = ["INT", { default: 1 }];
+            optional[name] = ["INT", { default: 1, tooltip: `${name} SDK control help` }];
         }
     }
     if (modern === "unavailable") {
@@ -65,5 +65,31 @@ assert.equal(upgraded.widgets.find(w => w.name === "hdr_enabled").disabled, unde
 const unavailableSchema = await create("unavailable");
 assert.equal(unavailableSchema.widgets.find(w => w.name === "hdr_enabled").disabled, true);
 assert.match(unavailableSchema.widgets.find(w => w.name === "hdr_enabled").tooltip, /Unavailable/);
+assert.match(unavailableSchema.widgets.find(w => w.name === "hdr_enabled").tooltip, /hdr_enabled SDK control help/);
 assert.equal(unavailableSchema.widgets.find(w => w.name === "image_encoding").disabled, true);
-console.log("RTX UI contract: stable appended slots, legacy load, SDK downgrade/upgrade named-value roundtrip, unavailable placeholders PASS");
+// Hover help uses native tooltip metadata, prefers it over legacy descriptions,
+// and reaches DOM-backed controls without changing serialized values/callbacks.
+for (const name of ["DaSiWa_RTX_FrameGeneration", "DaSiWa_RTX_UpscalerRefiner"]) {
+    class Node {}
+    const definition = { name, input: { required: {
+        mode: [["LOW", "MEDIUM", "HIGH"], { tooltip: "Native mode help", description: "Legacy mode help" }],
+        legacy: ["BOOLEAN", { description: "Legacy-only help" }],
+    }, optional: { use_mmap: ["BOOLEAN", { tooltip: "Disk fallback help" }] } } };
+    await extension.beforeRegisterNodeDef(Node, definition);
+    const node = new Node();
+    node.widgets = ["mode", "legacy", "use_mmap"].map(name => ({ name, value: 42,
+        callback() {}, element: { setAttribute(key, value) { this[key] = value; } },
+        inputEl: { setAttribute(key, value) { this[key] = value; } } }));
+    const callbacks = node.widgets.map(w => w.callback);
+    node.onNodeCreated();
+    for (const [index, help] of ["Native mode help", "Legacy-only help", "Disk fallback help"].entries()) {
+        const widget = node.widgets[index];
+        assert.equal(widget.tooltip, help);
+        assert.equal(widget.options.tooltip, help);
+        assert.equal(widget.element.title, help);
+        assert.equal(widget.inputEl.title, help);
+        assert.equal(widget.value, 42);
+        assert.equal(widget.callback, callbacks[index]);
+    }
+}
+console.log("RTX UI contract: stable slots, SDK roundtrip, unavailable placeholders, native/legacy/DOM hover help PASS");

@@ -27,6 +27,12 @@ try:
 except Exception:
     pass
 
+_memory_management = None
+try:
+    from comfy import memory_management as _memory_management
+except ImportError:
+    pass
+
 # --- Constants ---
 
 QUALITY_LEVELS = ["Low", "Medium", "High", "Ultra"]
@@ -248,6 +254,34 @@ def _dasiwa_rtx_ram_budget(shape, dtype):
     return available, reserve, max(0, available - reserve)
 
 
+def _dasiwa_rtx_reclaim_ram(shape, dtype, required_bytes):
+    """Use native pressure eviction, never reset the executing prompt or offload all GPUs."""
+    staging = 2 * max(tensor_nbytes(shape[1:], torch.float32), tensor_nbytes(shape[1:], dtype))
+    base = required_bytes + staging
+    # Solve the 10%-of-available reserve at the requested capacity, not at
+    # today's low availability; otherwise successful eviction can still undershoot.
+    target = base + max(1024 ** 3, min(2 * 1024 ** 3, math.ceil(base / 9)))
+    release_cache = getattr(_memory_management, "extra_ram_release", None)
+    free_pins = getattr(_model_management, "free_pins", None)
+    cleanup_models = getattr(_model_management, "cleanup_models", None)
+    gc.collect()
+    available, reserve, usable = _dasiwa_rtx_ram_budget(shape, dtype)
+    for stage in ("inactive", "pins", "active"):
+        if required_bytes <= usable:
+            break
+        if stage == "pins":
+            if free_pins is not None:
+                pin_options = {"loaded": True} if "loaded" in inspect.signature(free_pins).parameters else {}
+                free_pins(max(0, target - available), **pin_options)
+        elif release_cache is not None:
+            release_cache(target, free_active=stage == "active")
+        gc.collect()
+        if cleanup_models is not None:
+            cleanup_models()
+        available, reserve, usable = _dasiwa_rtx_ram_budget(shape, dtype)
+    return available, reserve, usable
+
+
 def _allocate_output_tensor(shape, dtype, device, soft_empty_cache=False, allow_mmap=False,
                             auto_unload_models=True, working_reserve_bytes=0, compute_device=None):
     """Full output allocation: GPU (24 GiB cap + working reserve), RAM, opt-in mmap.
@@ -290,6 +324,8 @@ def _allocate_output_tensor(shape, dtype, device, soft_empty_cache=False, allow_
                 raise RuntimeError("Insufficient CUDA memory for estimated RTX working reserve. "
                                    "Free GPU memory or reduce source/target resolution or enabled passes.")
     available, reserve, usable = _dasiwa_rtx_ram_budget(shape, dtype)
+    if required_bytes > usable and auto_unload_models:
+        available, reserve, usable = _dasiwa_rtx_reclaim_ram(shape, dtype, required_bytes)
     log_dasiwa("RTX Upscaler & Refiner",
                f"RAM output budget: required={required_bytes / 1024 ** 3:.2f} GiB, "
                f"available={available / 1024 ** 3:.2f} GiB, "
@@ -683,41 +719,41 @@ class DaSiWa_RTX_UpscalerRefiner:
         capabilities = _dasiwa_rtx_capabilities()
         schema = {
             "required": {
-                "images": ("IMAGE", {"description": "Input image or video batch to process."}),
+                "images": ("IMAGE", {"description": "IMAGE batch of still images or decoded video frames, not a VIDEO object. No audio, FPS or timestamps are passed through. Frame order/count stay unchanged; RGB output unless preserve_alpha is enabled."}),
                 "denoise": ("BOOLEAN", {"default": False, "description": "Enable NVIDIA RTX Denoise pass to clean up image grain and noise."}),
-                "denoise_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Quality tier for the Denoise pass. Higher tiers use more GPU compute."}),
+                "denoise_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Denoise SDK tier: Low favors speed, Medium is the middle tier, High favors quality, Ultra is the highest tier. Active only when denoise is on; actual cost/results depend on source, GPU and SDK."}),
                 "deblur": ("BOOLEAN", {"default": False, "description": "Enable NVIDIA RTX Deblur pass to reduce motion or focus blur."}),
-                "deblur_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Quality tier for the Deblur pass."}),
-                "upscale": (UPSCALE_MODES + capabilities["streaming"], {"default": "VSR", "description": "Upscale Mode:\n- VSR: Standard AI upscaling.\n- High Bitrate: For clean high-bitrate/lossless sources.\n- Streaming Medium/Ultra: SDK streaming levels; ignore upscale_quality.\n- Off: Skip scaling."}),
-                "upscale_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Quality tier for the Upscale pass."}),
-                "resize_type": (RESIZE_TYPES, {"default": "Scale", "description": "Target Size Logic:\n- Same Size: Keep original dimensions.\n- Scale: Multiply resolution by 'scale'.\n- Keep Ratio: Match 'megapixels' while keeping original shape.\n- Preset Ratio: Match 'megapixels' but force to 'ratio_preset'.\n- Manual: Exact pixels."}),
+                "deblur_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "Deblur SDK tier: Low favors speed, Medium is the middle tier, High favors quality, Ultra is the highest tier. Active only when deblur is on; no guaranteed detail recovery."}),
+                "upscale": (UPSCALE_MODES + capabilities["streaming"], {"default": "VSR", "description": "Upscale mode:\n- Off: Skip upscale and keep source dimensions; resize controls are ignored.\n- VSR: Standard reconstruction for typical compressed sources.\n- High Bitrate: SDK high-bitrate reconstruction for clean/high-bitrate sources.\n- Streaming Medium / Streaming Ultra: SDK streaming quality presets when available; ignore upscale_quality. These do not stream VIDEO input/output or reduce full IMAGE batch storage."}),
+                "upscale_quality": (QUALITY_LEVELS, {"default": "Ultra", "description": "VSR / High Bitrate SDK tier: Low favors speed, Medium is the middle tier, High favors quality, Ultra is the highest tier. Ignored for Off and Streaming Medium / Streaming Ultra (preset defines the tier)."}),
+                "resize_type": (RESIZE_TYPES, {"default": "Scale", "description": "Active only when upscale is not Off. Same Size: exact source dimensions (ignores alignment). Scale: multiply width/height by scale. Keep Ratio: target megapixels and source aspect. Preset Ratio: target megapixels and ratio_preset. Manual: width/height. Other resize modes align by divisible_by; megapixels/aspect can be approximate."}),
                 "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05, "description": "Multiplier for resolution (used by 'Scale' type). 2.0 = 4x the total pixels."}),
                 "megapixels": ("FLOAT", {"default": 2.0, "min": 0.01, "max": 64.0, "step": 0.01, "description": "Target total area in millions of pixels (used by Ratio types)."}),
-                "width": ("INT", {"default": 1920, "min": 64, "max": 8192, "step": 8, "description": "Target width (used by 'Manual')."}),
-                "height": ("INT", {"default": 1080, "min": 64, "max": 8192, "step": 8, "description": "Target height (used by 'Manual')."}),
-                "divisible_by": (DIVISIBLE_BY_VALUES, {"default": "8", "description": "Snaps final resolution to a multiple of this value. Use 8 to match RTX VSR; choose 32 only when a downstream video model requires it."}),
-                "ratio_preset": (COMMON_RATIOS, {"default": "16:9", "description": "Forced aspect ratio (used by 'Preset Ratio')."}),
-                "resize_method": (RESIZE_METHODS, {"default": "Center Crop (Fill)", "description": "Mismatch handling: 'Crop' fills the target area, 'Letterbox' fits inside with black bars."}),
-                "device_id": ("INT", {"default": 0, "min": 0, "max": 8, "step": 1, "description": "GPU Index for RTX VFX computation."}),
+                "width": ("INT", {"default": 1920, "min": 64, "max": 8192, "step": 8, "description": "Target width in pixels, active only for Manual with upscale enabled; divisible_by may adjust it."}),
+                "height": ("INT", {"default": 1080, "min": 64, "max": 8192, "step": 8, "description": "Target height in pixels, active only for Manual with upscale enabled; divisible_by may adjust it."}),
+                "divisible_by": (DIVISIBLE_BY_VALUES, {"default": "8", "description": "For Scale, Keep Ratio, Preset Ratio and Manual with upscale enabled, align dimensions to the selected pixel multiple. 8 matches typical RTX sizes; 16, 32, 64 and 128 select progressively coarser pixel grids and may change requested dimensions. Use larger multiples only if a downstream model requires them. Ignored for Same Size or when upscale is Off."}),
+                "ratio_preset": (COMMON_RATIOS, {"default": "16:9", "description": "Width:height shape, active only for Preset Ratio with upscale enabled: 1:1 square, 4:3 classic, 3:2 photo, 16:9 widescreen, 21:9 ultrawide. Alignment can slightly approximate the ratio."}),
+                "resize_method": (RESIZE_METHODS, {"default": "Center Crop (Fill)", "description": "When upscale is enabled and source/target aspect differs: Center Crop (Fill) removes centered edges to fill the frame; Letterbox (Fit) retains the whole image and adds black padding. No effect for matching aspects or upscale Off."}),
+                "device_id": ("INT", {"default": 0, "min": 0, "max": 8, "step": 1, "description": "CUDA device index for NVIDIA RTX computation (0 is the first GPU). Must identify a supported NVIDIA device; output placement follows the allocator/input device, not necessarily this compute device."}),
             },
             "optional": {
                 "empty_cache": ("BOOLEAN", {"default": False, "description": "Run a lightweight GC + empty_cache before allocation; also calls model_management.soft_empty_cache() on the selected device (does not unload models)."}),
                 "use_mmap": ("BOOLEAN", {"default": False, "description": "OFF (default): never use disk; fail clearly if neither budgeted VRAM nor available RAM can hold the complete output. **WARN:** enable this ONLY for very long video batches that genuinely exceed available RAM; when on, disk is used as the last tier of the VRAM -> RAM -> disk chain and a multi-giB .mmap temp file is written to your temp drive for the whole run."}),
-                "auto_unload_models": ("BOOLEAN", {"default": True, "description": "When eligible GPU output plus working reserve does not fit, request targeted ComfyUI memory reclamation and re-check. Never globally unload models or evict for output above the 24 GiB cap."}),
+                "auto_unload_models": ("BOOLEAN", {"default": True, "description": "Reclaim targeted GPU memory under pressure. Before RAM output allocation, reclaim native execution caches and model pins, then re-check. Never reset the running executor or globally offload GPU models into RAM. Native cache eviction requires ComfyUI RAM-pressure cache support."}),
                 "chunking": ("BOOLEAN", {"default": True, "description": "Process frames in bounded internal chunks; output remains one standard IMAGE batch."}),
                 "lossless_fp16": ("BOOLEAN", {"default": True, "description": "Use FP16 for output storage only when every FP32 pixel round-trips exactly; otherwise keep FP32. May provide no saving for typical VSR output."}),
-                "chunk_frames": ("INT", {"default": 16, "min": 1, "max": 1024, "step": 1, "description": "Maximum frames per internal output-processing chunk."}),
+                "chunk_frames": ("INT", {"default": 16, "min": 1, "max": 1024, "step": 1, "description": "Maximum frames per internal processing chunk when chunking is on; also used by the optional FP16 storage check. Does not limit complete input/output batch allocation."}),
             },
         }
 
         optional = schema["optional"]
         optional["image_encoding"] = (["8-bit RGB", "10-bit RGB (RGB10A2)"] if capabilities["encoding"] else ["8-bit RGB"], {
             "default": "8-bit RGB", "dasiwa_unavailable": not capabilities["encoding"],
-            "description": "Opt-in packed 10-bit SDR SDK processing. Not HDR or smaller IMAGE storage."})
+            "description": "8-bit RGB: default SDK encoding. 10-bit RGB (RGB10A2): packed 10-bit SDR SDK processing when supported, unpacked to FP32. Not HDR, restored source detail, or smaller IMAGE storage."})
         for stage in ("denoise", "deblur", "upscale"):
             optional[f"{stage}_strength"] = ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0,
                 "step": 0.01, "dasiwa_unavailable": not capabilities["strength"],
-                "description": "SDK effect strength; 1.0 retains the SDK default."})
+                "description": f"{stage.capitalize()} SDK strength from 0 to 1; 1.0 retains the SDK default. Active only when the {stage} stage is enabled; changing it does not enable a skipped stage."})
         optional["preserve_alpha"] = ("BOOLEAN", {"default": False, "description": "Keep input alpha separately, applying the same crop/letterbox/resize; no SDK filtering."})
         optional["channel_integrity_check"] = ("BOOLEAN", {"default": False, "description": "Sampled NaN/Inf and channel-collapse diagnosis before clamp. Heuristic: legitimate color changes can trigger it."})
         optional["hdr_enabled"] = ("BOOLEAN", {"default": False, "dasiwa_unavailable": not capabilities["hdr"],
@@ -725,9 +761,18 @@ class DaSiWa_RTX_UpscalerRefiner:
         for name, default, lo, hi in (("contrast", 100, 0, 200), ("saturation", 100, 0, 200),
                 ("middle_gray", 50, 10, 100), ("luminance", 650, 400, 2000)):
             optional[f"hdr_{name}"] = ("INT", {"default": default, "min": lo, "max": hi, "step": 1,
-                "dasiwa_unavailable": not capabilities["hdr"], "description": "TrueHDR SDK tunable (luminance in nits)."})
+                "dasiwa_unavailable": not capabilities["hdr"], "description": {
+                    "contrast": "TrueHDR contrast control (0-200, default 100); affects light/dark separation. Active only with hdr_enabled.",
+                    "saturation": "TrueHDR color saturation control (0-200, default 100); affects color intensity. Active only with hdr_enabled.",
+                    "middle_gray": "TrueHDR middle-gray control (10-100, default 50); sets the midtone brightness reference, not peak luminance. Active only with hdr_enabled.",
+                    "luminance": "TrueHDR target peak luminance in nits (400-2000, default 650); choose for the HDR display/export target. Active only with hdr_enabled.",
+                }[name]})
         optional["hdr_debanding"] = ("BOOLEAN", {"default": True, "dasiwa_unavailable": not capabilities["hdr"],
-            "description": "Enable the TrueHDR DL-Debander (NVIDIA default)."})
+            "description": "On: enable TrueHDR DL-Debander to reduce visible banding; Off: disable it. Active only with hdr_enabled; on is the NVIDIA default."})
+        # Native ComfyUI hover help, also retain descriptions for extension consumers.
+        for inputs in schema.values():
+            for _, options in inputs.values():
+                options["tooltip"] = options["description"]
         return schema
 
     RETURN_TYPES = ("IMAGE",)

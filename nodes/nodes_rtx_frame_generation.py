@@ -98,23 +98,23 @@ class DaSiWa_RTX_FrameGeneration:
         except Exception:
             packed = False
         return {"required": {
-            "images": ("IMAGE",),
-            "generation_type": (["frame rate multiplier", "specific timestep"],),
-            "multiplier": ("INT", {"default": 2, "min": 2, "max": 16}),
-            "timestep": ("FLOAT", {"default": 0.5, "min": 0.01, "max": 0.99, "step": 0.01}),
-            "mode": (["LOW", "MEDIUM", "HIGH"], {"default": "MEDIUM"}),
-            "automatic_shot_change_detection": ("BOOLEAN", {"default": True}),
-            "shot_change": ("BOOLEAN", {"default": False, "tooltip": "Mark every pair as a cut; useful for a single pair."}),
-            "device_id": ("INT", {"default": 0, "min": 0, "max": 8}),
+            "images": ("IMAGE", {"tooltip": "Ordered IMAGE batch: still images or decoded video frames, not a VIDEO object. RGB only; alpha discarded. No FPS, timestamps or audio are passed through."}),
+            "generation_type": (["frame rate multiplier", "specific timestep"], {"tooltip": "frame rate multiplier: evenly insert M-1 frames per pair, output (N-1)*M+1; encode at source FPS*M. specific timestep: insert one frame per pair, output 2*N-1; only 0.5 is uniformly spaced (encode at source FPS*2). Both preserve endpoints; container duration can differ by a final frame interval."}),
+            "multiplier": ("INT", {"default": 2, "min": 2, "max": 16, "tooltip": "Active only for frame rate multiplier: M subdivisions per source interval, M-1 generated frames per pair. Output (N-1)*M+1; set encoder FPS to source FPS*M. Ignored for specific timestep."}),
+            "timestep": ("FLOAT", {"default": 0.5, "min": 0.01, "max": 0.99, "step": 0.01, "tooltip": "Active only for specific timestep: fractional position between previous (0) and next (1) source frame. 0.5 is the midpoint; other values produce unequal temporal spacing that a constant-FPS IMAGE encoder cannot reproduce exactly. Ignored for multiplier mode."}),
+            "mode": (["LOW", "MEDIUM", "HIGH"], {"default": "HIGH", "tooltip": "SDK interpolation quality preset: LOW favors speed, MEDIUM is the middle tier, HIGH favors quality. These are frame-generation modes, not VSR levels; cost and visual quality depend on SDK, GPU and content, with no fixed speed or quality guarantee."}),
+            "automatic_shot_change_detection": ("BOOLEAN", {"default": True, "tooltip": "On: ask the SDK to detect cuts automatically between source frames. Off: disable automatic detection; the separate shot_change flag still applies. Cut handling is SDK-defined, not a per-frame cut list."}),
+            "shot_change": ("BOOLEAN", {"default": False, "tooltip": "On: explicitly mark every submitted source pair as a cut (useful for a single pair). Off: do not force cuts; automatic detection can still apply. This is not a list of cut indices."}),
+            "device_id": ("INT", {"default": 0, "min": 0, "max": 8, "tooltip": "CUDA device index for NVIDIA interpolation (0 is the first GPU). Must identify an available supported NVIDIA device; does not choose encoder or audio device."}),
         }, "optional": {
             "image_encoding": (["8-bit RGB", "10-bit RGB (RGB10A2)"] if packed else ["8-bit RGB"],
-                               {"default": "8-bit RGB", "tooltip": "10-bit SDR, not HDR. Output storage is float32."}),
-            "auto_unload_models": ("BOOLEAN", {"default": True, "tooltip": "Targeted memory reclamation only under pressure."}),
-            "use_mmap": ("BOOLEAN", {"default": False, "tooltip": "Opt-in disk output if budgeted VRAM/RAM cannot fit the complete IMAGE batch."}),
+                               {"default": "8-bit RGB", "tooltip": "8-bit RGB: default SDK encoding, retains source floating output dtype. 10-bit RGB (RGB10A2): packed 10-bit SDR SDK processing, float32 output; not HDR or smaller IMAGE storage. Original frames are copied directly."}),
+            "auto_unload_models": ("BOOLEAN", {"default": True, "tooltip": "On: reclaim targeted GPU memory and, under RAM output pressure, native execution caches and model pins; re-check before allocation. Off: no reclamation. Never resets the running executor or globally offloads GPU models into RAM. Native cache eviction requires ComfyUI RAM-pressure cache support; full batches still need storage."}),
+            "use_mmap": ("BOOLEAN", {"default": False, "tooltip": "Off: never allocate disk output. On: allow a temporary mmap as the last output tier if budgeted VRAM/RAM cannot fit the complete IMAGE batch. Requires disk space for the full output; not streaming input/output."}),
         }}
 
     def dasiwa_rtx_generate_frames(self, images, generation_type="frame rate multiplier", multiplier=2,
-                                  timestep=0.5, mode="MEDIUM", automatic_shot_change_detection=True,
+                                  timestep=0.5, mode="HIGH", automatic_shot_change_detection=True,
                                   shot_change=False, device_id=0, image_encoding="8-bit RGB",
                                   auto_unload_models=True, use_mmap=False):
         if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[-1] < 3:

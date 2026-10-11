@@ -29,22 +29,41 @@ The node uses the installed `nvidia-vfx` package (`nvvfx`) and detects available
 - Unsupported features requested by an API prompt must fail clearly instead of silently substituting 8-bit or SDR processing. Existing DaSiWa registration and old input/output positions remain unchanged; the official Comfy-Org pack can remain installed.
 - This node does not change frame count or FPS and does not replace RIFE interpolation.
 
+## Upscale modes and input contract
+
+Input is an ordered `IMAGE` batch of still images or decoded video frames, not a native `VIDEO` object. Frame count/order are unchanged. Audio and FPS must be routed separately from the loader to the encoder. A native VIDEO mode is only a proposal, not an implemented interface. Every required and optional control has native hover help.
+
+| `upscale` | Meaning |
+| --- | --- |
+| Off | Skip the upscale pass and retain source dimensions. All target-size and resize controls are ignored; other enabled effects still run. |
+| VSR | Standard SDK reconstruction for typical compressed sources, using `upscale_quality`. |
+| High Bitrate | SDK high-bitrate reconstruction for cleaner, high-bitrate/lossless sources, using `upscale_quality`. This does not set export bitrate. |
+| Streaming Medium | Capability-gated SDK streaming quality preset; ignores `upscale_quality`. |
+| Streaming Ultra | Capability-gated higher streaming quality preset; ignores `upscale_quality`. |
+
+**Streaming here names SDK presets, not streaming file I/O.** Both still consume/return complete IMAGE batches. They do not bound total video memory or pass through audio. Compare results on the actual source rather than assuming one mode always looks better.
+
 ## 📐 Resize Types Explained
 
 Choosing the right `resize_type` is key to getting the correct output resolution:
 
 *   **Same Size:** The node processes the input at its original resolution. Use this if you only want to Denoise or Deblur without changing the size.
 *   **Scale:** Simply multiplies the current width and height by the `scale` value. For example, a 1080p image at 2.0x scale becomes 4K.
-*   **Keep Ratio:** Calculates a new resolution that hits your `megapixels` budget while preserving the exact aspect ratio of the input image. Great for maintaining the "look" while increasing quality.
+*   **Keep Ratio:** Targets the `megapixels` budget and source aspect ratio; divisibility can approximate the area and ratio. It can downscale when the budget is below source area.
 *   **Preset Ratio:** Targets the `megapixels` budget but forces the image into a specific shape (like `16:9` or `9:16`) regardless of the input. Use `resize_method` to decide if the image should be cropped or letterboxed to fit.
-*   **Manual:** Allows you to set the exact `width` and `height` in pixels.
+*   **Manual:** Uses `width` and `height` in pixels, rounded to `divisible_by`.
+
+These controls apply only when `upscale` is not Off. `scale` is used only by Scale; `megapixels` only by Keep Ratio/Preset Ratio; `ratio_preset` only by Preset Ratio; width/height only by Manual. Same Size retains exact source dimensions and ignores `divisible_by`; the other modes use the selected alignment. `resize_method` handles aspect mismatches: Center Crop (Fill) removes centered edges, while Letterbox (Fit) retains the full source and adds black bars. It does nothing for matching aspects.
 
 ## 💎 Quality Levels (Low to Ultra)
 
-RTX Quality settings control the complexity of the AI models used:
-*   **Low / Medium:** Balanced for speed. Best for real-time previews or mid-range RTX cards.
-*   **High:** Standard high-quality reconstruction.
-*   **Ultra (Default):** Maximum parameter count models. Provides the cleanest edges and highest detail.
+Quality selects the corresponding installed SDK tier for each stage:
+* **Low:** Speed-oriented tier.
+* **Medium:** Middle tier.
+* **High:** Quality-oriented tier.
+* **Ultra (Default):** Highest exposed tier.
+
+Denoise/Deblur quality and strength matter only when their stage is enabled. Upscale quality applies to VSR and High Bitrate, not Off or Streaming presets. Strength changes do not enable skipped stages. Higher tiers may cost more compute but do not guarantee recovered detail, better output on every source, or a particular model parameter count.
 
 ## ⚠️ When Results Can Look Worse
 
@@ -68,15 +87,16 @@ Check these settings first when users report degraded quality:
 | **preserve_alpha** | Off by default to retain the legacy RGB output. On preserves input alpha through the same crop/letterbox and spatial resize, without SDK filtering. |
 | **channel_integrity_check** | Off by default. Checks small samples before clamp for NaN/Inf and suspicious SDR channel collapse. It is a heuristic and may flag legitimate color changes; HDR only receives the finite-value check. |
 | **hdr_enabled** | Off by default; available with TrueHDR. Final PQ/BT.2020 conversion, also usable by itself. |
-| **hdr_contrast / hdr_saturation** | 0–200, default 100. |
-| **hdr_middle_gray** | 10–100, default 50. |
-| **hdr_luminance** | Target peak luminance 400–2000 nits, default 650. |
-| **hdr_debanding** | On by default; enables the SDK debander. |
+| **hdr_contrast** | Light/dark separation control, 0–200, default 100; active only with HDR enabled. |
+| **hdr_saturation** | Color intensity control, 0–200, default 100; active only with HDR enabled. |
+| **hdr_middle_gray** | Midtone brightness reference, 10–100, default 50; not the peak luminance setting. Active only with HDR enabled. |
+| **hdr_luminance** | Target peak luminance 400–2000 nits, default 650; active only with HDR enabled. |
+| **hdr_debanding** | On by default; enables the SDK DL-Debander to reduce banding. Off disables it; active only with HDR enabled. |
 | **divisible_by** | Use **8** for RTX-style image/video upscaling. Use **32** only when the next model in the workflow requires it. |
 | **resize_method** | When the source and target aspect ratios don't match: `Center Crop` fills the whole target frame by cutting edges; `Letterbox` fits the whole image inside and adds black bars. |
 | **device_id** | If you have multiple GPUs, set this to the index of your RTX card (usually `0`). |
 | **use_mmap** | **Off** (default): no disk allocation; abort with an actionable error if budgeted VRAM and available RAM cannot hold the complete output. **On**: permit disk-backed output only when RAM is insufficient; the temp file can occupy the full output size while retained downstream. |
-| **auto_unload_models** | **On** (default): request targeted `comfy.model_management.free_memory(memory_required, device)` and re-check when eligible GPU output or the compute working reserve does not fit. Never globally unload all models, or evict models for output exceeding the 24 GiB GPU cap. **Off**: no model reclamation. |
+| **auto_unload_models** | **On** (default): request targeted GPU reclamation for eligible output/compute pressure. Before RAM output allocation, request native cache and model-pin reclamation and re-check available RAM. No executor reset or global GPU offload into RAM. The 24 GiB GPU cap still prevents impossible GPU-output eviction; host-pressure reclamation remains independent. **Off**: no reclamation. |
 | **chunking / chunk_frames** | **On** (default), 16 frames: internally bound the processing loop while retaining the regular node's **one IMAGE batch** output for standard ComfyUI nodes. This does **not** bound the total input/output allocation. |
 | **lossless_fp16** | **On** (default): store the complete output as FP16 only if *all* FP32 pixels round-trip exactly; otherwise keep FP32. It checks exact equality in byte-bounded spatial slices, and checks capacity before both temporary checks and the full conversion. NVIDIA VFX still receives FP32; typical VSR output usually remains FP32. |
 
@@ -110,7 +130,7 @@ When `use_mmap` is **enabled**, disk remains the last output tier, only used whe
 
 ## CPU Batch Storage
 
-CPU output batches use the currently available RAM reported by `psutil`, not a fixed RAM cap. The RTX-specific reserve is 10% of **available** RAM, bounded to 1–2 GiB, plus two FP32-sized output frames for transient host staging. Existing input/model residency is already reflected in available RAM; installed total RAM does not impose another 8 GiB reservation. The log and error report required, available, reserved and usable GiB. Insufficient RAM still aborts unless `use_mmap` is explicitly enabled. The shared allocator and conservative optional FP16-copy check are unchanged; the RTX node does not globally unload GPU models to make host RAM fit.
+CPU output batches use the currently available RAM reported by `psutil`, not a fixed RAM cap. The RTX-specific reserve is 10% of **available** RAM, bounded to 1–2 GiB, plus two FP32-sized output frames for transient host staging. Existing input/model residency is already reflected in available RAM; installed total RAM does not impose another 8 GiB reservation. The log and error report required, available, reserved and usable GiB. Insufficient RAM still aborts unless `use_mmap` is explicitly enabled. With `auto_unload_models` enabled, both RTX nodes first collect unreachable objects, then request native inactive-cache eviction, releasable model pins (including loaded-model pins), and finally native active-cache eviction if still necessary. Capacity is rechecked after each step, including the safety reserve. No global GPU offload or running-executor reset is used. Cache eviction is available only when the installed ComfyUI exposes `extra_ram_release` with an active RAM-pressure cache callback; other cache modes/older versions retain GC and supported pin cleanup. Referenced inputs/models may remain resident, so cleanup cannot guarantee that the output fits.
 
 ### CUDA working budget and ownership
 

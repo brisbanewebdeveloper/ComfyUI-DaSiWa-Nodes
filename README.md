@@ -116,7 +116,13 @@ NVIDIA RTX Video SDK enhancement with Denoise, Deblur and VSR/High Bitrate upsca
 
 ### 🎞️ RTX Frame Generation
 
-Separate NVIDIA pair interpolation node: multiplier 2–16 or a specific timestep, LOW/MEDIUM/HIGH quality, automatic/manual cut detection and optional RGB10A2 10-bit SDR processing. Keeps every source frame and both endpoints: `(N-1)*M+1` frames; encode multiplier output at source FPS × M. Specific non-midpoint timesteps have nonuniform spacing. RGB only (alpha discarded), one complete IMAGE output batch, bounded pair staging, budgeted VRAM/RAM and opt-in mmap. Requires an installed SDK with `VideoFrameGeneration`; existing upscaler SDK compatibility is unchanged.
+![RTX Frame Generation](assets/RTX_FrameGeneration.png)
+
+- **Interpolation:** Multiplier 2–16 or one frame at a chosen timestep; preserves every original frame and both endpoints. Multiplier output: `(N-1)*M+1` frames, encode at **source FPS × M**.
+- **Quality and cuts:** **HIGH by default**, with MEDIUM/LOW alternatives; automatic scene-cut detection and an explicit cut override.
+- **Precision:** RGB8 by default; optional SDK-supported RGB10A2 10-bit SDR. Not HDR; alpha is discarded.
+- **Memory:** Bounded pair staging, budgeted VRAM/RAM, native memory reclamation under pressure and opt-in disk-backed output. Complete frame batches still need storage.
+- **Workflow:** IMAGE batches only; decode videos upstream and route audio separately. Non-midpoint timesteps have unequal temporal spacing. Requires SDK `VideoFrameGeneration`; does not replace RIFE or official NVIDIA nodes.
 
 Visible RTX names have no DaSiWa prefix. Saved/API identifiers remain unique: `DaSiWa_RTX_UpscalerRefiner` (unchanged) and `DaSiWa_RTX_FrameGeneration` (new).
 
@@ -285,7 +291,7 @@ A compact telemetry bar that defaults to its own row below ComfyUI's top control
 - **Viewport-Aware Menu:** The settings menu opens toward available screen space; separate background and drawing/text/lines opacity sliders are also available in ComfyUI Settings.
 - **Cross-Platform:** Works on Linux and Windows with automatic fallback detection for GPU tools.
 - **Container-safe:** In containers and sandboxes where parts of `/proc` are missing (e.g. `/proc/vmstat`), probes degrade to `n/a` instead of warning every second. Set `DASWA_SYSTEM_MONITOR=0` (also `false`/`no`/`off`/`disable`) to fully stop the backend polling thread.
-- **Free Memory Button:** Separate DaSiWa-logo button stays beside the top controls regardless of monitor placement. Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Hide it independently under **Settings → Other → DaSiWa → Free Memory**.
+- **Free Memory Button:** Separate DaSiWa-logo button stays beside the top controls regardless of monitor placement. Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Free Both explicitly requests both actions (same cleanup as Free System RAM, retained for compatibility). Hide it independently under **Settings → Other → DaSiWa → Free Memory**.
 
 **Lite mode**
 

@@ -2,13 +2,17 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-10**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-11**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
 
-- **RTX Frame Generation (0.5.10):** Adds separate pair-based interpolation with multiplier 2–16 or specific timestep, LOW/MEDIUM/HIGH quality, cut controls and optional RGB10A2. Preserves originals/endpoints; bounded staging, targeted pressure reclamation, opt-in mmap and cancellation cleanup. Visible RTX names drop the DaSiWa prefix while old upscaler registration/interface/JavaScript IDs stay unchanged. No minimum SDK dependency bump. Small real RGB8/RGB10A2 tests cover CPU/CUDA input and default/custom caller streams; native custom-stream -12 is avoided through synchronized default-stream calls. [Timing and limits →](rtx_frame_generation.md)
+**Public release 0.5.9 consolidates the changes below.** Intermediate development versions 0.5.10–0.5.12 are not separate public releases. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
 
-- **H3 opt-in Spike Guard (0.5.11):** Enhanced Upscale adds experimental Talon V4 burn-signature correction after learned upscale, default off. Signed or both-direction detection, sensitivity and strength are optional; frame-wise FP32 work avoids a full-output FP32 copy. Guard memory is budgeted, loops are cancellable, and diagnostics report the actual changed pixel bounds/latent frames. Current tile planner, Continuity accounting and original audio are retained. Pretrained visual quality still needs same-latent comparison renders. [Options and limits →](minimax_h3_tiled_upscale.md)
+- **RTX RAM-pressure cleanup and Free Both (0.5.9):** Both RTX nodes reclaim native execution caches and releasable model pins before rejecting a RAM output allocation, then re-check the safety budget. No running-executor reset or global GPU offload into RAM; cache eviction needs ComfyUI RAM-pressure cache support. The memory toolbar adds **Free Both**, retaining existing Free System RAM behavior. Full input/output batches still require storage.
+
+- **RTX Frame Generation (0.5.9):** Adds separate pair-based interpolation with multiplier 2–16 or specific timestep, LOW/MEDIUM/HIGH quality (HIGH default), cut controls and optional RGB10A2. Preserves originals/endpoints; bounded staging, targeted pressure reclamation, opt-in mmap and cancellation cleanup. Visible RTX names drop the DaSiWa prefix while old upscaler registration/interface/JavaScript IDs stay unchanged. No minimum SDK dependency bump. Small real RGB8/RGB10A2 tests cover CPU/CUDA input and default/custom caller streams; native custom-stream -12 is avoided through synchronized default-stream calls. [Timing and limits →](rtx_frame_generation.md)
+
+- **H3 opt-in Spike Guard (0.5.9):** Enhanced Upscale adds experimental Talon V4 burn-signature correction after learned upscale, default off. Signed or both-direction detection, sensitivity and strength are optional; frame-wise FP32 work avoids a full-output FP32 copy. Guard memory is budgeted, loops are cancellable, and diagnostics report the actual changed pixel bounds/latent frames. Current tile planner, Continuity accounting and original audio are retained. Pretrained visual quality still needs same-latent comparison renders. [Options and limits →](minimax_h3_tiled_upscale.md)
 
 - **RTX SDK-aware enhancement (10-10, 0.5.9):** RTX Upscaler & Refiner adds optional RGB10A2 10-bit processing, per-pass strengths, available Streaming modes and a final TrueHDR pass. SDK capabilities determine availability; old DaSiWa workflow interfaces and official NVIDIA VFX node coexistence are retained. HDR outputs normalized BT.2020/PQ values, not an automatically tagged HDR video. High Bitrate guidance is corrected for clean/lossless sources. [Options and limits →](rtx_upscaler_refiner.md)
 
@@ -132,8 +136,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
-| 0.5.10 | 10-10 | RTX Frame Generation; clean visible RTX names with unique backward-compatible registration IDs |
-| 0.5.9 | 10-10 | SDK-aware RTX enhancement: optional 10-bit processing, strengths, Streaming and TrueHDR; preserved workflow interfaces |
+| 0.5.9 | 10-11 | Consolidated public release: RTX Frame Generation (HIGH default), SDK-aware RTX 10-bit/TrueHDR enhancement, RAM-pressure cleanup, Free Both, H3 opt-in Spike Guard, complete hover help and updated node screenshots |
 | 0.5.8 | 10-09 | H3 tile-local refinement, automatic tile layout and Continuity planning reserve; video RefMod Qwen sampling and timestamps |
 | 0.5.7 | 10-09 | Automatic saved LLM server settings; combined local/remote choices and complete nested local discovery |
 | 0.5.3 | 10-07 | Joint target-grid tile/chunk selection, edge-overlap cost and per-tile keyframe budget |

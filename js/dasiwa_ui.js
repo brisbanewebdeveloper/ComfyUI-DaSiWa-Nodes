@@ -37,8 +37,10 @@ app.registerExtension({
             for (const [name, config] of Object.entries(fallback)) {
                 if (!(name in optional) || optional[name][1]?.dasiwa_unavailable) unavailable.add(name);
                 const configForSdk = optional[name] || config;
+                const unavailableHelp = "Unavailable in this installed RTX SDK. Saved value is retained; requesting this feature fails explicitly. Restart ComfyUI after an SDK change.";
+                const help = [configForSdk[1]?.tooltip || configForSdk[1]?.description, unavailableHelp].filter(Boolean).join("\n\n");
                 stable[name] = unavailable.has(name) ? [configForSdk[0], { ...configForSdk[1],
-                    description: "Unavailable in this installed RTX SDK. Saved value is retained; requesting this feature fails explicitly. Restart ComfyUI after an SDK change." }] : configForSdk;
+                    description: help, tooltip: help }] : configForSdk;
             }
             nodeData.input.optional = stable;
 
@@ -67,7 +69,7 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
 
-            // Auto-populate hover tooltips from Python descriptions
+            // Preserve native tooltip metadata, with legacy description fallback.
             if (nodeData.input) {
                 const allInputs = {
                     ...(nodeData.input.required || {}),
@@ -76,9 +78,15 @@ app.registerExtension({
 
                 for (const [name, config] of Object.entries(allInputs)) {
                     const widget = this.widgets?.find(w => w.name === name);
-                    if (widget && config[1]?.description) {
-                        // 'tooltip' is picked up by various ComfyUI UI enhancement extensions
-                        widget.tooltip = config[1].description;
+                    const help = config[1]?.tooltip || config[1]?.description;
+                    if (widget && help) {
+                        widget.tooltip = help;
+                        widget.options ||= {};
+                        widget.options.tooltip = help;
+                        // Native DOM-backed widgets, when exposed by the frontend.
+                        for (const element of [widget.element, widget.inputEl]) {
+                            if (element?.setAttribute) element.setAttribute("title", help);
+                        }
                     }
                     if (widget && unavailable.has(name)) {
                         widget.disabled = true;
