@@ -364,7 +364,7 @@ Bridge any string/text node through **DaSiWa Random String Picker** to randomize
 The **DaSiWa LLM / VLM nodes** let you run local transformers chat or vision-language models from inside a ComfyUI workflow. They accept native `STRING` inputs and native `IMAGE` batches from nodes such as Load Image or VHS frame loaders.
 
 - **Native ComfyUI Inputs:** Analyze connected text, still images, or video/image-sequence frame batches.
-- **Prompt Writer:** Simple node for Anima, Illustrious, Krea2, Wan 2.2 and LTX 2.3, with an unchanged user prefix, style, detail, creativity and optional reference pictures.
+- **Prompt Writer:** Simple node for Anima, Illustrious, Krea2, Wan 2.2, LTX 2.3 and YuE2 (separate Song Style, Lyrics and Instrumental Style presets), with an unchanged user prefix, style, detail, creativity and optional reference pictures.
 - **Prompt Presets:** Editable model-specific guides plus shared H3 rewriting, custom instructions and existing caption/video presets; output without segment scaffolding.
 - **Memory Modes:** Keep models cached for speed, or use full cleanup to unload DaSiWa and ComfyUI managed models before/after analysis so later image/video models recover VRAM/RAM.
 - **Frame Sampling:** Limit video analysis with max frames, stride, frame strategy, resize controls, context limits, and optional KV-cache reduction.

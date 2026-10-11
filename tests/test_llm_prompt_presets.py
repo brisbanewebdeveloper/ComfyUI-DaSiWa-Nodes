@@ -131,6 +131,7 @@ def test_preset_labels_append_new_ids_after_exact_legacy_contract():
     assert prompts._SYSTEM_PROMPT_PRESET_LABELS == list(legacy) + [
         "promptforge_wan22", "promptforge_ltx", "promptforge_krea2",
         "promptforge_anima", "promptforge_illustrious", "promptforge_h3",
+        "promptforge_yue2_style", "promptforge_yue2_lyrics", "promptforge_yue2_instrumental",
     ]
 
 

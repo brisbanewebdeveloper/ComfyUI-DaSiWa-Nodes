@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-11**. Older history lives in the 
 
 ## News
 
+- **YuE2 Prompt Writer presets (0.5.11):** Adds separate Song Style, Lyrics and Instrumental Style targets, also available in Advanced Analyze. Editable guides keep musical instructions and sung words separate; detail/creativity are music-aware, visual styles are ignored, and lyric prefixes use line breaks. Existing widgets, defaults and single-STRING output stay unchanged. ABC planning, duration and instrumental score conversion remain downstream. [Usage →](llm_nodes.md#yue2-presets)
+
 - **H3 memory planning (10-11, 0.5.10):** Enhanced Upscale adds default-on `enforce_memory_budget`, appended after existing widgets/callable parameters. Planning retains model/device/buffer accounting with 25% rather than 35% workspace headroom; disabling enforcement permits attempts beyond the diffusion estimate while retaining split settings and host RAM/spike guard checks. Single full-canvas plans use native sampling. Existing saved values stay in place; automatic geometry and seeded outputs can differ. Adapted from [PR #76](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/76), thanks to @sherics. [Controls and limits →](minimax_h3_tiled_upscale.md)
 
 **Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10 entry above is a subsequent Git update. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.

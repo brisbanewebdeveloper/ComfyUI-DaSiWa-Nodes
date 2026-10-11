@@ -20,6 +20,9 @@ WRITE_FOR = {
     "Krea2": "promptforge_krea2",
     "Wan 2.2": "promptforge_wan22",
     "LTX 2.3": "promptforge_ltx",
+    "YuE2 Song Style": "promptforge_yue2_style",
+    "YuE2 Lyrics": "promptforge_yue2_lyrics",
+    "YuE2 Instrumental Style": "promptforge_yue2_instrumental",
 }
 
 # Room for a long prompt plus a thinking model's reasoning; the advanced
@@ -78,7 +81,7 @@ def load_styles():
 
 def style_line(style, spec):
     """PromptForge's style instruction, worded for the model's dialect."""
-    if not style or style == NO_STYLE:
+    if spec["model"].startswith("yue2_") or not style or style == NO_STYLE:
         return ""
     entry = load_styles().get(style)
     if not entry:
@@ -118,6 +121,8 @@ def assemble(prompt, spec, start_with):
     pinned = str(start_with or "")
     if not pinned:
         return prompt
+    if spec.get("output") == "Lyrics":
+        return pinned + ("" if pinned.endswith(("\n", "\r")) else "\n") + prompt
     if spec.get("tag_style"):
         # Only normalize for comparison; the user's prefix is never rewritten.
         same = lambda t: t.strip().lower().replace("_", " ")
@@ -172,7 +177,7 @@ def simple_config(model, keep_loaded):
 
 class DaSiWa_LLMPromptWriter:
     DESCRIPTION = (
-        "LLM Prompt Writer: type an idea, pick the image or video model it is for, and get "
+        "LLM Prompt Writer: type an idea, pick the image, video or music model it is for, and get "
         "a prompt written in that model's style. For every setting, use the Advanced LLM nodes."
     )
 
@@ -181,10 +186,10 @@ class DaSiWa_LLMPromptWriter:
         return {
             "required": {
                 "model": (model_choices(), {"description": "Models in ComfyUI/models/llm plus cached Ollama and OpenAI-compatible server models. Uses saved DaSiWa LLM server settings automatically in single-user mode; service environment values take priority. Discovery runs in the background; press R afterwards. A vision model can read connected images."}),
-                "write_for": (list(WRITE_FOR), {"default": "Anima", "description": "The image or video model the prompt is for."}),
+                "write_for": (list(WRITE_FOR), {"default": "Anima", "description": "The image, video or music target. YuE2 Song Style and Instrumental Style return Style text; YuE2 Lyrics returns section-tagged sung words. Connect separate writers to separate YuE2 fields."}),
                 "start_with": ("STRING", {"default": "", "multiline": True, "placeholder": "Quality tags and LoRA trigger words go here. Always first, exactly as typed.", "description": "Quality tags, LoRA trigger words or anything else that must lead the prompt. Put at the very top exactly as typed; the model never sees or changes it."}),
-                "idea": ("STRING", {"default": "", "multiline": True, "placeholder": "Write your idea here", "description": "What you want in the picture, in your own words or as tags."}),
-                "style": ([NO_STYLE, *load_styles()], {"default": NO_STYLE, "description": "A look to carry through the prompt. Tag models get matching tags, prose models a description of the look. None adds nothing."}),
+                "idea": ("STRING", {"default": "", "multiline": True, "placeholder": "Write your idea here", "description": "Your visual or musical idea. For YuE2 include genre, voice, language, tempo and instruments for Style, or theme, language and supplied lines for Lyrics."}),
+                "style": ([NO_STYLE, *load_styles()], {"default": NO_STYLE, "description": "A visual look to carry through image/video prompts. Tag models get tags, prose models a description. Ignored for YuE2; describe the musical style in idea instead. None adds nothing."}),
                 "detail": ("INT", {"default": STANDARD, "min": 1, "max": 10, "step": 1, "display": "slider", "description": "How much gets written. 5 is standard; lower is shorter, higher covers more."}),
                 "creativity": ("INT", {"default": STANDARD, "min": 1, "max": 10, "step": 1, "display": "slider", "description": "How far past your idea the writer may go. 1 adds nothing, 5 is balanced, 10 builds well past it."}),
                 "max_tokens": ("INT", {"default": DEFAULT_MAX_TOKENS, "min": 128, "max": 8192, "step": 64, "description": "The most the model may write. Lower it to stop a model that runs on; set it too low and the prompt stops mid-sentence."}),
@@ -215,8 +220,19 @@ class DaSiWa_LLMPromptWriter:
         config = simple_config(model, keep_loaded)
         preset = WRITE_FOR[write_for]
         spec = preset_spec(preset)
+        if spec["model"].startswith("yue2_"):
+            lines = [idea or "Write the musical idea inspired by the attached pictures."]
+            if int(creativity) != STANDARD:
+                lines.append(f"Creativity {int(creativity)} of 10: 1 is literal with no invented musical details; "
+                             "5 is balanced; 10 expands freely within the musical brief. Preserve explicit constraints and supplied lyrics.")
+            if int(detail) != STANDARD:
+                lines.append(f"Detail {int(detail)} of 10: adjust musical specificity or lyrical development, "
+                             "from minimal at 1 to rich at 10, within this field's format.")
+            text = "\n\n".join(lines)
+        else:
+            text = request_text(idea, detail, creativity, style_line(style, spec))
         try:
-            prompt = self._analyze(config, preset, request_text(idea, detail, creativity, style_line(style, spec)),
+            prompt = self._analyze(config, preset, text,
                                    CREATIVITY[int(creativity)][0], max_tokens, seed, images)
         except ForgeError as exc:
             if exc.code != "connection":

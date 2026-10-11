@@ -16,7 +16,7 @@ The simple way in. Type an idea, pick what the prompt is for, get a prompt back.
   Workflow server addresses automatically use the same saved DaSiWa LLM server settings as Prompt Forge on single-user installations. Environment-configured endpoints take priority.
 
   Server discovery runs in the background; node schemas read a cached list without waiting for HTTP requests. Press R after discovery has completed to update the dropdown. First-time unreachable servers contribute no entries; a transient failure retains their last successful list. Execution still reports a stopped server clearly.
-- `write_for`: Anima, Illustrious, Krea2, Wan 2.2 or LTX 2.3.
+- `write_for`: Anima, Illustrious, Krea2, Wan 2.2, LTX 2.3, YuE2 Song Style, YuE2 Lyrics or YuE2 Instrumental Style.
 - `start_with`: quality tags, LoRA trigger words or anything else that must lead the prompt. The model writes no quality tags of its own (unless the idea asks for them), so this is where they go, for example `masterpiece, best quality, score_7` on Anima. It goes at the very top exactly as typed and never passes through the model, so it cannot be misspelled or dropped. On Anima and Illustrious, a copy of one of these tags in the written part is removed.
 - `idea`: what you want, in your own words or as tags.
 - `style`: a look to carry through the prompt (Anime, Watercolor, Sketch, 90s anime, Realistic and more). Anima and Illustrious get matching tags; Krea2, Wan and LTX get a description of the look. None adds nothing.
@@ -28,6 +28,44 @@ The simple way in. Type an idea, pick what the prompt is for, get a prompt back.
 - `images` (optional): reference pictures for a vision model, one image or a batch, the same input as on Analyze. Up to 8 are sent; a longer batch, such as a loaded video, is sampled evenly from the first image to the last. For Wan and LTX the first image is the first frame and the rest are references. With an empty idea, the prompt is written from the pictures.
 
 The output is the positive prompt only. Everything else uses the advanced nodes' defaults. For any other setting, use the two advanced nodes below. Both run the same code.
+
+### YuE2 presets
+
+Use two Prompt Writer nodes for a sung song: **YuE2 Song Style** → YuE2's `Style`
+field and **YuE2 Lyrics** → its `Lyrics` field. Each writer still returns one STRING;
+no JSON, combined fields or segment delimiters reach the output.
+
+- **Song Style:** compact musical description: language, genre, vocal character,
+  tempo, instruments and musical characteristics. Example idea: `English, warm
+  female voice, contemporary pop, 96 BPM, piano and bass, intimate and hopeful`.
+- **Lyrics:** singable words with `[Verse]`, `[Chorus]`, `[Bridge]` and `[Outro]`
+  section tags. State the language and theme in `idea`; supplied lyrics can be
+  preserved or rewritten as requested. Musical directions stay in Style.
+- **Instrumental Style:** describes the instrumental ensemble, genre, tempo,
+  phrasing and development, including `Instrumental` and `no vocals`. Leave YuE2's
+  Lyrics empty, or use section tags only; do not generate sung lyrics for it.
+
+For YuE2, the visual `style` dropdown is ignored; put musical style in `idea`.
+Detail and creativity use musical/lyrical instructions rather than camera or
+material instructions. Leave `start_with` empty for clean field output; an explicit
+prefix remains unchanged, and Lyrics joins it with a line break rather than a comma.
+
+ABC planning is set on the YuE2 node: **Full** plans melody and chords (recommended
+for general generation), **Melody** plans melody with freer accompaniment, and
+**Off** generates directly without a symbolic plan. **Max Duration** is an upper
+limit in seconds; the song may end earlier. Neither setting is emitted as prompt text.
+
+An instrumental Style prompt alone does not implement the official instrumental
+workflow or guarantee no vocals. That workflow saves YuE2's plan, transfers Vocal
+note events to Ins and renders the revised ABC; these writer presets do not edit
+scores, transcribe audio or render music. Prompt quality and audio results still
+need testing with the selected LLM and YuE2.
+
+The same guides are available in Advanced Analyze as `promptforge_yue2_style`,
+`promptforge_yue2_lyrics` and `promptforge_yue2_instrumental`. The editable guides
+live in `data/llm_skills/yue2_*.md`. Based on the official
+[YuE2 music guide](https://github.com/multimodal-art-projection/YuE/blob/main/skills/yue2-music/SKILL.md)
+and [instrumental guide](https://github.com/multimodal-art-projection/YuE/blob/main/skills/yue2-music/instrumental/SKILL.md).
 
 ### DaSiWa LLM Model Selector (Advanced)
 

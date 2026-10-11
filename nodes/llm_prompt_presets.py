@@ -15,6 +15,9 @@ _SKILL_PRESETS = {
     "promptforge_krea2": "krea2",
     "promptforge_anima": "anima",
     "promptforge_illustrious": "illustrious",
+    "promptforge_yue2_style": "yue2_style",
+    "promptforge_yue2_lyrics": "yue2_lyrics",
+    "promptforge_yue2_instrumental": "yue2_instrumental",
 }
 
 
@@ -222,7 +225,10 @@ for _media in ("image", "video"):
             _SYSTEM_PROMPT_PRESETS[f"caption_{_media}_{_detail}_{_style}"] = _caption_preset(_media, _detail, _style)
 
 _EXPORTED_PRESET_IDS = tuple(_SKILL_PRESETS)
-_SYSTEM_PROMPT_PRESET_LABELS = list(_SYSTEM_PROMPT_PRESETS.keys()) + list(_EXPORTED_PRESET_IDS) + ["promptforge_h3"]
+_SYSTEM_PROMPT_PRESET_LABELS = (list(_SYSTEM_PROMPT_PRESETS.keys())
+                                + [p for p in _EXPORTED_PRESET_IDS if not p.startswith("promptforge_yue2_")]
+                                + ["promptforge_h3"]
+                                + [p for p in _EXPORTED_PRESET_IDS if p.startswith("promptforge_yue2_")])
 
 
 def _resolve_system_prompt(system_prompt_preset, system_prompt):
