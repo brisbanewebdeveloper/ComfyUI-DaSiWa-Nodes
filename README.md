@@ -122,9 +122,7 @@ NVIDIA RTX Video SDK enhancement with Denoise, Deblur and VSR/High Bitrate upsca
 - **Quality and cuts:** **HIGH by default**, with MEDIUM/LOW alternatives; automatic scene-cut detection and an explicit cut override.
 - **Precision:** RGB8 by default; optional SDK-supported RGB10A2 10-bit SDR. Not HDR; alpha is discarded.
 - **Memory:** Bounded pair staging, budgeted VRAM/RAM, native memory reclamation under pressure and opt-in disk-backed output. Complete frame batches still need storage.
-- **Workflow:** IMAGE batches only; decode videos upstream and route audio separately. Non-midpoint timesteps have unequal temporal spacing. Requires SDK `VideoFrameGeneration`; does not replace RIFE or official NVIDIA nodes.
-
-Visible RTX names have no DaSiWa prefix. Saved/API identifiers remain unique: `DaSiWa_RTX_UpscalerRefiner` (unchanged) and `DaSiWa_RTX_FrameGeneration` (new).
+- **Workflow:** IMAGE batches only; decode videos upstream and route audio separately. Non-midpoint timesteps have unequal temporal spacing. Requires SDK `VideoFrameGeneration`.
 
 [Frame generation controls, timing and limits →](docs/rtx_frame_generation.md)
 
