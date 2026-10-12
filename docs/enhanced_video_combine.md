@@ -98,6 +98,14 @@ Many Chromium/Linux installations cannot decode H.265 in a canvas/video element 
 
 `pingpong` appends reverse interior frames, giving a seamless forward/reverse loop. `pass_frames` returns the encoded frame sequence instead of an empty `IMAGE` result.
 
+## Memory use on long videos
+
+Encoding converts one source frame at a time, including pingpong playback. It does not build a reversed full-batch copy for the encoder. Automatic bit-depth detection samples at most 250,000 values before CPU/float32 conversion, including non-contiguous inputs.
+
+With `pass_frames=false`, the empty output owns no source-frame storage. With `pass_frames=true`, the full output remains available downstream; pingpong additionally materializes the extended frame sequence.
+
+The complete upstream `IMAGE` batch still has to exist during encoding. For example, 75 seconds at 24 fps and 1920×1080 RGB float32 require about 41.7 GiB for the input alone. Upstream caches, models and latents can add to this. The optional `free_memory_if_needed` switch (default off) checks RAM headroom before encoding, at most every five seconds of wall-clock encoding time, and before materializing pingpong passthrough. Under pressure it requests native inactive-cache release, releasable pinned memory, then active-cache release, rechecking actual available RAM after each stage. Active eviction can remove reusable workflow caches and cause later recomputation; hooks depend on the installed ComfyUI cache configuration. It never globally offloads GPU models or frees live inputs. Workspace budgeting is a heuristic, not a guarantee against swapping. These measures reduce additional encoder allocations, not the underlying input size. Longer videos may still require bounded upstream generation/decoding across separate executions.
+
 ## Metadata and filenames
 
 - `save_metadata` embeds ComfyUI prompt/workflow metadata where the selected container supports it.

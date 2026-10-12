@@ -19,7 +19,7 @@ Use **ComfyUI → Settings → Other → DaSiWa → ...** to enable or disable e
 - 🎥 **H3 modes:** T2VA/I2VA/L2VA/FL2VA in the two-image endpoint family (first/last-frame interpolation); REF2VA (9 images, 3 videos, 3 audio files; 12 total); Image Inpaint (one image → single output frame via a 5-frame pass).
 - 🖼️ **Reference Director:** separate image/video/audio lanes; drag-reorder slots, per-media prompts, external soundtracks, embedded-video V/A/V+A switch; incompatible media retained when changing modes.
 - 📋 **Media input:** lane-selected Ctrl+V, file-manager drag-and-drop, paste-replace on a selected tile; first-frame video thumbnails and audio waveforms.
-- ⏱️ **Reference trims:** draggable crop markers and preview range, ▶ Play crop; 2–15s per reference window and ≤15s combined visual / ≤15s combined audio, with input-path validation.
+- ⏱️ **Reference trims:** draggable crop markers and preview range, ▶ Play crop; full-file audio amplitude preview; audio/video previews with highlighted crop, draggable live playhead and source-time readout; 2–15s per reference window and ≤15s combined visual / ≤15s combined audio, with input-path validation.
 - 📸 **RefMods:** image/video/audio files and upstream v5 bundles from `models/refmods/`; overlay selection, strength scaling, workflow-local descriptions, runtime `<RefMod N>` → native-label resolution.
 - ✍️ **Prompt editor:** one free-text field per mode; optional structure, shot/RefMod insertion and reference-label prefill; legacy prompts migrate into that field.
 - ✨ **Prompt Forge:** review/apply H3 drafts from `models/llm`, Ollama or an OpenAI-compatible server. REF2VA picture buttons combine character, place, style and frame roles, with optional ordered people selections (left/right, top/bottom or front/back; no order picked means the numbers say who is in the picture, not where); Pose and Custom remain exclusive; image-only labelled drafts need no writer vision, while mixed references retain the full REF2VA path. Choose Auto or 1–5 shots with optional per-shot descriptions; continuity retains vision context and inherited definitions. [Model setup and limitations →](docs/minimax_h3_director.md#prompt-forge-optional).
@@ -218,6 +218,8 @@ The **DaSiWa Metadata Image Saver** ensures your images are fully compatible wit
 ### 🎞️ Enhanced Video Combine
 
 Converts an `IMAGE` batch into a high-quality video with optional `AUDIO` muxing and an in-node VHS-style preview.
+
+- **Optional RAM reclamation:** `free_memory_if_needed` (default off) requests native ComfyUI cache/pinned-memory release only under pressure, before encoding and at five-second wall-clock intervals. It does not globally offload GPU models or free the live input batch.
 
 ![DaSiWa Enhanced Video Combine](assets/DaSiWa-Enhanced-Video-Combine.png)
 

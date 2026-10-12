@@ -2,15 +2,19 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-11**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-12**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **Enhanced Video Combine memory use (10-12, 0.5.12):** Frame-wise pingpong encoding without a reversed batch copy; bit-depth detection samples before CPU/float32 conversion, including strided inputs. Disabled frame passthrough retains no source storage. Adds default-off `free_memory_if_needed` for pressure-triggered native cache/pinned-memory reclamation before encoding and at five-second wall-clock intervals. Live inputs remain allocated; no global GPU offload or swap-free guarantee. [Memory use and limits →](enhanced_video_combine.md#memory-use-on-long-videos)
+
+- **Director audio/video preview (10-12, 0.5.12):** Full-file audio amplitude waveform; audio and video previews share highlighted crop, draggable endpoints/range, draggable/keyboard playback cursor and source-time readout. Play crop waits for readiness/seek completion and uses a local media Blob if HTTP seeking is refused. Reuses timeline peaks; browser decoding combines channel peaks without cancelling stereo signals. Closing the preview stops playback and releases visual resources. Fixes a queued-pause race that could disable the Play crop end boundary. [Usage →](minimax_h3_director.md#work-in-the-timeline)
 
 - **YuE2 Prompt Writer presets (0.5.11):** Adds separate Song Style, Lyrics and Instrumental Style targets, also available in Advanced Analyze. Editable guides keep musical instructions and sung words separate; detail/creativity are music-aware, visual styles are ignored, and lyric prefixes use line breaks. Existing widgets, defaults and single-STRING output stay unchanged. ABC planning, duration and instrumental score conversion remain downstream. [Usage →](llm_nodes.md#yue2-presets)
 
 - **H3 memory planning (10-11, 0.5.10):** Enhanced Upscale adds default-on `enforce_memory_budget`, appended after existing widgets/callable parameters. Planning retains model/device/buffer accounting with 25% rather than 35% workspace headroom; disabling enforcement permits attempts beyond the diffusion estimate while retaining split settings and host RAM/spike guard checks. Single full-canvas plans use native sampling. Existing saved values stay in place; automatic geometry and seeded outputs can differ. Adapted from [PR #76](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/76), thanks to @sherics. [Controls and limits →](minimax_h3_tiled_upscale.md)
 
-**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10 entry above is a subsequent Git update. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
+**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10–0.5.12 entries above are subsequent updates, not those earlier development snapshots. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
 
 - **RTX RAM-pressure cleanup and Free Both (0.5.9):** Both RTX nodes reclaim native execution caches and releasable model pins before rejecting a RAM output allocation, then re-check the safety budget. No running-executor reset or global GPU offload into RAM; cache eviction needs ComfyUI RAM-pressure cache support. The memory toolbar adds **Free Both**, retaining existing Free System RAM behavior. Full input/output batches still require storage.
 
@@ -140,6 +144,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.12 | 10-12 | Director audio/video waveform, crop and playback cursor; seek readiness/Blob fallback; bounded Video Combine staging and opt-in RAM reclamation |
+| 0.5.11 | 10-11 | YuE2 Song Style, Lyrics and Instrumental Style Prompt Writer/Advanced Analyze presets |
 | 0.5.10 | 10-11 | Git update: H3 optional budget enforcement, 25% workspace headroom, native single-tile sampling and preserved legacy widget/callable positions (#76) |
 | 0.5.9 | 10-11 | Consolidated public release: RTX Frame Generation (HIGH default), SDK-aware RTX 10-bit/TrueHDR enhancement, RAM-pressure cleanup, Free Both, H3 opt-in Spike Guard, complete hover help and updated node screenshots |
 | 0.5.8 | 10-09 | H3 tile-local refinement, automatic tile layout and Continuity planning reserve; video RefMod Qwen sampling and timestamps |
@@ -207,6 +213,8 @@ Quick reference for the version bumps inside this window, newest first:
 ## Changelog
 
 ### MiniMax H3 Director (v1)
+
+- **10-12 (0.5.12):** Audio previews show full-source channel amplitude peaks; audio/video previews share highlighted crop, independent draggable/keyboard playback cursor and source-time readout. Crop playback waits for readiness and seeking, falls back to a local Blob for non-seekable HTTP media, and stops at the selected end even after queued native pause events. Closing stops playback and releases preview resources; failed waveform decoding leaves playback/cropping available.
 
 - **10-09 (0.5.8):** Video RefMods are presented to Qwen at the native 2 fps rate with matching half-second timestamps; the full video latent remains available to DiT. Image RefMods keep their existing presentation.
 
@@ -299,6 +307,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 - **08-01:** adaptive CPU RAM reserve shared with the Watermark compositor.
 
 ### Enhanced Video Combine
+
+- **10-12 (0.5.12):** Encoding streams original/pingpong frames without an extended batch allocation. Bit-depth detection bounds its sample before CPU/float32 conversion, including non-contiguous input. `pass_frames=false` returns an empty tensor with no source storage. Adds optional default-off `free_memory_if_needed`: inactive caches, releasable pins, then active caches under pressure, with actual RAM rechecks and five-second wall-clock throttling. Live inputs and requested full-frame outputs still require memory; no global GPU-model offload. CPU/CUDA storage tests, native-cache eviction and a real PyAV encode are covered.
 
 - **09-19:** Video outputs are no longer advertised as `ui["images"]` assets; image-only consumers no longer receive video entries.
 

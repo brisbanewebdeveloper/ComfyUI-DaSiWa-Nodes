@@ -916,6 +916,135 @@ function install(node) {
   let previewCloseFn = null;
   let previewItemRef = null;
   let previewAbort = null;
+  async function readAudioPeaks(value, signal) {
+    const response = await fetch(viewUrl(value), { signal });
+    if (!response.ok) throw new Error(`Audio request failed (${response.status})`);
+    const bytes = await response.arrayBuffer();
+    if (signal?.aborted) return null;
+    // Decode without opening an audio output device; retain only the envelope.
+    const context = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 1, 44100);
+    const buffer = await context.decodeAudioData(bytes);
+    if (signal?.aborted) return null;
+    const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
+    const peakCount = Math.min(1024, buffer.length);
+    const peaks = new Array(peakCount).fill(0);
+    for (let index = 0; index < peakCount; index++) {
+      const start = Math.floor(index * buffer.length / peakCount);
+      const end = Math.floor((index + 1) * buffer.length / peakCount);
+      for (const channel of channels) {
+        for (let sample = start; sample < end; sample++) peaks[index] = Math.max(peaks[index], Math.abs(channel[sample]));
+      }
+    }
+    return peaks;
+  }
+  function waitForPreviewMedia(media, eventName, signal) {
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        media.removeEventListener(eventName, done); media.removeEventListener("error", fail); signal.removeEventListener("abort", abort);
+      };
+      const done = () => { cleanup(); resolve(); };
+      const fail = () => { cleanup(); reject(new Error("Media could not be loaded or seeked.")); };
+      const abort = () => { cleanup(); reject(new DOMException("Preview closed", "AbortError")); };
+      if (signal.aborted) { abort(); return; }
+      media.addEventListener(eventName, done, { once: true });
+      media.addEventListener("error", fail, { once: true });
+      signal.addEventListener("abort", abort, { once: true });
+    });
+  }
+  function addMediaPreviewTimeline(track, row, media, item, duration, rangeTs, rangeTe, signal, seekPreview) {
+    const isAudio = item.type === "audio";
+    track.style.height = isAudio ? "88px" : "36px";
+    const canvas = isAudio ? document.createElement("canvas") : null;
+    if (canvas) {
+      canvas.className = "ds-h3-preview-waveform";
+      canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", "Full audio amplitude waveform; highlighted area is the selected crop.");
+      canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
+    }
+    const playhead = document.createElement("div"); playhead.className = "ds-h3-preview-playhead";
+    playhead.style.cssText = "position:absolute;top:0;bottom:0;width:2px;background:#f1f6fa;box-shadow:0 0 4px #0d1217;pointer-events:none;z-index:4";
+    const grip = document.createElement("div"); grip.className = "ds-h3-preview-playhead-grip"; grip.textContent = "▼";
+    grip.style.cssText = "position:absolute;top:0;left:1px;transform:translateX(-50%);width:16px;height:16px;background:#f1f6fa;color:#111a21;border-radius:2px;text-align:center;font:12px/16px sans-serif;cursor:ew-resize;pointer-events:auto;touch-action:none";
+    grip.tabIndex = 0; grip.setAttribute("role", "slider"); grip.setAttribute("aria-label", isAudio ? "Audio playback position" : "Video playback position");
+    grip.setAttribute("aria-valuemin", "0"); grip.setAttribute("aria-valuemax", String(duration));
+    grip.title = "Drag to choose the playback position without changing the crop. Then use the media player's Play button. Arrow keys: 1s; Shift+Arrow: 0.1s.";
+    playhead.append(grip);
+    const seek = time => { void seekPreview(time).catch(error => { if (error.name !== "AbortError") console.warn("[MiniMax H3 Director] Preview seek failed", error); }); };
+    const seekPointer = event => {
+      const bounds = track.getBoundingClientRect();
+      seek(Math.max(0, Math.min(duration, (event.clientX - bounds.left) / bounds.width * duration)));
+    };
+    grip.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      event.preventDefault(); event.stopPropagation(); grip.focus(); grip.setPointerCapture(event.pointerId); seekPointer(event);
+    });
+    grip.addEventListener("pointermove", event => { if (grip.hasPointerCapture(event.pointerId)) { event.preventDefault(); seekPointer(event); } });
+    grip.addEventListener("pointerup", event => { if (grip.hasPointerCapture(event.pointerId)) { seekPointer(event); grip.releasePointerCapture(event.pointerId); } });
+    grip.addEventListener("keydown", event => {
+      const step = event.shiftKey ? 0.1 : 1;
+      const time = event.key === "ArrowLeft" ? media.currentTime - step : event.key === "ArrowRight" ? media.currentTime + step : event.key === "Home" ? 0 : event.key === "End" ? duration : null;
+      if (time === null) return;
+      event.preventDefault(); event.stopPropagation(); seek(time);
+    });
+    const position = document.createElement("div"); position.className = "ds-h3-preview-position";
+    position.style.cssText = "color:#dbe7f0;font:11px ui-monospace,monospace;font-variant-numeric:tabular-nums";
+    position.title = "Current playback position in the full source file, in seconds.";
+    const ruler = document.createElement("div"); ruler.style.cssText = "display:flex;justify-content:space-between;color:#9fb3c2;font:10px ui-monospace,monospace";
+    for (let i = 0; i <= 4; i++) { const tick = document.createElement("span"); tick.textContent = `${(duration * i / 4).toFixed(2)}s`; ruler.append(tick); }
+    if (canvas) track.prepend(canvas);
+    track.append(playhead); row.append(ruler, position);
+    let peaks = Array.isArray(item.waveform_peaks) && item.waveform_peaks.length && item.waveform_peaks.every(Number.isFinite) ? item.waveform_peaks : null;
+    let frame = null;
+    let waveformStatus = isAudio && !peaks ? " · Loading waveform…" : "";
+    const updatePosition = () => {
+      const time = Math.max(0, Math.min(duration, media.currentTime || 0));
+      playhead.style.left = `${time / duration * 100}%`;
+      grip.setAttribute("aria-valuenow", time.toFixed(2)); grip.setAttribute("aria-valuetext", `${time.toFixed(2)} seconds`);
+      position.textContent = `${time.toFixed(2)}s / ${duration.toFixed(2)}s · Crop ${(Number(rangeTs.value) * duration / 100).toFixed(2)}s – ${(Number(rangeTe.value) * duration / 100).toFixed(2)}s${waveformStatus}`;
+    };
+    const draw = () => {
+      if (signal.aborted) return;
+      if (!canvas) { updatePosition(); return; }
+      const width = Math.max(1, Math.round(track.getBoundingClientRect().width * (window.devicePixelRatio || 1)));
+      const height = Math.round(88 * (window.devicePixelRatio || 1));
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (peaks) {
+        const start = Number(rangeTs.value) / 100, end = Number(rangeTe.value) / 100;
+        for (let i = 0; i < peaks.length; i++) {
+          const amplitude = Math.max(1, Math.min(1, peaks[i]) * (height / 2 - 4));
+          ctx.fillStyle = i / peaks.length >= start && i / peaks.length < end ? "#7ed29d" : "#506574";
+          ctx.fillRect(i * width / peaks.length, height / 2 - amplitude, Math.max(1, width / peaks.length), amplitude * 2);
+        }
+        canvas.dataset.ready = "true";
+      }
+      updatePosition();
+    };
+    const animate = () => {
+      frame = null;
+      if (signal.aborted) return;
+      updatePosition();
+      if (!media.paused && !media.ended) frame = requestAnimationFrame(animate);
+    };
+    const startAnimation = () => { if (frame === null) animate(); };
+    const stopAnimation = () => { if (frame !== null) cancelAnimationFrame(frame); frame = null; updatePosition(); };
+    media.addEventListener("playing", startAnimation, { signal });
+    media.addEventListener("pause", () => { if (media.paused) stopAnimation(); }, { signal });
+    media.addEventListener("ended", stopAnimation, { signal });
+    media.addEventListener("timeupdate", updatePosition, { signal });
+    media.addEventListener("seeked", updatePosition, { signal });
+    const observer = new ResizeObserver(draw); observer.observe(track);
+    signal.addEventListener("abort", () => { observer.disconnect(); if (frame !== null) cancelAnimationFrame(frame); peaks = null; }, { once: true });
+    draw();
+    if (isAudio && !peaks) void readAudioPeaks(item.value, signal).then(decoded => {
+      if (signal.aborted) return;
+      peaks = decoded; waveformStatus = ""; draw();
+    }).catch(error => {
+      if (signal.aborted) return;
+      waveformStatus = " · Waveform unavailable; playback and crop still work.";
+      updatePosition(); console.warn("[MiniMax H3 Director] Preview waveform decode failed", error);
+    });
+    return draw;
+  }
   function closePreview(discard = false) {
     if (!discard && previewOverlay && previewItemRef) {
       applyPreviewChanges(previewOverlay, previewItemRef);
@@ -960,6 +1089,43 @@ function install(node) {
     const close = document.createElement("button"); close.textContent = "×"; close.title = "Close and save (Escape or click outside)"; close.onclick = () => closePreview(false); header.append(title, close);
     const body = document.createElement("div"); body.className = "ds-h3-preview-body";
     const media = document.createElement(item.type === "image" ? "img" : item.type === "audio" ? "audio" : "video"); media.className = "ds-h3-preview-media"; media.src = viewUrl(item.value); if (item.type !== "image") media.controls = true; body.append(media);
+    if (item.type !== "image") media.preload = "auto";
+    const signal = previewAbort.signal;
+    let seekRevision = 0;
+    let previewMediaUrl = null;
+    const seekPreview = async time => {
+      const revision = ++seekRevision;
+      const check = () => { if (signal.aborted || revision !== seekRevision) throw new DOMException("Seek cancelled", "AbortError"); };
+      const target = Math.max(0, Math.min(sourceDuration, time));
+      const seek = async () => {
+        if (media.error) throw new Error("Media could not be loaded.");
+        if (media.readyState === 0) await waitForPreviewMedia(media, "loadedmetadata", signal);
+        if (media.readyState < 3) await waitForPreviewMedia(media, "canplay", signal);
+        check();
+        if (Math.abs(media.currentTime - target) > 0.001 || media.seeking) {
+          const seeked = waitForPreviewMedia(media, "seeked", signal);
+          media.currentTime = target;
+          await seeked;
+        }
+        check();
+      };
+      await seek();
+      // Some HTTP sources play but cannot seek (missing byte-range support).
+      // A local Blob makes the already-selected media genuinely seekable.
+      if (!previewMediaUrl && Math.abs(media.currentTime - target) > 0.05) {
+        const response = await fetch(viewUrl(item.value), { signal });
+        if (!response.ok) throw new Error(`Media request failed (${response.status})`);
+        const blob = await response.blob(); check();
+        previewMediaUrl = URL.createObjectURL(blob);
+        media.src = previewMediaUrl; media.load();
+        await seek();
+      }
+      if (Math.abs(media.currentTime - target) > 0.05) throw new Error("This media could not seek to the selected position.");
+    };
+    if (item.type !== "image") signal.addEventListener("abort", () => {
+      media.pause(); media.removeAttribute("src"); media.load();
+      if (previewMediaUrl) URL.revokeObjectURL(previewMediaUrl);
+    }, { once: true });
     const controls = document.createElement("div"); controls.className = "ds-h3-preview-controls";
     if ((item.type === "video" || item.type === "audio") && sourceDuration > 0) {
       const row1 = document.createElement("div"); row1.className = "ds-h3-preview-row";
@@ -995,6 +1161,7 @@ function install(node) {
         const rect = trackBg.getBoundingClientRect();
         return ((pointerX - rect.left) / rect.width) * 100;
       };
+      let redrawPreviewTimeline = () => {};
       const syncMarkers = () => {
         const sPct = parseFloat(rangeTs.value);
         const ePct = parseFloat(rangeTe.value);
@@ -1002,6 +1169,7 @@ function install(node) {
         markerE.style.left = ePct + "%";
         filledBar.style.left = sPct + "%";
         filledBar.style.right = (100 - ePct) + "%";
+        redrawPreviewTimeline();
       };
       const clampSliders = () => {
         let s = parseFloat(rangeTs.value);
@@ -1064,15 +1232,25 @@ function install(node) {
       teInput.onchange = updateFromInputs;
       let cropPlayback = false;
       const stopCropPlayback = () => { cropPlayback = false; playCropBtn.textContent = "▶ Play crop"; };
+      let cropRequest = 0;
       playCropBtn.onclick = async () => {
         const start = Number(tsInput.value);
         const end = Number(teInput.value);
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
-        media.currentTime = start;
-        cropPlayback = true;
-        playCropBtn.textContent = "Playing crop…";
-        try { await media.play(); }
-        catch (error) { console.warn("[MiniMax H3 Director] Crop playback failed", error); stopCropPlayback(); }
+        const request = ++cropRequest;
+        stopCropPlayback(); media.pause();
+        playCropBtn.textContent = "Seeking crop…";
+        try {
+          await seekPreview(start);
+          if (request !== cropRequest) return;
+          cropPlayback = true;
+          playCropBtn.textContent = "Playing crop…";
+          await media.play();
+        } catch (error) {
+          if (request !== cropRequest) return;
+          if (error.name !== "AbortError") console.warn("[MiniMax H3 Director] Crop playback failed", error);
+          stopCropPlayback();
+        }
       };
       media.addEventListener("timeupdate", () => {
         if (cropPlayback && media.currentTime >= Number(teInput.value)) {
@@ -1082,19 +1260,23 @@ function install(node) {
         }
       });
       media.addEventListener("pause", () => {
-        if (cropPlayback && media.currentTime < Number(teInput.value)) stopCropPlayback();
+        if (cropPlayback && media.paused) stopCropPlayback();
       });
       media.addEventListener("ended", stopCropPlayback);
       updateFromInputs();
       trackBg.append(filledBar, markerS, markerE, rangeTs, rangeTe);
       rowSlider.appendChild(trackBg);
+      markerS.style.height = markerE.style.height = item.type === "audio" ? "92px" : "40px";
+      redrawPreviewTimeline = addMediaPreviewTimeline(trackBg, rowSlider, media, item, sourceDuration, rangeTs, rangeTe, signal, time => {
+        ++cropRequest; stopCropPlayback(); return seekPreview(time);
+      });
       controls.appendChild(rowSlider);
     }
     const row2 = document.createElement("div"); row2.className = "ds-h3-preview-row";
     const saveBtn = document.createElement("button"); saveBtn.textContent = "Save"; saveBtn.className = "ds-h3-save-btn"; saveBtn.onclick = () => { applyPreviewChanges(previewOverlay, item); closePreview(false); }; row2.appendChild(saveBtn);
     const cancelBtn = document.createElement("button"); cancelBtn.textContent = "Cancel"; cancelBtn.onclick = () => { closePreview(true); }; cancelBtn.style.background = "#2c2c2c"; row2.appendChild(cancelBtn);
     controls.appendChild(row2);
-    const meta = document.createElement("div"); meta.className = "ds-h3-preview-meta"; meta.textContent = sourceDuration && (item.type === "video" || item.type === "audio") ? `Source: ${sourceDuration.toFixed(2)}s · Current crop: ${trimStart.toFixed(2)}s – ${trimEnd.toFixed(2)}s` : "Full media preview";
+    const meta = document.createElement("div"); meta.className = "ds-h3-preview-meta"; meta.textContent = sourceDuration && (item.type === "video" || item.type === "audio") ? `Source: ${sourceDuration.toFixed(2)}s` : "Full media preview";
     panel.append(header, body, controls, meta); previewOverlay.append(panel); document.body.append(previewOverlay);
     previewCloseFn = event => { if (event.key === "Escape") closePreview(); };
     window.addEventListener("keydown", previewCloseFn);
@@ -1559,13 +1741,8 @@ function install(node) {
   }
   async function extractWaveform(value, id) {
     try {
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const response = await fetch(viewUrl(value));
-      const buffer = await audioContext.decodeAudioData(await response.arrayBuffer());
-      const channel = buffer.getChannelData(0); const peakCount = 240; const step = Math.max(1, Math.floor(channel.length / peakCount)); const peaks = [];
-      for (let index = 0; index < peakCount; index += 1) { let peak = 0; for (let sample = index * step; sample < Math.min(channel.length, (index + 1) * step); sample += 1) peak = Math.max(peak, Math.abs(channel[sample])); peaks.push(peak); }
-      audioContext.close?.();
-      mutate(s => { const item = s.items.find(x => x.id === id); if (item) item.waveform_peaks = peaks; });
+      const peaks = await readAudioPeaks(value);
+      mutate(s => { const item = s.items.find(x => x.id === id); if (item && item.value === value) item.waveform_peaks = peaks; });
     } catch (error) { console.warn("[MiniMax H3 Director] Audio waveform decode failed", error); }
   }
   async function replaceSelectedFile(file, selected) {
