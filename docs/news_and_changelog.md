@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-12**. Older history lives in the 
 
 ## News
 
+- **H3 Forge next-action priority (10-12, 0.5.14):** A nonblank continuation idea takes priority over the old action draft and reference instructions. Structured history contributes subject identity only; plain history is used as past-scene evidence when tail images are unavailable, including text-only retries after rejected images. Near-identical generated actions trigger an advisory warning, not an Apply block or automatic retry. Empty ideas retain the existing natural-continuation/current-draft path. [Usage and limits →](h3_continuity.md#forge-next-action-priority)
+
 - **Seamless Loop RTX backend (0.5.13):** Adds opt-in RTX Frame Generation transition interpolation, LOW/MEDIUM/HIGH quality (HIGH default) and CUDA device selection. Native RIFE/FILM remains the default; existing widget positions and exact-endpoint behavior stay unchanged. RTX needs no RIFE/FILM checkpoint and does not multiply video FPS. Small real RTX 5090 tests cover overlap/short bridges, CPU/CUDA input and default/custom caller streams. [Usage and limits →](seamless_loop.md)
 
 - **Enhanced Video Combine memory use (10-12, 0.5.12):** Frame-wise pingpong encoding without a reversed batch copy; bit-depth detection samples before CPU/float32 conversion, including strided inputs. Disabled frame passthrough retains no source storage. Adds default-off `free_memory_if_needed` for pressure-triggered native cache/pinned-memory reclamation before encoding and at five-second wall-clock intervals. Live inputs remain allocated; no global GPU offload or swap-free guarantee. [Memory use and limits →](enhanced_video_combine.md#memory-use-on-long-videos)
@@ -16,7 +18,7 @@ This changelog covers **2026-07-05 → 2026-10-12**. Older history lives in the 
 
 - **H3 memory planning (10-11, 0.5.10):** Enhanced Upscale adds default-on `enforce_memory_budget`, appended after existing widgets/callable parameters. Planning retains model/device/buffer accounting with 25% rather than 35% workspace headroom; disabling enforcement permits attempts beyond the diffusion estimate while retaining split settings and host RAM/spike guard checks. Single full-canvas plans use native sampling. Existing saved values stay in place; automatic geometry and seeded outputs can differ. Adapted from [PR #76](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/76), thanks to @sherics. [Controls and limits →](minimax_h3_tiled_upscale.md)
 
-**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10–0.5.12 entries above are subsequent updates, not those earlier development snapshots. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
+**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10–0.5.14 entries above are subsequent updates, not those earlier development snapshots. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
 
 - **RTX RAM-pressure cleanup and Free Both (0.5.9):** Both RTX nodes reclaim native execution caches and releasable model pins before rejecting a RAM output allocation, then re-check the safety budget. No running-executor reset or global GPU offload into RAM; cache eviction needs ComfyUI RAM-pressure cache support. The memory toolbar adds **Free Both**, retaining existing Free System RAM behavior. Full input/output batches still require storage.
 
@@ -146,6 +148,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.14 | 10-12 | H3 Forge continuation idea priority, identity-only structured history, text-only fallback context and advisory repeated-action warning |
+| 0.5.13 | 10-12 | Seamless Loop opt-in RTX transition interpolation, quality and CUDA device selection; native RIFE/FILM default retained |
 | 0.5.12 | 10-12 | Director audio/video waveform, crop and playback cursor; seek readiness/Blob fallback; bounded Video Combine staging and opt-in RAM reclamation |
 | 0.5.11 | 10-11 | YuE2 Song Style, Lyrics and Instrumental Style Prompt Writer/Advanced Analyze presets |
 | 0.5.10 | 10-11 | Git update: H3 optional budget enforcement, 25% workspace headroom, native single-tile sampling and preserved legacy widget/callable positions (#76) |
@@ -215,6 +219,8 @@ Quick reference for the version bumps inside this window, newest first:
 ## Changelog
 
 ### MiniMax H3 Director (v1)
+
+- **10-12 (0.5.14):** Forge places a nonblank next-action idea after reference/context instructions and removes old story/draft actions from that request. Structured history retains subject definitions; plain history is omitted with source-tail evidence and restored as historical context for text-only fallback, with a fresh context-budget check. Action-only similarity warns without blocking Apply or regenerating; empty-idea behavior and reference/workflow settings are unchanged. Mocked-backend tests cover idea precedence, structured/plain history, repeated actions and rejected-image fallback.
 
 - **10-12 (0.5.12):** Audio previews show full-source channel amplitude peaks; audio/video previews share highlighted crop, independent draggable/keyboard playback cursor and source-time readout. Crop playback waits for readiness and seeking, falls back to a local Blob for non-seekable HTTP media, and stops at the selected end even after queued native pause events. Closing stops playback and releases preview resources; failed waveform decoding leaves playback/cropping available.
 

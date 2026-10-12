@@ -13,6 +13,12 @@ authoritative. In a structured REF2VA prompt, the old idea is inserted into
 soundscape and empty music remain unchanged. This migration changes workflow
 settings, not saved checkpoints.
 
+## Forge next-action priority
+
+With a nonblank next-action idea, Forge treats that idea as the action to write after the seam. It does not send the old full next-action draft as a template. Structured historical prompts contribute only subject definitions; plain historical prompts are retained as explicitly historical text only when source-tail images are unavailable, including a text-only retry after rejected images. Reference media and RefMods contribute their assigned properties, not a replacement story. The existing reference switch and workflow settings are unchanged.
+
+Forge warns when the generated action is nearly identical to an old action. For structured prompts it compares only `detailed_description`, not shared identity definitions. This is an advisory text-similarity check, not proof that the idea was ignored; it neither blocks Apply nor automatically regenerates. With an empty idea, the existing natural-continuation/current-draft behavior remains unchanged. Model adherence still requires reviewing the draft.
+
 ## Before you start
 
 | Needed | Why |
