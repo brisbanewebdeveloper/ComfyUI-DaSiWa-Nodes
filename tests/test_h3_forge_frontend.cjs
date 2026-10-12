@@ -84,6 +84,13 @@ test('removed reference drops its complete multiline definition, not other subje
   assert.ok(result.warning.includes('omitted'));
 });
 
+test('active media without a historical snapshot remains enabled for fresh grounding', () => {
+  const { inheritedDefinitions } = helpers();
+  const result = inheritedDefinitions('<Subject 1> OLD_ACTOR from <Picture 1>.', {}, { '<Picture 1>': 'current-image' });
+  assert.equal(result.text, ''); // Never guess that the old description belongs to this file.
+  assert.ok(result.warning.includes('Current references remain enabled'));
+});
+
 test('replacing or disabling a reference cannot retain its textual appearance', () => {
   const { inheritedDefinitions } = helpers();
   for (const current of [{}, { '<Picture 1>': 'replacement' }]) {

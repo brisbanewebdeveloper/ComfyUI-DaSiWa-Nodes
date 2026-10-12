@@ -129,3 +129,30 @@ def test_unmapped_plain_media_history_is_not_reused_without_vision(draft_context
     forge.generate_continuity_draft({"prompt": "REMOVED_ACTOR from <Picture 1> dances."}, "Light a lamp", str(tail), "openai:test", {})
     assert "REMOVED_ACTOR" not in model.calls[0][2]
 
+
+@pytest.mark.parametrize("saved,sees", [(False, True), (False, False), (True, False)])
+def test_enabled_current_references_are_required_without_inherited_mapping(draft_context, monkeypatch, saved, sees):
+    inputs, tail, _ = draft_context
+    ref = {"kind": "image", "role": "subject", "instructions": "CURRENT_ACTOR: silver helmet and green jacket"}
+    if saved:
+        ref.update(saved_reference=True, id="current-refmod")
+    else:
+        ref["path"] = "ref.png"
+    model = Model(structured_raw("<Subject 1>: CURRENT_ACTOR from <Picture 1>"), sees)
+    monkeypatch.setattr(forge, "backends", lambda _: {"openai": model})
+    result = forge.generate_continuity_draft(
+        {"prompt": old_prompt(definitions="<Subject 1> OLD_ACTOR from <Picture 1>.")},
+        "The actor sits down", str(tail), "openai:test", {}, references=[ref],
+        existing_definitions="", input_directory=str(inputs), structured=True)
+    _, system, user, images, *_ = model.calls[0]
+    assert "OLD_ACTOR" not in user
+    assert "CURRENT_ACTOR: silver helmet and green jacket" in user
+    assert "required inputs, not optional inspiration" in system
+    assert "Missing historical identity mappings discard only old descriptions" in system
+    assert "ENABLED CURRENT conditioning references" in user
+    assert user.index("ENABLED CURRENT conditioning references") > user.index("Authoritative new next-action idea:")
+    if sees:
+        assert images == ["ref.png", "old.jpg", "new.jpg"]
+    else:
+        assert images == []
+    assert "<Picture 1>" in result["fields"]["ref"]["subject_definitions"]

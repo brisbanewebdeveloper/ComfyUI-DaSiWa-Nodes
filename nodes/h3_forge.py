@@ -504,6 +504,16 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
             "Do not inherit stale actions, timestamps or media citations. Write all six sections for "
             "one uninterrupted next shot, no markdown or analysis. Use exactly these output markers:\n" +
             "\n".join(f"===SEGMENT: {label} ===" for label, _ in _REF_FIELDS))
+    if references:
+        system += ("\nEnabled current conditioning references are required inputs, not optional inspiration. "
+                   "Use their assigned subjects, appearance, style, frame anchors, motion and audio intent "
+                   "while carrying out the new action. The idea controls what happens, not whether enabled "
+                   "references are used. Missing historical identity mappings discard only old descriptions, "
+                   "never the current references. Rebuild missing subject definitions from the current "
+                   "reference images or explicit current reference instructions, preserving approved IDs. "
+                   "Keep current reference grounding separate from source-tail evidence. For saved RefMods "
+                   "or other unseen media, cite their current source and use explicit notes only; missing "
+                   "visual descriptions do not mean the conditioning source is disabled.")
     creativity = options.get("creativity", bundle["default_creativity"])
     sampling = bundle["creativity_presets"].get(creativity, bundle["creativity_presets"][bundle["default_creativity"]])
     detail = bundle["detail_levels"].get(str(options.get("detail")), bundle["detail_levels"][str(bundle["default_detail"])])
@@ -596,8 +606,13 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
                     context += "\nCurrent subject definitions (identity context only, not actions):\n" + definitions
             text = context + "\n\n" + text
             text += ("\n\nAuthoritative new next-action idea:\n" + next_idea +
-                     "\n\nFollow this idea after the seam. Reference instructions and historical actions "
-                     "must not replace it. Describe the transition and the requested action within this shot.")
+                     "\n\nFollow this idea after the seam. Do not replace the new action with historical actions. "
+                     "Describe the transition and the requested action within this shot.")
+            if references:
+                text += ("\nCarry out this idea using the ENABLED CURRENT conditioning references above. "
+                         "Their assigned subjects, appearance and reference roles remain binding; they are "
+                         "not discarded by the new idea or by missing historical definitions. Rebuild any "
+                         "missing reference-grounded subjects from the current media/notes, not old descriptions.")
         return text
 
     user_with_evidence = request_text(bool(tail_count))

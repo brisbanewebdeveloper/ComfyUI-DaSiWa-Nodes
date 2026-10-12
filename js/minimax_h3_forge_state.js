@@ -17,7 +17,7 @@ export function refTemplate(text = "", definitions) {
 }
 
 export function inheritedDefinitions(text, previous = {}, current = {}) {
-  let removed = false;
+  let removed = false, rebuild = false;
   const byIdentity = Object.fromEntries(Object.entries(current).map(([tag, identity]) => [identity, tag]));
   const remap = value => String(value || "").replace(/<(Picture|Video|Audio)\s+(\d+)>/g, (tag, kind, n) => {
     const identity = previous[`<${kind} ${Number(n)}>`];
@@ -31,13 +31,15 @@ export function inheritedDefinitions(text, previous = {}, current = {}) {
       const citations = [...block.matchAll(/<(Picture|Video|Audio)\s+(\d+)>/g)];
       if (citations.some(([, kind, n]) => !byIdentity[previous[`<${kind} ${Number(n)}>`]])) {
         removed = true;
+        if (citations.some(([, kind, n]) => current[`<${kind} ${Number(n)}>`])) rebuild = true;
         return false;
       }
       return true;
     }).map(remap).join("").trim();
   const fields = refPromptFields(text);
   const result = fields ? refTemplate(remap(text), cleanDefinitions(fields.subject_definitions)) : cleanDefinitions(text);
-  return { text: result.trim(), warning: removed ? "Reference-bound definitions for removed, replaced or unverified media were omitted. Unbound identities were kept; review the remaining subjects." : "" };
+  const warning = removed ? "Historical reference-bound descriptions were omitted where their identity mapping could not be verified. Unbound identities were kept." : "";
+  return { text: result.trim(), warning: rebuild ? `${warning} Current references remain enabled; Forge rebuilds their grounding from the current media and notes.` : warning };
 }
 
 export function referenceTags(references) {
