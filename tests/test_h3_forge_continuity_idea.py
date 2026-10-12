@@ -148,6 +148,8 @@ def test_enabled_current_references_are_required_without_inherited_mapping(draft
     assert "OLD_ACTOR" not in user
     assert "CURRENT_ACTOR: silver helmet and green jacket" in user
     assert "required inputs, not optional inspiration" in system
+    assert "explicitly cite its current source" in system
+    assert "subject/style pictures are cited inside Subject definitions" in system
     assert "Missing historical identity mappings discard only old descriptions" in system
     assert "ENABLED CURRENT conditioning references" in user
     assert user.index("ENABLED CURRENT conditioning references") > user.index("Authoritative new next-action idea:")
@@ -156,3 +158,14 @@ def test_enabled_current_references_are_required_without_inherited_mapping(draft
     else:
         assert images == []
     assert "<Picture 1>" in result["fields"]["ref"]["subject_definitions"]
+
+
+def test_structured_reference_omission_is_visible_not_silently_accepted(draft_context, monkeypatch):
+    inputs, tail, _ = draft_context
+    model = Model(structured_raw("<Subject 1> A green triangle."), True)
+    monkeypatch.setattr(forge, "backends", lambda _: {"openai": model})
+    result = forge.generate_continuity_draft({}, "Rotate slowly", str(tail), "openai:test", {},
+        input_directory=str(inputs), references=[{"kind": "image", "role": "subject", "path": "ref.png"}],
+        structured=True)
+    assert any("Enabled <Picture 1> has no source citation" in warning for warning in result["warnings"])
+    assert result["saw_images"] == 3

@@ -497,11 +497,23 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
         raise ForgeError("bad_mode", "Structured continuity requires REF2VA.")
     if not isinstance(existing_definitions, str) or len(existing_definitions) > 12000:
         raise ForgeError("bad_prompt", "Existing definitions must be text of at most 12,000 characters.")
+    reference_contract = (
+        "For current subject or style references, each derived <Subject N> definition must "
+        "explicitly cite its current source <Picture N>, <Video N> or <Audio N>. Describe visible "
+        "reference appearance in that definition and use the defined subject in the new action. "
+        "For example: <Subject 1> is the visible object from <Picture 1>, followed by its observed "
+        "appearance. Do not output a free-floating appearance description without its source citation. "
+        "Keyframe references get their own <Picture N> definition and retention entry; subject/style "
+        "pictures are cited inside Subject definitions, not declared as keyframes. retention_analysis "
+        "must name the current media whose assigned properties are retained. Source-tail frames are "
+        "never numbered conditioning references. "
+    ) if references else ""
     system = CONTINUATION_SYSTEM
     if structured:
         system = CONTINUATION_SYSTEM.replace("Output only the next-shot prompt, no markdown or analysis.",
             "Preserve explicitly supplied Subject IDs; allocate new IDs after existing ones. "
-            "Do not inherit stale actions, timestamps or media citations. Write all six sections for "
+            "Do not inherit stale actions, timestamps or media citations. " + reference_contract +
+            "Write all six sections for "
             "one uninterrupted next shot, no markdown or analysis. Use exactly these output markers:\n" +
             "\n".join(f"===SEGMENT: {label} ===" for label, _ in _REF_FIELDS))
     if references:
@@ -578,7 +590,7 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
             filenames = ensure_tail_thumbnails(metadata, directory)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             filenames = []
-            warnings.append(f"Tail frames unavailable; text context only: {exc}")
+            warnings.append(f"Tail frames unavailable; source history is text-only: {exc}")
         root = os.path.realpath(directory)
         for filename in filenames[-4:]:
             path = os.path.realpath(os.path.join(root, filename))
@@ -659,6 +671,10 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
         prompt = simple_prompt(fields, "REF2VA", extension_frames / 24)
         warnings += check_prompt(fields, "REF2VA", extension_frames / 24, prompt, bundle["max_output_chars"])
         warnings += group_warnings(fields["ref"]["subject_definitions"], references)
+        _, current_pictures = format_references(references, "REF2VA")
+        for ref, tag in current_pictures:
+            if ref.get("role") in ("subject", "style") and tag not in fields["ref"]["subject_definitions"]:
+                warnings.append(f"Enabled {tag} has no source citation in subject_definitions; its grounding may be missing. Review before applying.")
     if not prompt or len(prompt) > bundle["max_output_chars"]:
         raise ForgeError("bad_prompt", "Forge returned an empty or oversized continuation prompt.")
     if next_idea:
