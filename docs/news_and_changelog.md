@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-12**. Older history lives in the 
 
 ## News
 
+- **Seamless Loop RTX backend (0.5.13):** Adds opt-in RTX Frame Generation transition interpolation, LOW/MEDIUM/HIGH quality (HIGH default) and CUDA device selection. Native RIFE/FILM remains the default; existing widget positions and exact-endpoint behavior stay unchanged. RTX needs no RIFE/FILM checkpoint and does not multiply video FPS. Small real RTX 5090 tests cover overlap/short bridges, CPU/CUDA input and default/custom caller streams. [Usage and limits →](seamless_loop.md)
+
 - **Enhanced Video Combine memory use (10-12, 0.5.12):** Frame-wise pingpong encoding without a reversed batch copy; bit-depth detection samples before CPU/float32 conversion, including strided inputs. Disabled frame passthrough retains no source storage. Adds default-off `free_memory_if_needed` for pressure-triggered native cache/pinned-memory reclamation before encoding and at five-second wall-clock intervals. Live inputs remain allocated; no global GPU offload or swap-free guarantee. [Memory use and limits →](enhanced_video_combine.md#memory-use-on-long-videos)
 
 - **Director audio/video preview (10-12, 0.5.12):** Full-file audio amplitude waveform; audio and video previews share highlighted crop, draggable endpoints/range, draggable/keyboard playback cursor and source-time readout. Play crop waits for readiness/seek completion and uses a local media Blob if HTTP seeking is refused. Reuses timeline peaks; browser decoding combines channel peaks without cancelling stereo signals. Closing the preview stops playback and releases visual resources. Fixes a queued-pause race that could disable the Play crop end boundary. [Usage →](minimax_h3_director.md#work-in-the-timeline)

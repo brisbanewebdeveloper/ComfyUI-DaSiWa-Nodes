@@ -1,4 +1,6 @@
-"""Automatic circular overlap morphing; uses ComfyUI's native interpolation models."""
+"""Automatic circular overlap morphing with native RIFE/FILM or RTX interpolation."""
+import contextlib
+import inspect
 import logging
 import math
 import os
@@ -112,6 +114,60 @@ def _interpolator_from_patcher(patcher, shape):
     return interpolate
 
 
+@contextlib.contextmanager
+def _load_rtx_interpolator(shape, mode, device_id):
+    try:
+        from . import nodes_rtx_frame_generation as fg
+    except ImportError:
+        import nodes_rtx_frame_generation as fg
+    effect_class, modes, encodings, _ = fg._dasiwa_fg_sdk()
+    if mode not in ('LOW', 'MEDIUM', 'HIGH'):
+        raise ValueError("Unsupported RTX loop quality mode.")
+    if isinstance(device_id, bool) or not isinstance(device_id, int) or device_id < 0:
+        raise ValueError("rtx_device_id must be a nonnegative CUDA index.")
+    if not torch.cuda.is_available() or device_id >= torch.cuda.device_count():
+        raise RuntimeError("RTX Seamless Loop requires an available NVIDIA CUDA device.")
+    device = torch.device(f'cuda:{device_id}')
+    h, w = shape[1:3]
+    with torch.cuda.device(device), fg._dasiwa_fg_stream(device):
+        effect = effect_class(mode=getattr(modes, mode),
+            automatic_shot_change_detection_enabled=False, device=device_id,
+            **({'image_encoding': encodings.RGB8}
+               if 'image_encoding' in inspect.signature(effect_class).parameters else {}))
+        try:
+            effect.input_width, effect.input_height = w, h
+            effect.frame_multiplier = 2
+            effect.load()
+
+            def interpolate(a, b, t):
+                _check_interrupt()
+                if a.device.type == 'cuda' and a.device != device:
+                    torch.cuda.synchronize(a.device)
+                if b.device.type == 'cuda' and b.device != device:
+                    torch.cuda.synchronize(b.device)
+                x = fg._dasiwa_fg_prepare(a, device, False)
+                y = fg._dasiwa_fg_prepare(b, device, False)
+                torch.cuda.synchronize(device)
+                forward = torch.empty_like(a)
+                backward = torch.empty_like(a)
+                result = effect.run_at_timestep(x, y, t, shot_change=False,
+                                               non_blocking=False, stream_ptr=0)
+                fg._dasiwa_fg_copy_pair_output(result, forward, device, False)
+                _check_interrupt()
+                result = effect.run_at_timestep(y, x, 1-t, shot_change=False,
+                                               non_blocking=False, stream_ptr=0)
+                fg._dasiwa_fg_copy_pair_output(result, backward, device, False)
+                frame = (forward + backward) * .5
+                if not torch.isfinite(frame).all():
+                    raise RuntimeError("RTX loop interpolation produced non-finite pixels.")
+                return frame.clamp(0, 1)
+
+            yield interpolate
+        finally:
+            torch.cuda.synchronize(device)
+            fg._dasiwa_fg_close_effect(effect)
+
+
 class DaSiWa_SeamlessLoop:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("images",)
@@ -125,13 +181,19 @@ class DaSiWa_SeamlessLoop:
         models = [name for name in folder_paths.get_filename_list('frame_interpolation')
                   if name.lower().endswith('.safetensors')]
         return {"required": {"images": ("IMAGE",)}, "optional": {
-            "model_name": (models, {"tooltip": "Native RIFE or FILM safetensors in models/frame_interpolation."}),
+            "model_name": (models or ["(no native models)"], {"tooltip": "RIFE / FILM only: native safetensors in models/frame_interpolation. Ignored for RTX Frame Generation."}),
             "exact_endpoint": ("BOOLEAN", {"socketless": True, "default": False, "tooltip": "Copy the first frame to the end: exact pixels, but one duplicate frame on repeat. Disable for continuous playback."}),
+            "interpolation_backend": (["RIFE / FILM", "RTX Frame Generation"], {"default": "RIFE / FILM", "tooltip": "RIFE / FILM: native checkpoint interpolation (default). RTX Frame Generation: NVIDIA VFX pair interpolation without a RIFE/FILM checkpoint; requires a supported NVIDIA GPU and SDK. Both morph only the loop transition, not the whole video's frame rate."}),
+            "rtx_mode": (["LOW", "MEDIUM", "HIGH"], {"default": "HIGH", "tooltip": "RTX only: LOW favors speed, MEDIUM is the middle tier, HIGH favors quality. Ignored for RIFE / FILM."}),
+            "rtx_device_id": ("INT", {"default": 0, "min": 0, "max": 8, "tooltip": "RTX only: CUDA device index, 0 is the first GPU. Ignored for RIFE / FILM. Output still follows ComfyUI's intermediate-device policy."}),
         }}
 
     @classmethod
-    def IS_CHANGED(cls, images, model_name='', exact_endpoint=False):
+    def IS_CHANGED(cls, images, model_name='', exact_endpoint=False,
+                   interpolation_backend='RIFE / FILM', rtx_mode='HIGH', rtx_device_id=0):
         import folder_paths
+        if interpolation_backend == 'RTX Frame Generation':
+            return interpolation_backend
         path = folder_paths.get_full_path('frame_interpolation', model_name)
         if path:
             stat = os.stat(path)
@@ -139,7 +201,10 @@ class DaSiWa_SeamlessLoop:
         return model_name
 
     @torch.inference_mode()
-    def execute(self, images, model_name='', exact_endpoint=False):
+    def execute(self, images, model_name='', exact_endpoint=False,
+                interpolation_backend='RIFE / FILM', rtx_mode='HIGH', rtx_device_id=0):
+        if interpolation_backend not in ('RIFE / FILM', 'RTX Frame Generation'):
+            raise ValueError("Unsupported Seamless Loop interpolation backend.")
         if images.ndim != 4 or images.shape[-1] != 3 or images.shape[0] == 0 or min(images.shape[1:3]) < 1:
             raise ValueError("Seamless Loop expects a non-empty RGB IMAGE batch [frames, height, width, 3].")
         preview = _preview(images)
@@ -151,43 +216,46 @@ class DaSiWa_SeamlessLoop:
         start, end, k, psnr = _analyze(preview)
         import comfy.model_management as mm
         output_device = mm.intermediate_device()
-        interpolate = _load_interpolator(model_name, images.shape)
-        if not k:
-            # Tiny batches have insufficient context for overlap analysis: bridge the two endpoints.
-            k = max(3, len(images))
-            output = torch.empty((len(images) + k + int(exact_endpoint), *images.shape[1:]),
-                                 dtype=images.dtype, device=output_device)
-            output[:len(images)] = images
-            for j in range(k):
-                _check_interrupt()
-                output[len(images)+j] = interpolate(images[-1], images[0], (j+1)/(k+1))
-            count = len(images) + k
-        else:
-            count = end - start - k
-            output = torch.empty((count + int(exact_endpoint), *images.shape[1:]),
-                                 dtype=images.dtype, device=output_device)
-            middle = end - start - 2*k
-            output[:middle] = images[start+k:end-k]
-            from comfy.utils import ProgressBar
-            progress = ProgressBar(k)
-            for j in range(k):
-                _check_interrupt()
-                a, b = images[end-k+j], images[start+j]
-                u = j / (k-1)
-                t = u*u*(3-2*u)
-                if j == 0:
-                    frame = a
-                elif j == k-1:
-                    frame = b
-                else:
-                    # Bounded local exposure matching, with zero correction at both joins.
-                    delta = (b.float().mean((0, 1)) - a.float().mean((0, 1))).clamp(-.04, .04)
-                    weight = 4*t*(1-t)
-                    aa = (a + delta.to(a.dtype)*(.5*weight)).clamp(0, 1)
-                    bb = (b - delta.to(b.dtype)*(.5*weight)).clamp(0, 1)
-                    frame = interpolate(aa, bb, t)
-                output[middle+j] = frame
-                progress.update(1)
+        backend = (_load_rtx_interpolator(images.shape, rtx_mode, rtx_device_id)
+                   if interpolation_backend == 'RTX Frame Generation'
+                   else contextlib.nullcontext(_load_interpolator(model_name, images.shape)))
+        with backend as interpolate:
+            if not k:
+                # Tiny batches have insufficient context for overlap analysis: bridge the two endpoints.
+                k = max(3, len(images))
+                output = torch.empty((len(images) + k + int(exact_endpoint), *images.shape[1:]),
+                                     dtype=images.dtype, device=output_device)
+                output[:len(images)] = images
+                for j in range(k):
+                    _check_interrupt()
+                    output[len(images)+j] = interpolate(images[-1], images[0], (j+1)/(k+1))
+                count = len(images) + k
+            else:
+                count = end - start - k
+                output = torch.empty((count + int(exact_endpoint), *images.shape[1:]),
+                                     dtype=images.dtype, device=output_device)
+                middle = end - start - 2*k
+                output[:middle] = images[start+k:end-k]
+                from comfy.utils import ProgressBar
+                progress = ProgressBar(k)
+                for j in range(k):
+                    _check_interrupt()
+                    a, b = images[end-k+j], images[start+j]
+                    u = j / (k-1)
+                    t = u*u*(3-2*u)
+                    if j == 0:
+                        frame = a
+                    elif j == k-1:
+                        frame = b
+                    else:
+                        # Bounded local exposure matching, with zero correction at both joins.
+                        delta = (b.float().mean((0, 1)) - a.float().mean((0, 1))).clamp(-.04, .04)
+                        weight = 4*t*(1-t)
+                        aa = (a + delta.to(a.dtype)*(.5*weight)).clamp(0, 1)
+                        bb = (b - delta.to(b.dtype)*(.5*weight)).clamp(0, 1)
+                        frame = interpolate(aa, bb, t)
+                    output[middle+j] = frame
+                    progress.update(1)
         if exact_endpoint:
             output[-1].copy_(output[0])
         # The visible wrap lies in the untouched source, not at an interpolator endpoint.

@@ -84,12 +84,13 @@ Workflow-only labels for the classic canvas and Nodes 2.0. Add **Lable (DaSiWa)*
 
 ![Seamless Loop](assets/DaSiWa-Seamless-Loop.png)
 
-One `IMAGE` batch in, one `IMAGE` batch out. A native RIFE/FILM safetensors combo selects a checkpoint from `models/frame_interpolation/`.
+One `IMAGE` batch in, one `IMAGE` batch out. Choose native **RIFE / FILM** (default) or **RTX Frame Generation** for the loop transition.
 
 - Automatic trim/overlap selection using PSNR/MSE, local SSIM, edges, temporal differences and exposure analysis.
-- Bidirectional native interpolation, eased overlap morphing and bounded local color correction; original middle frames remain unchanged.
+- Bidirectional pair interpolation, eased overlap morphing and bounded local color correction; original middle frames remain unchanged.
+- RIFE/FILM selects a native safetensors checkpoint from `models/frame_interpolation/`. RTX uses NVIDIA VFX without that checkpoint, with LOW/MEDIUM/HIGH quality (HIGH default) and a CUDA device selector.
 - `exact_endpoint` is off by default for continuous cyclic playback; enable it only when identical first/last pixels are required.
-- No additional dependency. Output duration can change; audio must be aligned downstream.
+- Native interpolation needs no additional dependency; RTX requires a supported NVIDIA GPU and `nvidia-vfx` with VideoFrameGeneration. This does not multiply the whole video's FPS. Output duration can change; audio must be aligned downstream.
 - Visible seams may remain with incompatible motion or scene changes; residual temporal discontinuities are logged.
 
 [Usage, model compatibility and references →](docs/seamless_loop.md)
