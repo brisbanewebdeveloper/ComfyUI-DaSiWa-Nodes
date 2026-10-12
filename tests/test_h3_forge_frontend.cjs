@@ -70,11 +70,26 @@ test('inherited identity citations remap automatically after image reorder', () 
   assert.equal(result.warning, '');
 });
 
-test('missing or unknown reference mapping removes citations, not approved identities', () => {
+test('missing or unknown reference mapping omits reference-bound identities', () => {
   const result = helpers().inheritedDefinitions('<Subject 7> Alice: red hair, <Picture 1>.', {}, {});
-  assert.ok(result.text.includes('<Subject 7> Alice: red hair'));
-  assert.ok(!result.text.includes('<Picture 1>'));
+  assert.equal(result.text, '');
   assert.ok(result.warning);
+});
+
+test('removed reference drops its complete multiline definition, not other subjects', () => {
+  const { inheritedDefinitions } = helpers();
+  const text = '<Subject 1> Removed dancer from <Picture 1>.\nBlue coat and red hair.\n<Subject 2> Bob from <Picture 2>.\n<Subject 8> Manually defined lamp.';
+  const result = inheritedDefinitions(text, { '<Picture 1>': 'alice', '<Picture 2>': 'bob' }, { '<Picture 1>': 'bob' });
+  assert.equal(result.text, '<Subject 2> Bob from <Picture 1>.\n<Subject 8> Manually defined lamp.');
+  assert.ok(result.warning.includes('omitted'));
+});
+
+test('replacing or disabling a reference cannot retain its textual appearance', () => {
+  const { inheritedDefinitions } = helpers();
+  for (const current of [{}, { '<Picture 1>': 'replacement' }]) {
+    const result = inheritedDefinitions('<Subject 1> Red-haired dancer from <Picture 1>.', { '<Picture 1>': 'old' }, current);
+    assert.equal(result.text, '');
+  }
 });
 
 function directorHook({ items = [], continuing = false, useReferences = false, prompt = '' } = {}) {
@@ -196,7 +211,8 @@ test('template after swapping pictures remaps existing sections before snapshott
 test('definitions are inherited automatically but stale hidden builder fields are ignored', () => {
   const { hook, builderState } = directorHook({ continuing: true, prompt: helpers().refTemplate('Old action', '<Subject 9> Alice from <Picture 1>.') });
   const definitions = hook.existingDefinitions();
-  assert.ok(definitions.text.includes('<Subject 9> Alice'));
+  assert.equal(definitions.text, '');
+  assert.ok(definitions.warning);
   assert.ok(!definitions.text.includes('Old action'));
   assert.ok(!definitions.text.includes('<Picture 1>'));
   builderState.simple_prompt = 'Replacement unstructured story';
@@ -246,7 +262,22 @@ test('a replacement file in the same timeline slot never inherits the old media 
   const before = referenceSnapshot(forgeReferences([{ id: 'v', type: 'video', value: 'old.mp4', slot: 0 }], 'REF2VA'));
   const after = referenceSnapshot(forgeReferences([{ id: 'v', type: 'video', value: 'new.mp4', slot: 0 }], 'REF2VA'));
   const result = inheritedDefinitions('<Subject 1> Alice from <Video 1>.', before, after);
-  assert.ok(!result.text.includes('<Video 1>'));
+  assert.equal(result.text, '');
+});
+
+test('removed timeline references stay removed after workflow serialization and template insertion', () => {
+  const { hook, continuityHook, state, c } = directorHook({ continuing: true, useReferences: true, items: [
+    { id: 'old', type: 'image', value: 'old.png', slot: 0 },
+  ] });
+  c.continuation_prompt = helpers().refTemplate('Sit down.', '<Subject 1> Old dancer from <Picture 1>.\nRed hair and blue coat.');
+  c.forge_reference_snapshot = helpers().referenceSnapshot(hook.references());
+  state.items = [];
+  c.forge_reference_snapshot = JSON.parse(JSON.stringify(c.forge_reference_snapshot));
+  assert.equal(hook.existingDefinitions().text, '');
+  continuityHook.insertTemplate();
+  const fields = helpers().refPromptFields(c.continuation_prompt);
+  assert.equal(fields.subject_definitions, '');
+  assert.equal(fields.detailed_description, 'Sit down.');
 });
 
 test('Forge canvas uses Director output widgets, not reference image dimensions', () => {

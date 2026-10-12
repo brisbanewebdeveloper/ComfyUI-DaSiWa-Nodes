@@ -405,6 +405,7 @@ async function open(node) {
   // Continuity identities belong to the Director prompt, not a second Forge editor.
   const definitions = { value: inherited.text };
   const structured = el("input", { type: "checkbox", checked: !!continuity && mode === "REF2VA" && (continuity.use_references || !!refPromptFields(hook.currentPrompt?.())) });
+  if (inherited.warning) box.append(el("span", { className: "muted", textContent: inherited.warning }));
   if (continuity && mode === "REF2VA") {
     box.append(el("label", {}, structured, " Structured REF2VA draft"));
     box.append(el("span", { className: "muted", textContent: continuity.use_references ? "Timeline reference media and RefMods are enabled for the extension. Existing identities are carried forward; new subjects are defined for review." : "Timeline reference media and RefMods are off. Enable Use REF2VA references and RefMods above to apply the Director's current references during the extension; they are not restored from the checkpoint." }));

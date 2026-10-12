@@ -90,3 +90,42 @@ def test_vision_rejection_restores_history_and_keeps_idea_last(draft_context, mo
     assert "<historical_scene_context>" in retry and "OLD SCENE" in retry
     assert retry.index("Authoritative new next-action idea:") > retry.index("Ignore attachment claims")
     assert not result["vision"]
+
+
+@pytest.mark.parametrize("sees", [True, False])
+def test_removed_reference_definitions_cannot_reenter_from_source_or_current(draft_context, monkeypatch, sees):
+    _, tail, _ = draft_context
+    stale = "<Subject 1> REMOVED_RED_HAIR from <Picture 1>.\nREMOVED_BLUE_COAT.\n<Subject 8> A manually defined lamp."
+    model = Model("The lamp lights up.", sees)
+    monkeypatch.setattr(forge, "backends", lambda _: {"openai": model})
+    result = forge.generate_continuity_draft(
+        {"prompt": old_prompt(definitions=stale)}, "Light the lamp", str(tail), "openai:test", {},
+        current_prompt=old_prompt(definitions=stale), existing_definitions=stale, references=[])
+    user = model.calls[0][2]
+    assert "REMOVED_RED_HAIR" not in user and "REMOVED_BLUE_COAT" not in user
+    assert "<Picture 1>" not in user
+    assert "<Subject 8> A manually defined lamp." in user
+    assert any("omitted" in w for w in result["warnings"])
+    assert model.calls[0][3] == (["old.jpg", "new.jpg"] if sees else [])
+
+
+def test_source_definition_is_not_rebound_to_replacement_in_same_slot(draft_context, monkeypatch):
+    inputs, tail, refs = draft_context
+    model = Model("The new actor sits down.", False)
+    monkeypatch.setattr(forge, "backends", lambda _: {"openai": model})
+    stale = old_prompt(definitions="<Subject 1> OLD_RED_HAIR from <Picture 1>.")
+    forge.generate_continuity_draft({"prompt": stale}, "Sit down", str(tail), "openai:test", {},
+        current_prompt=stale, references=refs, input_directory=str(inputs),
+        existing_definitions="<Subject 2> NEW_ACTOR from <Picture 1>.")
+    user = model.calls[0][2]
+    assert "OLD_RED_HAIR" not in user
+    assert "<Subject 2> NEW_ACTOR from <Picture 1>." in user
+
+
+def test_unmapped_plain_media_history_is_not_reused_without_vision(draft_context, monkeypatch):
+    _, tail, _ = draft_context
+    model = Model("A lamp lights up.", False)
+    monkeypatch.setattr(forge, "backends", lambda _: {"openai": model})
+    forge.generate_continuity_draft({"prompt": "REMOVED_ACTOR from <Picture 1> dances."}, "Light a lamp", str(tail), "openai:test", {})
+    assert "REMOVED_ACTOR" not in model.calls[0][2]
+

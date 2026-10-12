@@ -19,14 +19,25 @@ export function refTemplate(text = "", definitions) {
 export function inheritedDefinitions(text, previous = {}, current = {}) {
   let removed = false;
   const byIdentity = Object.fromEntries(Object.entries(current).map(([tag, identity]) => [identity, tag]));
-  const result = String(text || "").replace(/<(Picture|Video|Audio)\s+(\d+)>/g, (tag, kind, n) => {
+  const remap = value => String(value || "").replace(/<(Picture|Video|Audio)\s+(\d+)>/g, (tag, kind, n) => {
     const identity = previous[`<${kind} ${Number(n)}>`];
     const replacement = identity && byIdentity[identity];
     if (replacement) return replacement;
     removed = true;
     return "";
   });
-  return { text: result.trim(), warning: removed ? "Existing identities were kept; unverified media links were removed. Forge will relate them to the current references." : "" };
+  const cleanDefinitions = value => String(value || "").split(/(?=^[ \t]*(?:[-*][ \t]+)?<(?:Subject|Picture|Video|Audio)\s+\d+>)/m)
+    .filter(block => {
+      const citations = [...block.matchAll(/<(Picture|Video|Audio)\s+(\d+)>/g)];
+      if (citations.some(([, kind, n]) => !byIdentity[previous[`<${kind} ${Number(n)}>`]])) {
+        removed = true;
+        return false;
+      }
+      return true;
+    }).map(remap).join("").trim();
+  const fields = refPromptFields(text);
+  const result = fields ? refTemplate(remap(text), cleanDefinitions(fields.subject_definitions)) : cleanDefinitions(text);
+  return { text: result.trim(), warning: removed ? "Reference-bound definitions for removed, replaced or unverified media were omitted. Unbound identities were kept; review the remaining subjects." : "" };
 }
 
 export function referenceTags(references) {

@@ -437,12 +437,21 @@ def _continuity_fields(text):
         return None
 
 
+def _safe_inherited_definitions(text, references=None):
+    blocks = re.split(r"(?=^[ \t]*(?:[-*][ \t]+)?<(?:Subject|Picture|Video|Audio)\s+\d+>)", text, flags=re.M)
+    return "".join(block for block in blocks if not (
+        re.search(r"<(?:Picture|Video|Audio)\s+\d+>", block) if references is None
+        else media_citation_warnings(block, references)
+    )).strip()
+
+
 def _continuity_history(previous, has_tail):
     fields = _continuity_fields(previous)
     if fields is not None:
+        definitions = _safe_inherited_definitions(fields["subject_definitions"])
         return ("Previous subject definitions (identity context only, not actions):\n" +
-                fields["subject_definitions"]) if fields["subject_definitions"] else ""
-    if has_tail or not previous:
+                definitions) if definitions else ""
+    if has_tail or not previous or re.search(r"<(?:Picture|Video|Audio)\s+\d+>", previous):
         return ""
     return ("<historical_scene_context>\n" + previous[:24000] +
             "\n</historical_scene_context>\nThis is past scene evidence only, not a next-action draft. "
@@ -521,6 +530,12 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
             "\nApply detail and creativity within this one uninterrupted continuation: no cuts, restart or repeated dialogue.")
     user += "\n" + output_canvas_context(options.get("output_canvas"))
     images, warnings = [], []
+    safe_definitions = _safe_inherited_definitions(existing_definitions, references)
+    if safe_definitions != existing_definitions.strip():
+        warnings.append("Definitions bound to unavailable conditioning media were omitted; review the remaining subjects.")
+    existing_definitions = safe_definitions
+    if next_idea and any(re.search(r"<(?:Picture|Video|Audio)\s+\d+>", value) for value in (previous, current_prompt)):
+        warnings.append("Historical reference-bound definitions are not inherited without current identity mapping; current approved definitions and source-tail evidence guide this draft.")
     if references or structured:
         user = user.replace("The attached images, if present, are chronological frames from the END of the source.",
                             "Images labeled Tail frame are chronological frames from the END of the source; conditioning reference images are labeled separately.")
@@ -576,7 +591,9 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
             context = _continuity_history(previous, has_tail)
             current_fields = _continuity_fields(current_prompt)
             if current_fields is not None and not existing_definitions:
-                context += "\nCurrent subject definitions (identity context only, not actions):\n" + current_fields["subject_definitions"]
+                definitions = _safe_inherited_definitions(current_fields["subject_definitions"])
+                if definitions:
+                    context += "\nCurrent subject definitions (identity context only, not actions):\n" + definitions
             text = context + "\n\n" + text
             text += ("\n\nAuthoritative new next-action idea:\n" + next_idea +
                      "\n\nFollow this idea after the seam. Reference instructions and historical actions "
