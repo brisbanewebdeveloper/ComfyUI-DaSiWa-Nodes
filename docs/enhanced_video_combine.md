@@ -78,7 +78,7 @@ Connect a ComfyUI `AUDIO` value to mux it with the video.
 
 ## Preview and frame controls
 
-The completed video is shown inside a compact framed preview with source-native aspect ratio. Its native canvas player controls appear only while the pointer is over the video, and hide again when it leaves; there is no duplicate play button or timeline. Preview audio follows the same hover behavior. The framed row below the video holds Autoplay, Mute, and first/last-frame export controls. Autoplay and Mute are stored in the node properties, so both are saved with the workflow and restored on load.
+The completed video is shown inside a compact framed preview with source-native aspect ratio. Native player controls remain available on hover. A separate seek bar below the video supports clicking, dragging, and keyboard seeking without relying on the browser's embedded control hit-testing inside a zoomed node. **Fullscreen** or a double-click on the video opens the player in fullscreen; the native fullscreen control is enabled too. Preview audio follows the same hover behavior. The framed row below the video holds Autoplay, Mute, and first/last-frame export controls. Autoplay and Mute are stored in the node properties, so both are saved with the workflow and restored on load.
 
 `save_first_frame` and `save_last_frame` write the selected source frame as a native-resolution PNG beside the encoded video. The names retain the complete video basename, including the counter and optional audio marker:
 
@@ -94,7 +94,7 @@ video_00002-audio-last-frame.png
 
 No browser download or popup is used. The encoded video and each selected PNG are included in the `ui.images` payload, so all generated files appear in ComfyUI Assets.
 
-Many Chromium/Linux installations cannot decode H.265 in a canvas/video element (and can similarly misreport AV1 support while rendering 10-bit hardware streams as black). For H.265 and AV1 outputs, the node streams an FFmpeg-transcoded fragmented H.264 MP4 response; the requested output file is not changed and no preview file is created.
+Cached previews preserve the requested output: AV1, VP9, H.265, 10-bit, and other non-native outputs use a separate H.264/AAC MP4 in ComfyUI's temporary directory with HTTP byte-range support. Download always points to the original file.
 
 `pingpong` appends reverse interior frames, giving a seamless forward/reverse loop. `pass_frames` returns the encoded frame sequence instead of an empty `IMAGE` result.
 

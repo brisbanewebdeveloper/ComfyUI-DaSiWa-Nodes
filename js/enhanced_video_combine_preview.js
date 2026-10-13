@@ -103,7 +103,7 @@ function showHelpDialog() {
             <dt><b>image animation</b></dt><dd>Animated WebP and Animated AVIF are manual image-animation outputs. They are excluded from Auto codec/container selection, ignore the codec choice, and omit connected audio.</dd>
             <dt><b>bit depth / quality</b></dt><dd>With an explicit codec, Auto bit depth detects 8- or 10-bit frame precision; codec Auto uses browser-compatible 8-bit output. Lower quality values retain more detail and create larger files.</dd>
             <dt><b>audio</b></dt><dd>Connect AUDIO to mux it. Choose Auto, AAC, Opus, or MP3 plus a target bitrate; Auto uses Opus for WebM and AAC for MKV/MP4. Crop to audio ends video at the audio duration. Preview sound is on only while the pointer is over the video. Check <b>Mute</b> to keep the preview permanently silent; the choice is saved with the node.</dd>
-            <dt><b>preview</b></dt><dd>H.264/MP4 can use the native output. AV1, VP9, HEVC, 10-bit, and other outputs use a cached seekable H.264/AAC preview with one-second keyframes and HTTP range support. Autoplay and Mute are saved with the node.</dd>
+            <dt><b>preview</b></dt><dd>H.264/MP4 can use the native output. AV1, VP9, HEVC, 10-bit, and other outputs use a cached seekable H.264/AAC preview with one-second keyframes and HTTP range support. Autoplay and Mute are saved with the node. Use the seek bar below the video to click or drag to a position; Fullscreen or a video double-click opens fullscreen.</dd>
             <dt><b>other</b></dt><dd>Ping-pong reverses interior frames for a loop. Save metadata embeds the ComfyUI workflow. Pass frames keeps frames available downstream.</dd>
         </dl>`;
     document.body.append(dialog);
@@ -169,7 +169,7 @@ app.registerExtension({
             // Native controls hide themselves when the pointer leaves. Toggling the
             // controls property recreates Chromium's media layer inside a DOM widget.
             preview.controls = true;
-            preview.controlsList = "nodownload nofullscreen noremoteplayback";
+            preview.controlsList = "nodownload noremoteplayback";
             preview.disablePictureInPicture = true;
             preview.style.cssText = "display:block;width:100%;background:#111;cursor:pointer";
 
@@ -179,6 +179,39 @@ app.registerExtension({
             const duration = document.createElement("span");
             const fps = document.createElement("span");
             info.append(resolution, duration, fps);
+
+            // A DOM range remains usable when the browser's shadow-DOM media
+            // timeline is too small or hit-tested incorrectly in a scaled node.
+            const transport = document.createElement("div");
+            transport.style.cssText = "display:flex;align-items:center;gap:6px;margin-top:4px;font:11px sans-serif;color:var(--input-text,#ddd)";
+            const timeline = document.createElement("input");
+            timeline.type = "range";
+            timeline.min = "0";
+            timeline.max = "0";
+            timeline.step = "0.01";
+            timeline.value = "0";
+            timeline.disabled = true;
+            timeline.setAttribute("aria-label", "Seek video preview");
+            timeline.title = "Seek video preview";
+            timeline.style.cssText = "flex:1;min-width:0;cursor:pointer";
+            const position = document.createElement("span");
+            position.style.cssText = "white-space:nowrap;font-variant-numeric:tabular-nums";
+            const updateTimeline = () => {
+                const available = Number.isFinite(preview.duration) && preview.duration > 0 && preview.readyState >= 1;
+                timeline.disabled = !available;
+                timeline.max = String(available ? preview.duration : 0);
+                timeline.value = String(available ? preview.currentTime : 0);
+                position.textContent = `${formatTime(preview.currentTime)} / ${formatTime(preview.duration)}`;
+            };
+            timeline.addEventListener("input", () => {
+                if (!timeline.disabled) preview.currentTime = Math.min(preview.duration, Math.max(0, Number(timeline.value)));
+                updateTimeline();
+            });
+            for (const eventName of ["loadedmetadata", "durationchange", "timeupdate", "seeked", "emptied"]) {
+                preview.addEventListener(eventName, updateTimeline);
+            }
+            updateTimeline();
+            transport.append(timeline, position);
 
             const actions = document.createElement("div");
             actions.style.cssText = "display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:8px;padding:6px;box-sizing:border-box;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08);border-radius:4px;font:11px sans-serif";
@@ -229,7 +262,20 @@ app.registerExtension({
             help.textContent = "Help";
             help.title = "Enhanced Video Combine Help";
             help.addEventListener("click", showHelpDialog);
-            actions.append(saveFirstFrameLabel, saveLastFrameLabel, muteLabel, autoPlayLabel, help, download);
+            const fullscreen = document.createElement("button");
+            fullscreen.type = "button";
+            fullscreen.textContent = "Fullscreen";
+            fullscreen.title = "Open video preview in fullscreen";
+            fullscreen.disabled = !(preview.requestFullscreen || preview.webkitEnterFullscreen);
+            const enterFullscreen = () => {
+                if (preview.requestFullscreen) {
+                    preview.requestFullscreen().catch((error) => console.warn("[Enhanced Video Combine] Fullscreen unavailable", error));
+                } else if (preview.webkitEnterFullscreen) {
+                    preview.webkitEnterFullscreen();
+                }
+            };
+            fullscreen.addEventListener("click", enterFullscreen);
+            actions.append(saveFirstFrameLabel, saveLastFrameLabel, muteLabel, autoPlayLabel, fullscreen, help, download);
 
             preview.addEventListener("loadedmetadata", () => {
                 previewWidget.aspectRatio = preview.videoWidth / preview.videoHeight;
@@ -281,11 +327,15 @@ app.registerExtension({
                 // if the native player controls are used to un-mute it.
                 if (this.properties?.muted && !preview.muted) preview.muted = true;
             });
-            preview.addEventListener("dblclick", (event) => event.preventDefault());
-            [preview, info, actions, saveFirstFrame, saveFirstFrameLabel, saveLastFrame, saveLastFrameLabel, autoPlay, autoPlayLabel, mute, muteLabel, download].forEach(stopNodeInteraction);
+            preview.addEventListener("dblclick", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                enterFullscreen();
+            });
+            [preview, info, transport, timeline, actions, saveFirstFrame, saveFirstFrameLabel, saveLastFrame, saveLastFrameLabel, autoPlay, autoPlayLabel, mute, muteLabel, fullscreen, help, download].forEach(stopNodeInteraction);
 
-            root.append(preview, info, actions);
-            const previewHeight = () => (previewNode.size[0] - 20) / (previewWidget?.aspectRatio ?? 16 / 9) + 110;
+            root.append(preview, transport, info, actions);
+            const previewHeight = () => (previewNode.size[0] - 20) / (previewWidget?.aspectRatio ?? 16 / 9) + 138;
             previewWidget = this.addDOMWidget("video_preview", "preview", root, {
                 serialize: false,
                 hideOnZoom: false,
