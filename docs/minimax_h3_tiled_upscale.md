@@ -79,10 +79,10 @@ Optional:
 | `continuity_mask_strength` | FLOAT | Default **1.0**, range 0–1, step 0.05. Used only with soft refine on an active continuation. |
 | `spatial_tiling` | BOOLEAN | Default **on**. Spatial diffusion tiles; off uses the full target canvas. |
 | `temporal_chunking` | BOOLEAN | Default **on**. Temporal windows for learned upscale and diffusion; off uses the full video. |
-| `spike_guard` | BOOLEAN | Default **off**. Experimental burn-signature correction after learned upscale, before refinement. Ignored for interpolation. |
-| `guard_sensitivity` | FLOAT | Default **4.3**. Lower thresholds affect more regions and increase false-positive risk. |
-| `guard_strength` | FLOAT | Default **1.0**, range 0–1. Zero skips the guard without allocations or claimed repairs. |
-| `guard_mode` | combo | `burn_direction` (default) or `both`. Both also detects the opposite signature and is experimental. |
+| `spike_guard` | BOOLEAN | Default **off**. Experimental correction of strong local latent deviations introduced by learned upscale, before refinement. May suppress real detail; ignored for interpolation. |
+| `guard_sensitivity` | FLOAT | Detection threshold, default **4.3**. Lower values detect more regions; higher values target stronger outliers. Does not control correction strength. |
+| `guard_strength` | FLOAT | Correction amount, default **1.0**, range 0–1. Zero preserves the latent and skips guard allocations. Does not control the detection threshold. |
+| `guard_mode` | combo | `burn_direction` (default): one known signed latent-channel artifact pattern. `both`: the same pattern in either sign, with greater false-positive risk. Not a spatial image direction or general artifact detector. |
 | `enforce_memory_budget` | BOOLEAN | Visible as **Memory Planning**, default **on**. Off bypasses estimated diffusion-budget rejection at your own OOM risk; spatial/temporal planning, ComfyUI memory management and host RAM/spike guard checks remain active. Existing values and widget position are preserved. |
 | `memory_reserve_pct` | FLOAT | **Memory Reserve (%)** slider, 0–100% in 5-point steps, default **5%**. Workspace reserve after device/model reservations. Visible only while Memory Planning is on; appended after all old widgets. |
 
@@ -152,9 +152,16 @@ The learned H3 checkpoint selector uses ComfyUI's `latent_upscale_models` catalo
 
 ## Spike Guard (experimental, default off)
 
-The optional guard adapts the GPLv3 algorithm submitted in **Talon Upscale Node fix V4**. It compares the learned-upscaled latent, shrunk to the source grid, with the source and scores a fixed 24-channel signature reported for `minimax_h3_latent_upscaler_3d_conv_v1_bf16`. It is postprocessing, not a repair of the learned model. Other checkpoints and general quality improvements are not established.
+Spike Guard is an optional postprocessing step for learned latent upscaling. It looks for unusually strong local deviations from the source that may decode into blown-out or discolored patches. It compares the enlarged latent, downsampled to the source grid, with the original latent and scores the difference against a known 24-channel artifact pattern. It then corrects detected regions toward a source-consistent low-resolution signal, with soft transitions at their edges, before diffusion refinement. It does not clamp RGB brightness or change the learned upscaler itself.
 
-`burn_direction` detects the submitted signed signature; `both` additionally detects its opposite. The latter has higher false-positive risk and needs real scene comparisons. Detection uses clip-wide statistics, grows connected outliers in space/time, and feathers correction into neighboring cells/latent frames. It can remove legitimate detail. Reports distinguish detected coarse cells from the actual changed output cells, give output-pixel bounding boxes with exclusive upper bounds at any scale, and name changed **latent** frames, not decoded video-frame indices. Strength zero does not claim repairs.
+The pattern was evaluated for `minimax_h3_latent_upscaler_3d_conv_v1_bf16`; effectiveness on other checkpoints and general image-quality improvements are not established. Leave the guard off unless learned upscale introduces suspicious patches, then compare against off using the same source and effective noise seed. Lower sensitivity detects more regions; strength determines how strongly those regions are corrected. If useful texture or intentional highlights are affected, raise sensitivity, lower strength, or disable the guard.
+
+**Detection mode:**
+
+- `burn_direction` (default) detects unusually strong matches to one known signed pattern across the 24 latent channels. “Direction” refers to the sign of that channel pattern, not left/right/up/down in the image. The name does not mean that all bright or overexposed regions are artifacts.
+- `both` detects outliers in either sign of the same pattern. It is not a detector for all artifact types and can flag more legitimate image content; use it only when the default mode misses a suspect region and compare the result.
+
+Detection uses clip-wide statistics, grows connected outliers in space/time, and feathers correction into neighboring cells/latent frames. It can remove legitimate detail. Reports distinguish detected coarse cells from the actual changed output cells, give output-pixel bounding boxes with exclusive upper bounds at any scale, and name changed **latent** frames, not decoded video-frame indices. Strength zero does not claim repairs.
 
 Output retains its incoming dtype. Statistics/residuals stay FP32 because quantizing small residuals to FP16 can change median/MAD normalization and threshold decisions. Shrinking and correction are frame-wise: no extra full-output FP32 video copy. Additional coarse-grid maps still scale with duration; RAM estimates include these and frame temporaries. Cancellation is checked within guard work. Memory refusal is explicit, without silently disabling the selected correction or unloading unrelated models.
 
