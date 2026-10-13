@@ -84,6 +84,7 @@ def test_switches_control_learned_upscale_and_diffusion(setup_node,monkeypatch,s
         assert kw['spatial_tiling'] is spatial
         assert kw['temporal_chunking'] is temporal
         assert kw['enforce_budget'] is (enforce and denoise > 0)
+        assert kw['workspace_reserve_pct'] == 5.0
         return dict(tile_width=32 if spatial else 64,tile_height=64,overlap=0,
                     chunk_tokens=10 if temporal else shape[2],
                     temporal_overlap_tokens=5 if temporal else 0,explanation='TEST switch plan')
@@ -120,7 +121,7 @@ def test_switches_control_learned_upscale_and_diffusion(setup_node,monkeypatch,s
     assert f"enforce_memory_budget={'on' if enforce else 'off'}" in report
     assert f"spatial_split={'on' if spatial and denoise else 'off'}" in report
     assert f"temporal_split={'on' if temporal else 'off'}" in report
-    assert list(schema)[-1]=='enforce_memory_budget'
+    assert list(schema)[-2:]==['enforce_memory_budget','memory_reserve_pct']
     assert schema['spike_guard'][1]['default'] is False
     assert schema['guard_mode'][0] == ['burn_direction','both']
     assert schema['spatial_tiling'][1]['default'] is True
@@ -254,7 +255,7 @@ def test_refine_schema_and_callable_defaults_without_external_sigmas():
     assert list(schema['optional']) == ['director_guide','vae','start_image','negative','cfg','sampler_name',
         'scheduler','memory_budget_mb','sampler','noise','continuity_context','upscale_precision',
         'continuity_soft_refine','continuity_mask_strength','spatial_tiling','temporal_chunking',
-        'spike_guard','guard_sensitivity','guard_strength','guard_mode','enforce_memory_budget']
+        'spike_guard','guard_sensitivity','guard_strength','guard_mode','enforce_memory_budget','memory_reserve_pct']
     assert u.DaSiWaH3TiledUpscale.RETURN_TYPES == ('LATENT','STRING')
     assert 'sigmas' not in schema['required']
     assert 'sigmas' not in schema['optional']
@@ -285,7 +286,8 @@ def test_legacy_widget_values_keep_their_slots(setup_node,guard_enabled,mode):
         if isinstance(spec[0],list) or spec[0] in ('INT','FLOAT','BOOLEAN','STRING')]
     restored=dict(zip(widget_names,legacy_values))
     assert restored == dict(zip(legacy_names,legacy_values))
-    assert widget_names[-1] == 'enforce_memory_budget'
+    assert widget_names[-2:] == ['enforce_memory_budget','memory_reserve_pct']
+    assert schema['optional']['memory_reserve_pct'][1]['default'] == 5.0
     assert schema['optional']['enforce_memory_budget'][1]['default'] is True
 
 
@@ -302,6 +304,7 @@ def test_old_positional_callable_keeps_guard_parameters(setup_node,monkeypatch):
     assert bound.arguments['guard_strength'] == 0.4
     assert bound.arguments['guard_mode'] == 'both'
     assert bound.arguments['enforce_memory_budget'] is True
+    assert bound.arguments['memory_reserve_pct'] == 5.0
 
 
 def test_model_selector_has_only_explicit_choices(setup_node,monkeypatch):
@@ -562,3 +565,23 @@ def test_real_guard_pipeline_aligns_corrected_tail_before_refinement(setup_node,
     assert torch.equal(out['samples'].tensors[0][:,:,:1],aligned[0][:,:,:1])
     assert out['samples'].tensors[1] is audio and torch.equal(video,original)
     assert 'changed latent frames' in report and 'output area' in report
+
+
+@pytest.mark.parametrize('reserve', [0, 5, 10, 100])
+@pytest.mark.parametrize('enforce', [True, False])
+@pytest.mark.parametrize('denoise', [0, 0.2])
+def test_node_reserve_reaches_actual_planner(setup_node,monkeypatch,reserve,enforce,denoise):
+    monkeypatch.setattr(helpers,'plan_tiles',REAL_PLAN_TILES)
+    monkeypatch.setattr(u,'sample_chunk',lambda model,pc,nc,cfg,samples,*a:samples)
+    video=torch.zeros(1,24,5,2,2)
+    audio=torch.zeros(1,32,2,8)
+    kwargs=dict(memory_reserve_pct=reserve,enforce_memory_budget=enforce,denoise=denoise)
+    if reserve == 100 and enforce and denoise > 0:
+        with pytest.raises(MemoryError,match='100%'):
+            u.DaSiWaH3TiledUpscale().upscale(setup_node,[],{'samples':NestedTensor((video,audio))},**kwargs)
+    else:
+        output,report=u.DaSiWaH3TiledUpscale().upscale(setup_node,[],{'samples':NestedTensor((video,audio))},**kwargs)
+        assert output['samples'].tensors[0].shape == (1,24,5,4,4)
+        assert output['samples'].tensors[1] is audio
+        assert f'memory_reserve_pct={reserve}' in report
+        assert f'{reserve}% headroom' in report

@@ -63,14 +63,14 @@ Optional:
 
 | Socket | Type | Behavior |
 | --- | --- | --- |
-| `director_guide` | `MINIMAX_H3_DIRECTOR_GUIDE` | The Director's `guide` output. Endpoint images are re-encoded at target size (with `vae`). Image Inpaint guides are rejected. |
+| `director_guide` | `MINIMAX_H3_DIRECTOR_GUIDE` | The Director's `guide` output. Endpoint images are re-encoded at target size (with `vae`). Image Inpaint uses the same short native I2V upscale/refine path. |
 | `vae` | `VAE` | H3 **video** VAE. Required whenever endpoint pixels are supplied. |
 | `start_image` | `IMAGE` | Full-resolution original start pixels; overrides the guide's first frame. |
 | `negative` | `CONDITIONING` | Required when `cfg` ≠ 1. |
 | `cfg` | FLOAT | Default **1.0**, range 0–20, step 0.1. |
 | `sampler_name` | combo | Default `euler`. |
 | `scheduler` | combo | Default `simple`. Sigmas are always generated internally from scheduler, steps and denoise; there is no external `sigmas` input. |
-| `memory_budget_mb` | INT | Default 0 (automatic device-memory estimate), max 131072. Caps the planning budget, not the allocator. |
+| `memory_budget_mb` | INT | Legacy/API input, hidden in the UI. Default 0 (automatic device-memory estimate), max 131072. Existing nonzero caps are preserved; not an allocator limit. |
 | `sampler` | `SAMPLER` | Overrides `sampler_name` when connected. |
 | `noise` | `NOISE` | Overrides the internal seed-based noise when connected. |
 | `continuity_context` | `DF_H3_CONTINUITY_CONTEXT` | The Director Guide's `continuity_context`. Enables cumulative-timeline continuation handling. |
@@ -83,7 +83,8 @@ Optional:
 | `guard_sensitivity` | FLOAT | Default **4.3**. Lower thresholds affect more regions and increase false-positive risk. |
 | `guard_strength` | FLOAT | Default **1.0**, range 0–1. Zero skips the guard without allocations or claimed repairs. |
 | `guard_mode` | combo | `burn_direction` (default) or `both`. Both also detects the opposite signature and is experimental. |
-| `enforce_memory_budget` | BOOLEAN | Default **on**. Off bypasses estimated diffusion-budget rejection, not spatial/temporal planning, ComfyUI memory management, or host RAM/spike guard checks. Actual OOM remains possible. Appended to preserve old widget positions. |
+| `enforce_memory_budget` | BOOLEAN | Visible as **Memory Planning**, default **on**. Off bypasses estimated diffusion-budget rejection at your own OOM risk; spatial/temporal planning, ComfyUI memory management and host RAM/spike guard checks remain active. Existing values and widget position are preserved. |
+| `memory_reserve_pct` | FLOAT | **Memory Reserve (%)** slider, 0–100% in 5-point steps, default **5%**. Workspace reserve after device/model reservations. Visible only while Memory Planning is on; appended after all old widgets. |
 
 Outputs: `latent` (`LATENT`, native packed H3 video/audio for the existing decode path) and `plan` (`STRING`, diagnostic report of the actual selected settings; it need not be connected).
 
@@ -100,6 +101,12 @@ Optionally connect the existing Director's **guide output** directly to `directo
 The Director can already have resized its images. A new VAE encode avoids stretching the old conditioning latent, but cannot recover detail removed upstream. To use full-resolution original start-image pixels, optionally connect them to `start_image`; these override the guide's first frame. Supplying endpoint images requires a matching video VAE. Endpoint re-encoding only runs when `denoise > 0` and no Continuity is active; at `denoise = 0` it is skipped, and during an active continuation the source-tail guide replaces it.
 
 Without a Director, the node uses the incoming model, latent and conditioning. An optional `start_image` plus video VAE also works in this mode. Without endpoint pixels, existing keyframe latents are spatially resized as necessary; do not interpret this path as a verified fix for first-frame softness.
+
+### Image Inpaint
+
+Connect the completed initial sampler output before extracting a still. The Director's Image Inpaint mode is a native five-frame I2V pass (two video latent tokens plus its packed audio stream), not an arbitrary masked-latent inpainting API. Both interpolation and learned upscale preserve the complete short sequence; `denoise > 0` refines it using the existing native H3 sampler. Connect `director_guide` and the H3 video `vae` to re-encode the start-image anchor at target resolution during refinement. At `denoise = 0`, no endpoint encoding or diffusion is performed.
+
+After upscale, split/decode the video latent and use **Get Image from Batch** to select the same output frame as before. The upscaler does not extract a still, change timing, or generate replacement audio. An incoming `noise_mask` remains unsupported; finish that masked pass first. Continuity remains video-only.
 
 ## Continuity
 
@@ -126,7 +133,8 @@ Existing workflow node IDs are preserved; only the visible display name changes.
 - `temporal_chunking`: default **on**, controls temporal windows in both learned latent upscale and diffusion. Off processes the full video in each pass, without temporal stitching.
 - The switches independently allow automatic spatial/temporal splitting; they do not force a split. A fitting canvas uses one native full-canvas pass, and a short video can use one temporal window. Off is never silently re-enabled. Both off requests full-canvas/full-duration processing. Enabled temporal planning considers windows up to 30 latent tokens; disabled temporal planning keeps the complete video.
 - `enforce_memory_budget`: default **on**, including old saved/API workflows that omit it. Off lets the preferred spatial layout and temporal-window policy run beyond the estimate, at the risk of actual OOM. It does not disable either split setting or the host RAM/spike guard checks. To attempt full-canvas/full-duration refinement despite a budget refusal, turn all three switches off.
-- Existing node/input/output IDs, widget slots, connected inputs and callable parameter positions are retained. The new input is appended after the guard controls. The less conservative estimate can choose larger tiles or longer windows; compatibility does not imply bit-identical seeded output.
+- **Memory Reserve (%)** (`memory_reserve_pct`): slider from 0 to 100%, in 5-point steps, default 5%. It reserves workspace after device and model reservations, and is shown only with Memory Planning on. 0% removes only this additional reserve, not explicit cost checks. 100% leaves no refinement budget and gives a clear error with planning on and `denoise > 0`. Planning off ignores the reserve for plan acceptance; `denoise=0` also bypasses diffusion-budget enforcement. The aggressive 5% default is not a measured universal OOM-safe margin.
+- Existing node/input/output IDs, widget slots, connected inputs and callable parameter positions are retained. The reserve input is appended after all existing controls; hidden legacy MB caps and saved Memory Planning values remain effective. The less conservative estimate can choose larger tiles or longer windows; compatibility does not imply bit-identical seeded output.
 
 - `continuity_soft_refine`: opt-in, default **off**. Only active continuation with `continuity_context` and diffusion refinement uses it. A globally indexed smoothstep mask ramps video refine strength across the existing source-tail overlap, reaching full strength at the new section. It does not extend the overlap, touch audio, or perform RGB color matching.
 - `continuity_mask_strength`: 0–1, default **1**. 0 reproduces the hard mask; 1 applies the full ramp; intermediate values mix hard and smooth masks. Start at 1 and compare against off using the same latent/seed. A minimal overlap offers fewer temporal tokens for smoothing. Without active continuation, or at `denoise = 0`, the feature has no effect. The plan report shows `soft_refine_mask=off` or the active strength. This may reduce refinement-induced light/color steps but cannot guarantee a flicker-free join.
@@ -136,7 +144,7 @@ Existing workflow node IDs are preserved; only the visible display name changes.
 - `upscale_precision`: `auto`, `bf16`, `fp16`, or `fp32` for the learned latent-upscaler only. Auto uses ComfyUI hardware/backend policy and global precision flags (including force-fp16), with FP32 on CPU. Explicit modes cast weights and computation to the selected dtype without silently falling back; unsupported operations may fail on your backend. The incoming diffusion model and VAE are unchanged; interpolation does not use this setting. The plan reports the actual learned-upscaler dtype.
 - `cfg`: defaults to 1. Values other than 1 require `negative` conditioning.
 - `sampler_name` and `scheduler`: native sampler/schedule selections (defaults `euler`, `simple`). Optional connected `sampler` and `noise` objects override the internal equivalents. The native `CFGGuider` runs on a model-scoped clone with a tiled wrapper only for actual spatial splits; positive/negative conditioning and existing model patches remain active. There is no external `GUIDER` input. Sigmas are always generated internally from this node's scheduler, steps and denoise; there is no external `sigmas` input. The same sampler can be shared with the initial render without reusing its full-denoise schedule.
-- `memory_budget_mb`: 0 uses free device memory plus reclaimable ComfyUI-managed weight residency on the same device (clones are counted once). A nonzero value caps that total planning pool, not the allocator. ComfyUI's configured VRAM reservation is deducted. Dynamic and normal/low-VRAM offloading reserve up to 40% of the remaining pool for weight streaming/casts instead of requiring the full checkpoint in VRAM; this 40% is a node throughput heuristic, not an aimdo residency rule. Full-resident loading budgets the complete model. Audio/text/references, full-window sampler/blending buffers and 25% runtime headroom also consume the budget. Other applications' VRAM is never counted as reclaimable.
+- `memory_budget_mb`: 0 uses free device memory plus reclaimable ComfyUI-managed weight residency on the same device (clones are counted once). A nonzero value caps that total planning pool, not the allocator. ComfyUI's configured VRAM reservation is deducted. Dynamic and normal/low-VRAM offloading reserve up to 40% of the remaining pool for weight streaming/casts instead of requiring the full checkpoint in VRAM; this 40% is a node throughput heuristic, not an aimdo residency rule. Full-resident loading budgets the complete model. Audio/text/references, full-window sampler/blending buffers and the selected workspace reserve (default 5%) also consume the budget. Other applications' VRAM is never counted as reclaimable.
 - Automatic spatial planning first tries a preferred layout with at most **2.1 MP per tile**, derived from the actual input and rounded target canvas. A fitting canvas uses one tile; larger canvases use few source-shaped tiles, normally with 128px overlap. The planner searches native-phase-aligned temporal windows for that geometry. If no window fits the memory estimate, it searches smaller spatial tiles down to the existing **512×512 pixel minimum**, or the actual canvas dimension when smaller. Disabled dimensions stay fixed. There are no manual tile-size, overlap or megapixel inputs.
 - Keyframe attention rows scale with each tile; native references/audio stay unsliced in the estimate. Full-target keyframe buffers, a possible previous-window anchor and pending Continuity tail guides are reserved. The plan reports preferred layout or memory fallback, actual tile/window geometry and estimated model calls. Candidate ranking is a geometric/offload proxy, not a measured runtime optimum. Larger tiles can require shorter temporal windows, so the new layout is not a universal speedup. With budget enforcement on, an insufficient estimate still fails with an actionable budget error. `denoise=0` does not require a viable diffusion budget. Estimates are not an allocator limit or OOM guarantee.
 
@@ -160,7 +168,7 @@ Temporal windows respect H3's repeating token/frame phase. Learned upscaling inc
 
 Audio participates as frozen conditioning during refinement. The returned audio tensor is the original input stream, not a newly generated, interpolated or crossfaded soundtrack. Output timing and full latent stream lengths remain unchanged.
 
-The node accepts native H3 batch-one packed video/audio latents. Fun Control/ControlNet, unfinished source denoise masks and Image Inpaint are not supported. Existing sampler/model patches are preserved except that another model-function wrapper must not already be installed.
+The node accepts native H3 batch-one packed video/audio latents, including the Director's Image Inpaint five-frame I2V pass. Fun Control/ControlNet and unfinished source denoise masks are not supported. Existing sampler/model patches are preserved except that another model-function wrapper must not already be installed.
 
 Input, output, full noise and stitched video buffers still scale with video duration. Internal chunks bound working intermediates, not total CPU storage. A conservative RAM check rejects excessive staging allocations; no disk backing or other services are stopped. Cancellation is checked between tiles/windows. Learned upscale models are released through native ComfyUI management.
 

@@ -242,7 +242,11 @@ class DaSiWaH3TiledUpscale:
             'guard_mode': (['burn_direction', 'both'], {'default': 'burn_direction',
                 'tooltip': 'burn_direction: submitted signed burn signature. both: also detect its opposite; experimental, with more false-positive risk.'}),
             'enforce_memory_budget': ('BOOLEAN', {'default': True,
-                'tooltip': 'On: plan within the estimated diffusion budget with 25% workspace headroom. Off: allow plans beyond that estimate; actual OOM remains possible. Does not disable spatial/temporal planning, ComfyUI memory management, or host RAM and spike guard checks.'}),
+                'display_name': 'Memory Planning',
+                'tooltip': 'On: enforce the estimated diffusion budget with the selected memory reserve. Off: skip estimated budget rejection; you are responsible for actual OOM risk. Spatial/temporal planning, ComfyUI memory management and host RAM/spike guard checks remain active.'}),
+            'memory_reserve_pct': ('FLOAT', {'default': 5.0, 'min': 0.0, 'max': 100.0, 'step': 5.0, 'display': 'slider',
+                'display_name': 'Memory Reserve (%)',
+                'tooltip': 'Workspace reserve after device and model reservations. Default 5% is aggressive, not a VRAM guarantee. 0% still enforces explicit estimated costs; 100% leaves no refinement budget. Ignored when Memory Planning is off.'}),
         }}
 
     @torch.inference_mode()
@@ -254,7 +258,7 @@ class DaSiWaH3TiledUpscale:
                 continuity_soft_refine=False, continuity_mask_strength=1.0,
                 spatial_tiling=True, temporal_chunking=True,
                 spike_guard=False, guard_sensitivity=4.3, guard_strength=1.0, guard_mode='burn_direction',
-                enforce_memory_budget=True):
+                enforce_memory_budget=True, memory_reserve_pct=5.0):
         import comfy.model_management as mm
         import comfy.model_base
         import comfy.samplers
@@ -291,8 +295,8 @@ class DaSiWaH3TiledUpscale:
         width, height = target_size(video, scale)
         if director_guide is not None and not isinstance(director_guide, dict):
             raise ValueError('director_guide must be a MiniMax H3 Director guide.')
-        if director_guide is not None and director_guide.get('mode') == 'Image Inpaint':
-            raise ValueError('H3 Tiled Upscale handles video modes, not Image Inpaint.')
+        # Director Image Inpaint is a native five-frame I2V pass. Keep its
+        # complete AV latent through upscale/refine; extract the still after decode.
         device = mm.get_torch_device()
         budget, streaming_weights, reserved = refinement_memory_budget(model, device, memory_budget_mb)
         model_bytes = int(model.model_size()) if device.type != 'cpu' else 0
@@ -308,7 +312,8 @@ class DaSiWaH3TiledUpscale:
                           reserved_bytes=reserved + audio.numel() * (6 * audio.element_size() + 8),
                           audio_tokens=audio.shape[-2] * audio.shape[-1],
                           latent_element_size=video.element_size(), enforce_budget=enforce_memory_budget and denoise > 0,
-                          spatial_tiling=spatial_tiling, temporal_chunking=temporal_chunking)
+                          spatial_tiling=spatial_tiling, temporal_chunking=temporal_chunking,
+                          workspace_reserve_pct=memory_reserve_pct)
         ranges = temporal_ranges(video.shape[2], plan['chunk_tokens'], plan['temporal_overlap_tokens'])
         spatial_split = spatial_tiling and (plan['tile_width'] < width or plan['tile_height'] < height)
         # CPU staging is bounded by the complete output+noise, not constant-memory
@@ -381,6 +386,7 @@ class DaSiWaH3TiledUpscale:
                   f"spatial_tiling={'on' if spatial_tiling else 'off'}; "
                   f"temporal_chunking={'on' if temporal_chunking else 'off'}; "
                   f"enforce_memory_budget={'on' if enforce_memory_budget else 'off'}; "
+                  f"memory_reserve_pct={memory_reserve_pct:g}; "
                   f"spatial_split={'on' if spatial_split and denoise > 0 else 'off'}; "
                   f"temporal_split={'on' if len(ranges) > 1 else 'off'}; "
                   f"audio=original; {endpoint_info}; {guard_note}; {plan['explanation']}")

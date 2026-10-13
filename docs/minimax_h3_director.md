@@ -45,7 +45,7 @@ Only the active Director model socket is requested (lazy loading). A LoRA loader
 | L2VA | Finish at an image | Last-frame image |
 | FL2VA | Start and/or finish at an image | Up to two endpoint images; zero works as text-only |
 | REF2VA | Borrow identity, style, motion, composition or sound | Up to 9 images, 3 videos, 3 audio clips; 12 files total |
-| Image Inpaint | Edit/refine a still | Exactly one image, no video/audio; native five-frame pass yields one output frame (use Get Image from Batch) |
+| Image Inpaint | Edit/refine a still | Exactly one image, no video/audio references; native five-frame pass yields one output frame (use Get Image from Batch). Optional Enhanced Upscale goes before decode/extraction. |
 
 Endpoint modes accept images only. Switching modes hides incompatible timeline items rather than deleting them; switching back restores them. T2VA does not use those hidden references. REF2VA audio needs at least one visual reference. Each reference video/audio crop must be 2–15 seconds; combined visual video length and combined audio length must each stay within 15 seconds. The Director reports violations in its node status before native execution.
 

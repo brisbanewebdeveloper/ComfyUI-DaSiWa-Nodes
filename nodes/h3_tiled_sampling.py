@@ -104,7 +104,7 @@ def auto_local_tiles(source_width, source_height, target_width, target_height, m
 def plan_tiles(video_shape, target_width, target_height, memory_bytes,
                model_bytes=0, text_tokens=0, ref_tokens=0, *, streaming_weights=False,
                reserved_bytes=0, audio_tokens=0, latent_element_size=2, enforce_budget=True,
-               spatial_tiling=True, temporal_chunking=True, keyframe_tokens=0):
+               spatial_tiling=True, temporal_chunking=True, keyframe_tokens=0, workspace_reserve_pct=25.0):
     """Budget managed weight residency, full-window buffers and attention rows.
 
     Streaming reserves 40% of the pool for weights/casts rather than requiring
@@ -120,8 +120,15 @@ def plan_tiles(video_shape, target_width, target_height, memory_bytes,
         raise ValueError("Memory and conditioning estimates must be nonnegative")
     pool = max(0, int(memory_bytes) - int(reserved_bytes))
     weight_bytes = min(int(model_bytes), int(pool * 0.4)) if streaming_weights else int(model_bytes)
-    # Keep a 25% workspace reserve after device reservations and model weights.
-    budget = max(0, pool - weight_bytes) * 0.75
+    reserve = float(workspace_reserve_pct)
+    if not math.isfinite(reserve) or not 0 <= reserve <= 100:
+        raise ValueError("Workspace reserve must be finite and between 0 and 100 percent")
+    # Reserve applies after device reservations and managed weight residency.
+    budget = max(0, pool - weight_bytes) * (1 - reserve / 100)
+    if enforce_budget and reserve == 100:
+        raise MemoryError("H3 Memory Planning: 100% workspace reserve leaves no refinement budget. "
+                          "Lower memory_reserve_pct, disable Memory Planning at your own OOM risk, "
+                          "or set denoise=0.")
     total = int(video_shape[2])
     period = len(FRAME_PER_TOKEN)
     chunks = list(range(2 * period, min(total, 30) + 1, period)) if temporal_chunking else []
@@ -180,6 +187,7 @@ def plan_tiles(video_shape, target_width, target_height, memory_bytes,
                           f"{min_w}x{min_h}px window "
                           f"(spatial_tiling={spatial_tiling}, temporal_chunking={temporal_chunking}). "
                           "Enable tiling/chunking if disabled. "
+                          "Lower memory_reserve_pct or disable Memory Planning at your own OOM risk. "
                           "Increase memory_budget_mb if capped, reduce references/target size, "
                           "use a smaller diffusion model, or set denoise=0.")
     score, tw, th, overlap, chunk, rows = best
@@ -195,7 +203,7 @@ def plan_tiles(video_shape, target_width, target_height, memory_bytes,
                              f"budget enforcement={'on' if enforce_budget else 'off'}; "
                              f"{'preferred layout exceeds budget; smaller spatial search; ' if policy == 'memory_fallback' else ''}"
                              f"{rows} target rows after full-window buffers, "
-                             f"text/references/audio and 25% headroom; {tw}x{th}px tiles "
+                             f"text/references/audio and {reserve:g}% headroom; {tw}x{th}px tiles "
                              f"(minimum {min_w}x{min_h}px), {chunk} temporal tokens; "
                              f"{score[0]} forwards/step, {score[1]} processed video rows. Native period={period}. "
                              "Grid search minimizes calls then repeated rows, not measured runtime. "

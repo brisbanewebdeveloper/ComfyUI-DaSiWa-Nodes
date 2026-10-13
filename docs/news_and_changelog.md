@@ -2,9 +2,13 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-12**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-13**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **H3 reserve slider (0.5.16):** Enhanced Upscale exposes Memory Planning and a 0–100% Memory Reserve slider in 5-point steps, default 5%. Turning planning off bypasses estimated diffusion-budget rejection at the user's OOM risk; independent split settings, native memory management and host RAM guards remain active. The legacy MB cap is hidden but retained, and the appended slider preserves old workflow slots. The aggressive default is not a universal OOM guarantee.
+
+- **H3 Image Inpaint upscale (10-13, 0.5.15):** Enhanced Upscale accepts the Director's complete five-frame I2V pass instead of rejecting its guide mode. Interpolation and learned latent upscale support optional native diffusion refinement and start-image re-encoding; decode and extract the still afterward. Source denoise masks and video-only Continuity restrictions remain unchanged. Native CPU tests exercise the short sequence with full-canvas/tiled sampling and small random learned checkpoints; pretrained visual quality is a separate validation. [Wiring →](minimax_h3_tiled_upscale.md#image-inpaint)
 
 - **H3 Forge next-action priority (10-12, 0.5.14):** A nonblank continuation idea takes priority over the old action draft and reference instructions. Structured history contributes subject identity only; plain history is used as past-scene evidence when tail images are unavailable, including text-only retries after rejected images. Near-identical generated actions trigger an advisory warning, not an Apply block or automatic retry. Empty ideas retain the existing natural-continuation/current-draft path. [Usage and limits →](h3_continuity.md#forge-next-action-priority)
 
@@ -18,7 +22,7 @@ This changelog covers **2026-07-05 → 2026-10-12**. Older history lives in the 
 
 - **H3 memory planning (10-11, 0.5.10):** Enhanced Upscale adds default-on `enforce_memory_budget`, appended after existing widgets/callable parameters. Planning retains model/device/buffer accounting with 25% rather than 35% workspace headroom; disabling enforcement permits attempts beyond the diffusion estimate while retaining split settings and host RAM/spike guard checks. Single full-canvas plans use native sampling. Existing saved values stay in place; automatic geometry and seeded outputs can differ. Adapted from [PR #76](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/76), thanks to @sherics. [Controls and limits →](minimax_h3_tiled_upscale.md)
 
-**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10–0.5.14 entries above are subsequent updates, not those earlier development snapshots. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
+**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10–0.5.16 entries above are subsequent updates, not those earlier development snapshots. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
 
 - **RTX RAM-pressure cleanup and Free Both (0.5.9):** Both RTX nodes reclaim native execution caches and releasable model pins before rejecting a RAM output allocation, then re-check the safety budget. No running-executor reset or global GPU offload into RAM; cache eviction needs ComfyUI RAM-pressure cache support. The memory toolbar adds **Free Both**, retaining existing Free System RAM behavior. Full input/output batches still require storage.
 
@@ -148,6 +152,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.16 | 10-13 | H3 Memory Planning toggle and configurable reserve slider (0–100%, default 5%); legacy MB caps retained |
+| 0.5.15 | 10-13 | H3 Enhanced Upscale support for the Director Image Inpaint five-frame pass, including optional native refinement |
 | 0.5.14 | 10-12 | H3 Forge continuation idea priority, identity-only structured history, text-only fallback context and advisory repeated-action warning |
 | 0.5.13 | 10-12 | Seamless Loop opt-in RTX transition interpolation, quality and CUDA device selection; native RIFE/FILM default retained |
 | 0.5.12 | 10-12 | Director audio/video waveform, crop and playback cursor; seek readiness/Blob fallback; bounded Video Combine staging and opt-in RAM reclamation |
