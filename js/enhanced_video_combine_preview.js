@@ -224,7 +224,12 @@ app.registerExtension({
             download.addEventListener("click", (event) => {
                 if (download.href.endsWith("#")) event.preventDefault();
             });
-            actions.append(saveFirstFrameLabel, saveLastFrameLabel, muteLabel, autoPlayLabel, download);
+            const help = document.createElement("button");
+            help.type = "button";
+            help.textContent = "Help";
+            help.title = "Enhanced Video Combine Help";
+            help.addEventListener("click", showHelpDialog);
+            actions.append(saveFirstFrameLabel, saveLastFrameLabel, muteLabel, autoPlayLabel, help, download);
 
             preview.addEventListener("loadedmetadata", () => {
                 previewWidget.aspectRatio = preview.videoWidth / preview.videoHeight;

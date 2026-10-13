@@ -8,6 +8,8 @@ Run local Transformers, llama.cpp GGUF, loopback Ollama, or operator-configured 
 
 The simple way in. Type an idea, pick what the prompt is for, get a prompt back.
 
+In both the classic renderer and Nodes 2.0, `start_with` stays compact while the larger `idea` field takes the extra height when you resize the node.
+
 - `model`: one list of everything this machine can write with:
   - GGUF files and Hugging Face model folders in `ComfyUI/models/llm` (a `.gguf` runs through llama.cpp, a folder through Transformers);
   - `Ollama: <name>` for every model Ollama has installed, on this computer unless Settings say otherwise;

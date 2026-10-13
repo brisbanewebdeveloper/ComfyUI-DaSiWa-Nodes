@@ -121,6 +121,15 @@ function _viewState() {
 
 function positionValueEditor(overlay) {
   const { node, anchor, clientX, clientY } = overlay._editorOpts;
+  const surface = node?._loraSurface;
+  if (surface?.isConnected) {
+    const rect = surface.getBoundingClientRect();
+    const scale = rect.width / surface.width;
+    overlay.style.left = (rect.left + scale * (anchor[0] + overlay._editorGap)) + "px";
+    overlay.style.top = (rect.top + scale * anchor[1]) + "px";
+    overlay.style.transform = `scale(${scale})`;
+    return;
+  }
   const v = _viewState();
   if (!node?.pos || !v) {
     // View state unavailable: static placement at the original click.
@@ -504,6 +513,99 @@ function drawPill(ctx, t, x, y, w, h, label, val, color, zeroed) {
   ctx.textAlign = "left";
 }
 
+// Both renderers mount DOM widgets. Reuse the existing painter/hit tests rather
+// than maintaining a second stack editor or relying on canvas-only node hooks.
+function mountLoraSurface(node, calcHeight, getTooltipAt) {
+  if (!node.addDOMWidget || node._loraSurface) return;
+  const root = document.createElement("div");
+  root.style.cssText = "width:100%;min-width:0;flex:1;overflow:hidden;";
+  const surface = document.createElement("canvas");
+  surface.className = "dasiwa-lora-surface";
+  surface.style.cssText = "display:block;width:100%;";
+  root.append(surface);
+  node._loraSurface = surface;
+  const height = () => calcHeight(JSON.parse(node.properties.stack_data).length);
+  let frame = 0;
+  let removedFromGraph = false;
+  const paint = () => {
+    frame = 0;
+    surface.width = node.size[0];
+    surface.height = height();
+    root.style.height = `${surface.height}px`;
+    node.drawLoraStack(surface.getContext("2d"));
+  };
+  const repaint = () => {
+    if (!frame && !removedFromGraph) frame = requestAnimationFrame(paint);
+  };
+  const widget = node.addDOMWidget("lora_stack_ui", "custom", root, {
+    serialize: false, hideOnZoom: false, margin: 0,
+    getMinHeight: height, getMaxHeight: height, getHeight: height,
+  });
+  widget.serialize = false;
+  widget.computeSize = () => [node.size[0], height()];
+  const localPosition = event => {
+    const rect = surface.getBoundingClientRect();
+    return [(event.clientX - rect.left) * surface.width / rect.width,
+      (event.clientY - rect.top) * surface.height / rect.height];
+  };
+  surface.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    node.onMouseDown(event, localPosition(event));
+    repaint();
+  });
+  surface.addEventListener("pointermove", event => {
+    surface.title = getTooltipAt(node, localPosition(event));
+  });
+  surface.addEventListener("contextmenu", event => {
+    if (root.closest(".lg-node")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    app.canvas.processContextMenu(node, event);
+  });
+  const dirty = node.setDirtyCanvas;
+  node.setDirtyCanvas = function (...args) {
+    repaint();
+    return dirty?.apply(this, args);
+  };
+  const configure = node.onConfigure;
+  node.onConfigure = function (...args) {
+    const result = configure?.apply(this, args);
+    // Native serialized slots remain canonical, including array-only workflows.
+    if (args[0]?.widgets_values) {
+      for (const name of ["stack_data", "model_type", "use_cache"]) {
+        const value = this.widgets.find(w => w.name === name)?.value;
+        if (value !== undefined) this.properties[name] = value;
+      }
+    }
+    repaint();
+    return result;
+  };
+  const observer = new ResizeObserver(repaint);
+  observer.observe(root);
+  const added = node.onAdded;
+  node.onAdded = function (...args) {
+    const result = added?.apply(this, args);
+    removedFromGraph = false;
+    this._loraSurface = surface;
+    observer.observe(root);
+    repaint();
+    return result;
+  };
+  const removed = node.onRemoved;
+  node.onRemoved = function (...args) {
+    removedFromGraph = true;
+    observer.disconnect();
+    cancelAnimationFrame(frame);
+    frame = 0;
+    if (activeValueEditor?._editorOpts?.node === this) closeValueEditor();
+    this._loraSurface = null;
+    return removed?.apply(this, args);
+  };
+  repaint();
+}
+
 app.registerExtension({
   name: "DaSiWa.LTX2LoraLoader",
   async beforeRegisterNodeDef(nodeType, nodeData, app) {
@@ -530,6 +632,8 @@ app.registerExtension({
       this.size = [720, calcHeight(rows.length)];
 
       const hideWidget = widget => {
+        widget.hidden = true;
+        widget.options = { ...(widget.options || {}), hidden: true };
         widget.draw = () => {};
         widget.computeSize = () => [0, -4];
         return widget;
@@ -548,7 +652,11 @@ app.registerExtension({
         this.properties.use_cache = value;
         this.setDirtyCanvas(true);
       });
+      stackWidget.value = this.properties.stack_data;
+      modeWidget.value = this.properties.model_type;
+      cacheWidget.value = this.properties.use_cache;
       this.widgets = [hideWidget(stackWidget), hideWidget(modeWidget), hideWidget(cacheWidget)];
+      mountLoraSurface(this, calcHeight, getTooltipAt);
     };
 
     nodeType.prototype.getExtraMenuOptions = function () {
@@ -643,6 +751,10 @@ app.registerExtension({
     };
 
     nodeType.prototype.onDrawForeground = function (ctx) {
+      if (!this._loraSurface) this.drawLoraStack(ctx);
+    };
+
+    nodeType.prototype.drawLoraStack = function (ctx) {
       if (this.flags.collapsed) return;
       const data = JSON.parse(this.properties.stack_data);
       const t = THEMES[this.properties.theme || "a"];
@@ -841,8 +953,8 @@ app.registerExtension({
             keyCache[row.lora + "_p"] = true;
             fetch(`/dasiwa/ltx2/keycounts?lora=${encodeURIComponent(row.lora)}&model_type=${encodeURIComponent(modelType)}`)
               .then(r => r.json())
-              .then(d => { keyCache[row.lora] = { v: d.v, a: d.a }; app.graph.setDirtyCanvas(true); })
-              .catch(() => { keyCache[row.lora] = { v: "?", a: "?" }; });
+              .then(d => { keyCache[row.lora] = { v: d.v, a: d.a }; this.setDirtyCanvas(true); })
+              .catch(() => { keyCache[row.lora] = { v: "?", a: "?" }; this.setDirtyCanvas(true); });
           }
         }
 

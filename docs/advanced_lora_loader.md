@@ -60,6 +60,15 @@ With the Lora Loader, you can now:
 
 ## UI Controls
 
+The stack editor works in both the classic canvas renderer and **Nodes 2.0**.
+It uses ComfyUI's DOM-widget layer while retaining the existing themes, slot
+controls and serialized `stack_data`, `model_type` and `use_cache` inputs.
+Existing workflows do not need conversion. The LoRA application backend is unchanged.
+
+For an isolated frontend regression check (no model loading or queue execution):
+`uv run --no-project --with playwright python tools/verify_advanced_lora_frontend.py --url http://127.0.0.1:8199`.
+The test expects a separate ComfyUI instance serving this checkout and clears its browser graph.
+
 ### Rows (LoRA slots)
 
 Each row represents one LoRA slot. Columns are:

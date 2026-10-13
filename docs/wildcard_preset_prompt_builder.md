@@ -16,6 +16,8 @@ Select a subject independently for the positive or negative side. A weight of `1
 
 ## Selection visibility
 
+The category list and prompt previews remain in a compact scroll panel in both the classic renderer and Nodes 2.0. Click inside the panel to focus it before using the mouse wheel; modified wheel gestures remain available for ComfyUI's canvas navigation.
+
 Each Presets/Wildcards category header shows a green, right-aligned `✓ N selected` badge when it contains enabled subjects, and the category border is highlighted. This stays visible when the category is collapsed, making Random Select results and manual selections easy to find. The badge count applies to that section only: a preset and wildcard with the same subject name are independent selections.
 
 ## Library file

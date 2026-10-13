@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-13**. Older history lives in the 
 
 ## News
 
+- **Frontend fixes (Git update after 0.5.16):** Director manual prompt edits survive switching between a Continuity source and No source. Advanced LoRA Loader mounts its existing stack editor in both renderers; Prompt Writer keeps the prefix compact while the idea grows, Wildcard Builder retains its scroll panel, and Enhanced Video Combine exposes Help in Nodes 2.0. Saved node IDs and backend inputs remain unchanged; no package version bump.
+
 - **H3 reserve slider (0.5.16):** Enhanced Upscale exposes Memory Planning and a 0–100% Memory Reserve slider in 5-point steps, default 5%. Turning planning off bypasses estimated diffusion-budget rejection at the user's OOM risk; independent split settings, native memory management and host RAM guards remain active. The legacy MB cap is hidden but retained, and the appended slider preserves old workflow slots. The aggressive default is not a universal OOM guarantee.
 
 - **H3 Image Inpaint upscale (10-13, 0.5.15):** Enhanced Upscale accepts the Director's complete five-frame I2V pass instead of rejecting its guide mode. Interpolation and learned latent upscale support optional native diffusion refinement and start-image re-encoding; decode and extract the still afterward. Source denoise masks and video-only Continuity restrictions remain unchanged. Native CPU tests exercise the short sequence with full-canvas/tiled sampling and small random learned checkpoints; pretrained visual quality is a separate validation. [Wiring →](minimax_h3_tiled_upscale.md#image-inpaint)
@@ -226,6 +228,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### MiniMax H3 Director (v1)
 
+- **Git fix after 0.5.16:** Manual prompt edits immediately update the new-clip and continuation stores, preventing a source/No source switch from restoring an older Forge draft. Empty prompts and whitespace are preserved. Explicit Forge Apply and programmatic Continuity templates retain their context-specific behavior. Added source round-trip regression tests.
+
 - **10-12 (0.5.14):** Forge places a nonblank next-action idea after reference/context instructions and removes old story/draft actions from that request. Structured history retains subject definitions; plain history is omitted with source-tail evidence and restored as historical context for text-only fallback, with a fresh context-budget check. Action-only similarity warns without blocking Apply or regenerating; empty-idea behavior and reference/workflow settings are unchanged. Mocked-backend tests cover idea precedence, structured/plain history, repeated actions and rejected-image fallback.
 
 - **10-12 (0.5.12):** Audio previews show full-source channel amplitude peaks; audio/video previews share highlighted crop, independent draggable/keyboard playback cursor and source-time readout. Crop playback waits for readiness and seeking, falls back to a local Blob for non-seekable HTTP media, and stops at the selected end even after queued native pause events. Closing stops playback and releases preview resources; failed waveform decoding leaves playback/cropping available.
@@ -303,6 +307,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 
 ### Advanced LoRA Loader (formerly LTX-2.3)
 
+- **Git fix after 0.5.16:** Reuses the stack painter and pointer controls in a DOM canvas for classic and Nodes 2.0. Inline value editors follow the mounted surface; resize, removal/re-add and asynchronous key-count updates repaint it. Existing stack, model type and cache input slots remain canonical on workflow reload. Includes an isolated browser regression script; LoRA application is unchanged.
+
 - **09-08:** **Civitai mirror links + (i) panel rework (0.4.35):** the (i) panel now always shows **both** Civitai mirror links — the `.com` link labeled `BLUE:` (blue) and the `.red` link labeled `RED:` (red); the labels are plain text, only the URL is clickable. Backend (`nodes/lora_info.py`): the by-hash lookup runs on `.com` first and **falls back to the `.red` mirror** on a 404 (verified byte-identical mirror, same `modelId`/`versionId`), and results are memoized **including misses** — a negative lookup no longer re-hits the Civitai API on every panel open (the stored error text is preserved in the cache entry; the panel's **Refresh** button forces a re-lookup via `refresh=true`). Panel layout: the file name moved to its own full-width row above the controls (long folder paths wrap independently and can no longer stretch the button row), and the sha256 hint sits on its own row directly under the name (9 px, `user-select:all`). The earlier `.com`/`.red` domain selector buttons and the `civitai_domain` localStorage/property machinery were removed with the rework — both links are always shown.
 - **08-29:** **Trash button (0.4.29):** each slot row gained a trash button (plain canvas paths, ASCII-drawn trash-can, no emoji) placed directly right of the info button. Clicking it resets that slot's LoRA back to "None" (the STR / VIS / A multipliers are kept — exactly like picking "None" in the slot picker), so a LoRA can be unstacked without reopening the picker. The info button shifted slightly left (x 976 → 962) to make room; the trash button occupies the previous info x. UI-only, no backend change.
 - **08-29:** **LoRA info button (0.4.28):** each slot row gained an ⓘ glyph at its right edge. It opens an info panel with the LoRA's Civitai link (SHA-256 looked up on Civitai's `model-versions/by-hash` API, results cached in `lorainfo/`), trigger/trained words from the safetensors header and Civitai (click-select, copy), and preview images (Civitai plus a local sidecar image next to the LoRA if present). Two new GET-only routes (`/dasiwa/ltx2/lorainfo`, `/dasiwa/ltx2/loraimg`) in `nodes/lora_info.py`; no new dependencies.
@@ -322,6 +328,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 
 ### Enhanced Video Combine
 
+- **Git fix after 0.5.16:** Adds a Help button beside preview controls so the existing in-app guide is accessible in Nodes 2.0 as well as classic canvas. Classic title-bar help remains available.
+
 - **10-12 (0.5.12):** Encoding streams original/pingpong frames without an extended batch allocation. Bit-depth detection bounds its sample before CPU/float32 conversion, including non-contiguous input. `pass_frames=false` returns an empty tensor with no source storage. Adds optional default-off `free_memory_if_needed`: inactive caches, releasable pins, then active caches under pressure, with actual RAM rechecks and five-second wall-clock throttling. Live inputs and requested full-frame outputs still require memory; no global GPU-model offload. CPU/CUDA storage tests, native-cache eviction and a real PyAV encode are covered.
 
 - **09-19:** Video outputs are no longer advertised as `ui["images"]` assets; image-only consumers no longer receive video entries.
@@ -338,6 +346,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 
 ### Wildcard & Preset Prompt Builder
 
+- **Git fix after 0.5.16:** Keeps the category/preview panel height bounded in Nodes 2.0 and focuses the panel when clicking its non-interactive area, allowing native widget wheel capture to scroll its contents without changing canvas zoom. Native controls retain focus.
+
 - **10-03 (0.4.74, #62):** Reload saved selections and weights after node/graph configuration, including workflow and generated-image loading. The picker reflects serialized state and retains restored entries on the next interaction, including when the library loads before or after restoration.
 
 - **08-17:** library additions: Background, Intimate Backgrounds, Weapons & Items; duplicate entries merged.
@@ -345,6 +355,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 - **07-30:** node added: dual Booru / Natural-Language wildcard library, weighted bounded prompts, reproducible rerolls.
 
 ### LLM / VLM Analyze
+
+- **Git fix after 0.5.16:** Prompt Writer marks its native text fields for scoped Nodes 2.0 layout: start_with stays compact and idea receives extra node height. Classic sizing callbacks and serialized inputs are retained.
 
 - **10-09 (0.5.7):** Prompt Writer and Advanced nodes share saved single-user DaSiWa LLM server settings automatically; `DASIWA_LLM_ALLOW_SETTINGS` is no longer required. Local and configured server models remain listed together, including all sibling model folders and GGUFs below a common local directory. Environment priority, credential-source pairing and multi-user isolation are preserved.
 

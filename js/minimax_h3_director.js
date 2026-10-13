@@ -478,6 +478,13 @@ function install(node) {
     else builderState.simple_prompt = value;
     emit();
   }
+  function setEditedPrompt(value) {
+    // Manual edits belong to the visible prompt, not the selected source.
+    // Keep both execution contexts current so switching cannot restore an old Forge draft.
+    continuityState().continuation_prompt = value;
+    builderState.simple_prompt = value;
+    emit();
+  }
   let continuityClips = [], continuityLatest = "", continuityLoading = false, continuityError = "", continuityUploading = false;
   let closeContinuityAdvanced = null, refreshContinuityAdvanced = null;
   let continuitySummary = {}, savedSessions = [], sessionsLoaded = false, sessionsLoading = false, sessionError = "", pendingResume = "";
@@ -754,10 +761,10 @@ function install(node) {
     panel.replaceChildren();
     const helpers = document.createElement("div"); helpers.className = "ds-h3-actions ds-h3-prompt-toolbar ds-h3-modebar";
     const label = document.createElement("span"); label.className = "ds-h3-small"; label.textContent = isContinuing() ? `Prompt · Continuity Active · ${mode()}` : `${mode()} simple prompt`; helpers.append(label);
-    const simplePrompt = createBuilderField("Prompt", activePrompt(), { rows: 10, placeholder: isContinuing() ? "What happens next? Leave empty to continue naturally, or use Prompt Forge." : "Write the complete MiniMax H3 prompt...", onChange: setActivePrompt, fieldKey: "simple_prompt" }, fieldHeights);
+    const simplePrompt = createBuilderField("Prompt", activePrompt(), { rows: 10, placeholder: isContinuing() ? "What happens next? Leave empty to continue naturally, or use Prompt Forge." : "Write the complete MiniMax H3 prompt...", onChange: setEditedPrompt, fieldKey: "simple_prompt" }, fieldHeights);
     const area = simplePrompt.querySelector("textarea");
     // Persist typing before Ctrl+Enter or any asynchronous refresh can queue/rerender.
-    area.oninput = () => setActivePrompt(area.value);
+    area.oninput = () => setEditedPrompt(area.value);
     allowNativeTextEditing(area);
     const structureBtn = document.createElement("button"); structureBtn.textContent = "Insert Prompt Structure";
     structureBtn.title = isContinuing() && mode() === "REF2VA" ? "Structure the continuation prompt, retaining next action and existing subject definitions. No LLM required." : "Insert the former structured-mode template at the cursor";

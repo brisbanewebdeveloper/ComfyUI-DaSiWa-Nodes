@@ -2,7 +2,7 @@
 
 DaSiWa Enhanced Video Combine converts a ComfyUI `IMAGE` batch into a video, optionally muxes a connected `AUDIO` value, and provides an in-node playback preview after execution. Its enhanced automations select a usable codec, container, encoder, precision, browser-preview path, and generated-asset payload at runtime.
 
-Click the small `?` at the right of the node title for the same concise in-app reference.
+Click **Help** beside the preview controls for the concise in-app reference in either renderer, including Nodes 2.0. The classic renderer also retains the small `?` at the right of the node title.
 
 ## Quick start
 

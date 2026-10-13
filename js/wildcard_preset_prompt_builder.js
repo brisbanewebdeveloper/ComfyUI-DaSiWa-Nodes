@@ -94,6 +94,7 @@ function injectStyles() {
     style.id = "dasiwa-wildcard-builder-style";
     style.textContent = `
 .dasiwa-wildcard-builder { box-sizing:border-box; display:flex; flex-direction:column; gap:7px; width:100%; min-width:0; height:100%; overflow:hidden; color:var(--input-text,#ddd); font:12px sans-serif; }
+.lg-node .dasiwa-wildcard-builder { height:${PICKER_HEIGHT}px; max-height:${PICKER_HEIGHT}px; flex:0 0 ${PICKER_HEIGHT}px; }
 .dasiwa-wildcard-controls { flex:none; min-width:0; }
 .dasiwa-wildcard-selections { flex:1 1 auto; min-height:0; overflow:auto; padding-right:3px; }
 .dasiwa-wildcard-preview-segment { flex:0 1 150px; min-height:72px; overflow:auto; padding-right:3px; }
@@ -210,6 +211,15 @@ app.registerExtension({
             const expanded = new Set();
             const container = document.createElement("div");
             container.className = "dasiwa-wildcard-builder";
+            container.tabIndex = 0;
+            container.dataset.captureWheel = "true";
+            container.addEventListener("pointerdown", event => {
+                // ComfyUI captures wheel events in focused widgets before DOM
+                // listeners run. Keep native input/button focus intact.
+                if (!event.target.closest("input, button, select, textarea, a")) {
+                    container.focus({ preventScroll: true });
+                }
+            });
             container.textContent = "Loading wildcard library…";
             this.addDOMWidget("wildcard_subjects", "custom", container, {
                 serialize: false,
