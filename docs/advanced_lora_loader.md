@@ -64,6 +64,9 @@ The stack editor works in both the classic canvas renderer and **Nodes 2.0**.
 It uses ComfyUI's DOM-widget layer while retaining the existing themes, slot
 controls and serialized `stack_data`, `model_type` and `use_cache` inputs.
 Existing workflows do not need conversion. The LoRA application backend is unchanged.
+Text and numeric controls remain sharp when zooming the canvas; info and clear
+buttons have bounded hit areas and visible hover feedback. Clear resets the slot
+to None without deleting the model file or changing its strength multipliers.
 
 For an isolated frontend regression check (no model loading or queue execution):
 `uv run --no-project --with playwright python tools/verify_advanced_lora_frontend.py --url http://127.0.0.1:8199`.

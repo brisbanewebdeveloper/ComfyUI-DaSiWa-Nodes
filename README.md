@@ -1,6 +1,8 @@
 # DaSiWa Custom Nodes Collection
 
-A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control. Its installed version is shown in **ComfyUI → Settings → About**. 
+A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control. Its installed version is shown in **ComfyUI → Settings → About**.
+
+**0.5.18:** Forge Cast/People boxes and safe history reapply, sharp LoRA controls, and seekable/fullscreen video previews. [Release notes →](docs/news_and_changelog.md#news)
 
 Use **ComfyUI → Settings → Other → DaSiWa → ...** to enable or disable extra settings.
 

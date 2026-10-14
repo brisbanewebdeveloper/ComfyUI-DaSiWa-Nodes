@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-14**. Older history lives in the 
 
 ## News
 
+- **Forge and frontend update (0.5.18):** Publishes the Cast/People-box work and subsequent safety fixes to GitHub and Gitea. Explicit history selection can reapply a saved prompt after editing or applying another prompt, but changed source, references, mode, duration, canvas or model connections still require a fresh compatible draft. Advanced LoRA Loader uses native DOM controls for sharp text at canvas zoom, with bounded info/clear buttons and hover feedback. Video Combine supports fullscreen and reliable preview seeking; the renderer fixes below are included. Git publication triggers the existing Registry workflow; Registry acceptance and real model adherence are separate checks.
+
 - **Forge review fixes (Git update within 0.5.17):** Protects edited cards during renumbering, excludes stale automatic appearances from Generate, serializes Find people with drafting, preserves warm-model cleanup after preparation errors and carries the existing adult-only policy through reader/card insertion. No additional version bump or GitHub/Registry publication.
 
 - **H3 Forge Cast and People boxes (0.5.17, Gitea testing):** Integrates PR #78–#80 from @yoimtrashgaming-prog: mode-gated media, growing Who buttons, Pose takers, editable people boxes and character/place/style/pose cards. Automatic Cast reading defaults on with a saved opt-out; no-vision stops automatic retries, queued reads are cancellable, stale replies are discarded, and explicit Idea/Shot changes override conflicting card traits. Existing canvas/shot policy, dialogue, Continuity, native conditioning and node interfaces remain. Backend contracts and classic/Nodes 2.0 workflow roundtrips are tested with mocked LLM transport; real model adherence remains a live-test gate. This is a Git testing update, not a tagged or Registry-approved release. [Usage →](minimax_h3_director.md#prompt-forge-optional)
@@ -158,6 +160,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.18 | 10-14 | GitHub/Gitea update: Forge history reapply, Cast/People safety fixes, sharp LoRA DOM controls and preview seeking/fullscreen |
 | 0.5.17 | 10-14 | Gitea testing: Forge People boxes, editable Cast/scene cards, automatic reading with opt-out, Idea priority and safe queued/stale reads |
 | 0.5.16 | 10-13 | H3 Memory Planning toggle and configurable reserve slider (0–100%, default 5%); legacy MB caps retained |
 | 0.5.15 | 10-13 | H3 Enhanced Upscale support for the Director Image Inpaint five-frame pass, including optional native refinement |
@@ -232,6 +235,8 @@ Quick reference for the version bumps inside this window, newest first:
 ## Changelog
 
 ### MiniMax H3 Director (v1)
+
+- **10-14 (0.5.18):** Includes mode-gated Forge media, Who selections up to 32, Pose takers, first/last FL2VA slots, editable People boxes and Cast/scene cards from PR #78–#80. Preserves explicit Idea/Shot priority, edited cards and current reference grounding; stale automatic cards are excluded until reread. Find people and drafting are serialized, stale/renumbered read replies are rejected, and warm cleanup survives preparation errors. Explicit saved-history selection may replace prompt text without replacing the source or reference context; changes after selection still block Apply. Automatic Cast reading defaults on with a saved opt-out; draft picture vision remains independent and defaults off.
 
 - **Git fix after 0.5.16:** Manual prompt edits immediately update the new-clip and continuation stores, preventing a source/No source switch from restoring an older Forge draft. Empty prompts and whitespace are preserved. Explicit Forge Apply and programmatic Continuity templates retain their context-specific behavior. Added source round-trip regression tests.
 
@@ -312,6 +317,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 
 ### Advanced LoRA Loader (formerly LTX-2.3)
 
+- **10-14 (0.5.18):** Native DOM text and controls replace the rasterized stack surface for sharp canvas zoom. Info/clear buttons gain bounded hit areas and hover feedback; clear retains strengths and does not delete files. Existing themes, serialized stack settings and model application remain unchanged. Browser checks cover zoom and device-pixel ratios 1/1.25/2, pointer actions, value editing, resize and removal/re-add.
+
 - **Git fix after 0.5.16:** Reuses the stack painter and pointer controls in a DOM canvas for classic and Nodes 2.0. Inline value editors follow the mounted surface; resize, removal/re-add and asynchronous key-count updates repaint it. Existing stack, model type and cache input slots remain canonical on workflow reload. Includes an isolated browser regression script; LoRA application is unchanged.
 
 - **09-08:** **Civitai mirror links + (i) panel rework (0.4.35):** the (i) panel now always shows **both** Civitai mirror links — the `.com` link labeled `BLUE:` (blue) and the `.red` link labeled `RED:` (red); the labels are plain text, only the URL is clickable. Backend (`nodes/lora_info.py`): the by-hash lookup runs on `.com` first and **falls back to the `.red` mirror** on a 404 (verified byte-identical mirror, same `modelId`/`versionId`), and results are memoized **including misses** — a negative lookup no longer re-hits the Civitai API on every panel open (the stored error text is preserved in the cache entry; the panel's **Refresh** button forces a re-lookup via `refresh=true`). Panel layout: the file name moved to its own full-width row above the controls (long folder paths wrap independently and can no longer stretch the button row), and the sha256 hint sits on its own row directly under the name (9 px, `user-select:all`). The earlier `.com`/`.red` domain selector buttons and the `civitai_domain` localStorage/property machinery were removed with the rework — both links are always shown.
@@ -332,6 +339,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 - **08-01:** adaptive CPU RAM reserve shared with the Watermark compositor.
 
 ### Enhanced Video Combine
+
+- **10-14 (0.5.18):** Includes fullscreen playback and dependable preview seeking from the post-0.5.16 Git update. The player retains the browser-compatible preview and original download paths; encoding settings are unchanged.
 
 - **Git fix after 0.5.16:** Adds a Help button beside preview controls so the existing in-app guide is accessible in Nodes 2.0 as well as classic canvas. Classic title-bar help remains available.
 
