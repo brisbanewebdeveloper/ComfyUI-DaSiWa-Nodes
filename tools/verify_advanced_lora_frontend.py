@@ -14,14 +14,14 @@ args = parser.parse_args()
 
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True)
-    page = browser.new_page(viewport={"width": 1600, "height": 1000})
+    page = browser.new_page(viewport={"width": 1600, "height": 1000}, device_scale_factor=2)
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(args.url, wait_until="domcontentloaded")
     page.wait_for_function("Boolean(window.comfyAPI?.app?.app?.graph && "
                            "window.LiteGraph?.registered_node_types?.DaSiWa_LTX2LoraLoader)", timeout=90000)
     page.evaluate("window.app=window.comfyAPI.app.app")
-    page.wait_for_function("Boolean(app.graph._nodes.length)")
+    page.wait_for_load_state("networkidle")
     for close in page.get_by_role("button", name="Close dialog", exact=True).all():
         close.click()
     page.evaluate("""()=>{app.graph.clear(); window.n=LiteGraph.createNode('DaSiWa_LTX2LoraLoader');
@@ -34,7 +34,7 @@ with sync_playwright() as playwright:
     def click(x, y):
         settle()
         rect = page.locator(".dasiwa-lora-surface").bounding_box()
-        dims = page.evaluate("({width:n._loraSurface.width,height:n._loraSurface.height})")
+        dims = page.evaluate("({width:n.size[0],height:parseFloat(n._loraSurface.style.height)})")
         page.mouse.click(rect["x"] + x * rect["width"] / dims["width"],
                          rect["y"] + y * rect["height"] / dims["height"])
         settle()
@@ -47,6 +47,15 @@ with sync_playwright() as playwright:
         page.evaluate("mode=>app.ui.settings.setSettingValue('Comfy.VueNodes.Enabled',mode)", modern)
         page.wait_for_function("mode=>LiteGraph.vueNodesMode===mode", arg=modern)
         page.wait_for_selector(".dasiwa-lora-surface")
+        settle()
+        original_zoom = page.evaluate("app.canvas.ds.scale")
+        for zoom in [0.75, 1, 1.5, 2]:
+            page.evaluate("z=>{app.canvas.ds.scale=z;app.canvas.setDirty(true,true)}", zoom)
+            settle()
+            assert page.evaluate("n._loraSurface.tagName") == "DIV"
+            assert page.locator(".dasiwa-lora-surface canvas").count() == 0
+            assert page.locator(".dasiwa-lora-surface button").count() > 0
+        page.evaluate("z=>{app.canvas.ds.scale=z;app.canvas.setDirty(true,true)}", original_zoom)
         settle()
         click(225, 48)
         assert state()["cache"] is True
@@ -101,7 +110,7 @@ with sync_playwright() as playwright:
     page.evaluate("async saved=>{await app.loadGraphData(saved);window.n=app.graph._nodes[0]}", saved)
     assert state()["cache"] is False
     page.evaluate("n.setSize([900,240]);n.setDirtyCanvas(true)")
-    page.wait_for_function("n._loraSurface.width===900")
+    page.wait_for_function("n._loraSurface.querySelectorAll('button').length>0")
     page.evaluate("app.graph.remove(n)")
     page.wait_for_function("!document.querySelector('.dasiwa-lora-surface')")
     page.evaluate("app.graph.add(n)")

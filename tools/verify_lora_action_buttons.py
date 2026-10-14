@@ -46,7 +46,7 @@ with sync_playwright() as p:
         settle()
 
     def pixels():
-        return page.evaluate('n._loraSurface.toDataURL()')
+        return page.locator('.dasiwa-lora-surface').screenshot(animations='disabled')
 
     for modern in [False, True, False]:
         page.evaluate("v=>app.ui.settings.setSettingValue('Comfy.VueNodes.Enabled',v)", modern)
