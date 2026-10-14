@@ -236,6 +236,57 @@ test('history restores per-draft vision options and missing see_pictures default
   }
 });
 
+const savedContext = (prompt, overrides = {}) => JSON.stringify([
+  'REF2VA', 5, overrides.continuity ?? null, prompt, 1280, 720, 24, [null, null],
+  overrides.items ?? [], [], {}, { detailed_description: prompt },
+]);
+
+test('saved context comparison ignores only replaced prompt fields', () => {
+  const source = fs.readFileSync(path.join(root, 'js/minimax_h3_forge.js'), 'utf8');
+  const start = source.indexOf('function savedContextMatches(');
+  const end = source.indexOf('\nasync function open(', start);
+  const matches = vm.runInNewContext(source.slice(start, end) + '\nsavedContextMatches');
+  const saved = savedContext('Old', { continuity: { clip_id: 'clip-a', current_prompt: 'Old', use_references: true } });
+  const current = savedContext('New', { continuity: { clip_id: 'clip-a', current_prompt: 'New', use_references: true } });
+  assert.equal(matches(saved, current), true);
+  for (const [index, value] of [[0, 'I2VA'], [1, 10], [2, { clip_id: 'clip-b', current_prompt: 'New', use_references: true }],
+    [4, 1920], [5, 1080], [6, 30], [7, [42, null]], [8, [{ value: 'new.png' }]], [9, [{ name: 'new-refmod' }]], [10, { a: 'B' }]]) {
+    const changed = JSON.parse(current); changed[index] = value;
+    assert.equal(matches(saved, JSON.stringify(changed)), false, `context field ${index}`);
+  }
+  assert.equal(matches('invalid', current), false);
+  assert.equal(matches('[1,2]', current), false);
+});
+
+test('explicit history selection reapplies a saved prompt after the node prompt changed', async () => {
+  const entry = { mode: 'REF2VA', continuity: false, simple_prompt: 'Saved draft', fields: {}, brief: 'An idea',
+    contextKey: savedContext('Previous prompt'), forgeInputKey: 'previous Forge inputs' };
+  const d = await dialog({ history: [entry] });
+  d.node.__dasiwaH3Forge.contextKey = () => savedContext('Already applied or edited prompt');
+  await d.historyButton().dispatch('click');
+  assert.equal(d.button('Apply to node').disabled, false);
+  await d.button('Apply to node').dispatch('click');
+  assert.equal(d.applied.length, 1);
+  assert.equal(d.applied[0].simple_prompt, 'Saved draft');
+  assert.equal(entry.contextKey, savedContext('Previous prompt'), 'history provenance stays unchanged');
+  d.close();
+});
+
+test('history selection still rejects changed reference media and changes after selection', async () => {
+  for (const changeAfterSelection of [false, true]) {
+    const entry = { mode: 'REF2VA', simple_prompt: 'Saved draft', fields: {}, brief: 'An idea', contextKey: savedContext('Old') };
+    const d = await dialog({ history: [entry] });
+    const changed = () => savedContext('New', { items: [{ id: 'replacement', value: 'new.png' }] });
+    d.node.__dasiwaH3Forge.contextKey = changeAfterSelection ? () => savedContext('New') : changed;
+    await d.historyButton().dispatch('click');
+    assert.equal(d.button('Apply to node').disabled, !changeAfterSelection);
+    if (changeAfterSelection) d.node.__dasiwaH3Forge.contextKey = changed;
+    await d.button('Apply to node').dispatch('click');
+    assert.equal(d.applied.length, 0);
+    d.close();
+  }
+});
+
 test('a vision history entry is incompatible when the current references are mixed', async () => {
   const history = [{ mode: 'REF2VA', simple_prompt: 'Vision draft', fields: {}, brief: 'An idea', draftOptions: { see_pictures: true, shots: 'Auto' } }];
   const d = await dialog({ refs: [image(), { kind: 'audio', instructions: '' }], history });

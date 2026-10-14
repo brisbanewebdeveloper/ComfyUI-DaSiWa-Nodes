@@ -211,6 +211,21 @@ function referencesFor(hook, node) {
   return hook.references?.() || forgeReferences(hook.items(), hook.mode(), node.properties?.[GROUPS_KEY]);
 }
 
+function savedContextMatches(saved, current) {
+  if (!saved || saved === current) return true;
+  try {
+    const withoutPrompt = key => {
+      const context = JSON.parse(key);
+      if (!Array.isArray(context) || context.length !== 12) return null;
+      context[3] = null; context[11] = null;
+      if (context[2]) { const { current_prompt, ...source } = context[2]; context[2] = source; }
+      return JSON.stringify(context);
+    };
+    const previous = withoutPrompt(saved);
+    return previous !== null && previous === withoutPrompt(current);
+  } catch { return false; }
+}
+
 async function open(node) {
   const hook = node.__dasiwaH3Forge;
   if (!hook) return;
@@ -979,8 +994,8 @@ async function open(node) {
     if (includeReferences) includeReferences.disabled = !!running;
   };
   setControlsDisabled(true);
-  let result = null;
-  const showResult = entry => {
+  let result = null, selectedEntry = null;
+  const showResult = (entry, fromHistory = false) => {
     if (closed) return;
     brief.value = entry.brief || "";
     if (typeof entry.structured === "boolean") structured.checked = entry.structured;
@@ -1001,11 +1016,15 @@ async function open(node) {
       renderShots();
       if (detail.oninput) detail.oninput();
     }
-    result = entry;
+    selectedEntry = entry;
+    // Explicit history reuse replaces prompt text, but never its source or references.
+    result = fromHistory && savedContextMatches(entry.contextKey, hook.contextKey?.())
+      ? { ...entry, contextKey: hook.contextKey?.(), forgeInputKey: inputKey() } : entry;
     output.hidden = false;
     output.textContent = entry.simple_prompt;
-    applyBtn.disabled = loadingModels || !!running || !compatible(entry);
-    if (!compatible(entry)) setStatus("Draft belongs to a different source, duration, model or prompt. Generate again for the current context.", true);
+    applyBtn.disabled = loadingModels || !!running || !compatible(result);
+    if (!compatible(result)) setStatus("Draft belongs to a different source, duration, model or prompt. Generate again for the current context.", true);
+    else if (fromHistory) setStatus("Saved draft selected. Apply to node to use it.");
     renderHistory();
   };
   const renderHistory = () => {
@@ -1021,10 +1040,10 @@ async function open(node) {
     if (!entries.length) { historyBox.append(el("span", { className: "muted", textContent: "No prompts generated yet." })); return; }
     entries.forEach((entry, index) => {
       const date = Number.isFinite(entry.createdAt) ? new Date(entry.createdAt).toLocaleString() : "Saved draft";
-      const button = el("button", { type: "button", disabled: loadingModels || !!running, className: result === entry ? "selected" : "", title: "Show this prompt; Apply to node to use it" },
+      const button = el("button", { type: "button", disabled: loadingModels || !!running, className: result && selectedEntry === entry ? "selected" : "", title: "Show this prompt; Apply to node to use it" },
         el("span", { textContent: `${index + 1}. ${entry.mode}${entry.continuity ? " · Continuity" : ""} · ${entry.model || "model"} · ${date}` }),
         el("span", { className: "excerpt", textContent: entry.simple_prompt.replace(/\s+/g, " ").slice(0, 150) }));
-      button.onclick = () => showResult(entry);
+      button.onclick = () => showResult(entry, true);
       historyBox.append(button);
     });
   };
