@@ -33,7 +33,7 @@ def test_cards_are_checked():
 
 def test_a_card_becomes_the_kept_list():
     assert hc.kept_from_look("A young woman with long green hair. She wears a red dress.") == "long green hair, a red dress"
-    assert hc.kept_from_look("A girl with white braids, blue eyes, and wears a white dress.") == "white braids, blue eyes, a white dress"
+    assert hc.kept_from_look("An adult woman with white braids, blue eyes, and wears a white dress.") == "white braids, blue eyes, a white dress"
 
 
 def test_a_card_never_opens_with_the_name_h3_cannot_place():
@@ -42,16 +42,16 @@ def test_a_card_never_opens_with_the_name_h3_cannot_place():
     assert hc.unnamed("The character on the left has short black hair.") == "A character with short black hair."
     assert hc.unnamed("A young man with short black hair.") == "A young man with short black hair."
     unit = {"kind": "character"}
-    assert hc.cast_look("Character 2 is a girl in a red coat.\nKept: red coat", unit) == "A girl in a red coat."
+    assert hc.cast_look("Character 2 is an adult woman in a red coat.\nKept: red coat", unit) == "An adult woman in a red coat."
     assert hc.written_look("green eyes, not blue") == "green eyes, not blue."
 
 
 def test_the_reader_answer_is_cleaned():
-    assert hc.usable_reading("<think>hmm</think>A girl with red hair.") == "A girl with red hair."
-    assert hc.usable_reading("planning...\n</think>\nA girl.") == "A girl."
-    assert hc.usable_reading("A girl with red hair.\nUNAVAILABLE") == "A girl with red hair."
+    assert hc.usable_reading("<think>hmm</think>An adult woman with red hair.") == "An adult woman with red hair."
+    assert hc.usable_reading("planning...\n</think>\nAn adult woman.") == "An adult woman."
+    assert hc.usable_reading("An adult woman with red hair.\nUNAVAILABLE") == "An adult woman with red hair."
     assert hc.usable_reading("UNAVAILABLE") is None
-    assert hc.split_description("A girl with red hair. She wears blue. She holds a cup.\nKept: red hair, blue dress") == "A girl with red hair. She wears blue."
+    assert hc.split_description("An adult woman with red hair. She wears blue. She holds a cup.\nKept: red hair, blue dress") == "An adult woman with red hair. She wears blue."
     assert hc.group_lines("**1:** A woman.\nCharacter 2 - A man.\n3) A child.", 3) == ["A woman.", "A man.", "A child."]
     assert hc.group_lines("1: A woman.", 2) is None
 
@@ -81,7 +81,7 @@ def test_nobody_placed_is_read_as_a_group_and_each_gets_their_line():
     unit = hc.cast_unit(cast, 2)
     assert unit["kind"] == "group" and unit["people"] == 2 and unit["index"] == 1
     assert "It shows 2 characters. Describe each of them in turn, left to right" in hc.describe_message(unit)
-    assert hc.cast_look("1: A tall man in a coat.\n2: A girl with a red bow.\nKept: coat, bow", unit) == "A girl with a red bow."
+    assert hc.cast_look("1: A tall man in a coat.\n2: An adult woman with a red bow.\nKept: coat, bow", unit) == "An adult woman with a red bow."
 
 
 def test_a_note_on_one_of_two_pictures_is_said_for_that_picture():
@@ -144,17 +144,17 @@ def test_frame_modes_put_the_card_beside_where_they_stand():
     frame = {"kind": "image", "role": "keyframe", "path": "f.png", "boxes": [{"n": 1, "box": [0.05, 0, 0.45, 1]}, {"n": 2, "box": [0.55, 0, 0.95, 1]}]}
     bundle = hp.load_bundle()
     user = hp.build_user_message(bundle, "Character 2 waves at Character 1.", "I2VA", 8, 5, "balanced", [frame], True, ["<Picture 1>"],
-                                 cards={2: "A girl with a red bow"})
+                                 cards={2: "An adult woman with a red bow"})
     assert "the character on the right in the first frame waves at the character on the left in the first frame." in user
     assert "Cast, as the person describes them." in user
-    assert "- The character on the right in the first frame: A girl with a red bow." in user
+    assert "- The character on the right in the first frame: An adult woman with a red bow." in user
     assert "Character 2" not in user.split("Cast, as the person")[1]
 
 
 # ── the reader route ─────────────────────────────────────────────────────
 
 class Seeing:
-    def __init__(self, raw="A girl with red hair. She wears a white dress.\nKept: red hair, white dress", sees=None):
+    def __init__(self, raw="An adult woman with red hair. She wears a white dress.\nKept: red hair, white dress", sees=None):
         self.raw, self.sees, self.calls, self.unloads, self.base = raw, sees, [], [], "http://127.0.0.1:8099"
 
     def can_see(self, name):
@@ -191,9 +191,10 @@ def test_a_card_is_read_from_the_crop_with_the_reader_prompt(pictures, monkeypat
     model = Seeing()
     monkeypatch.setattr(forge, "backends", lambda settings: {"openai": model})
     out = forge.read_cast(body(), str(pictures))
-    assert out["text"] == "A girl with red hair. She wears a white dress." and out["cropped"] == 1
+    assert out["text"] == "An adult woman with red hair. She wears a white dress." and out["cropped"] == 1
     (name, system, user, images, sampling, *_), kwargs = model.calls[0]
-    assert system == hp.load_bundle()["picture_description"]
+    assert system.startswith(hp.load_bundle()["picture_description"])
+    assert "## Age\n" in system and "Every human you describe is an adult." in system
     assert user == hc.describe_message(hc.cast_unit(hc.cast_for(body()["references"], "REF2VA"), 2), "A gig.")
     assert len(images) == 1 and sampling["temperature"] == 0.2 and kwargs["max_tokens"] == 240
     assert model.unloads == ["r4"]
@@ -274,7 +275,7 @@ def test_a_read_waits_for_a_call_already_running(pictures, monkeypatch):
     holder = _hold_lock(0.3)
     out = forge.read_cast(body(), str(pictures))
     holder.join()
-    assert out["text"].startswith("A girl with red hair")
+    assert out["text"].startswith("An adult woman with red hair")
     monkeypatch.setattr(forge, "READ_WAIT", 0.1)
     holder = _hold_lock(0.5)
     with pytest.raises(ForgeError) as err:

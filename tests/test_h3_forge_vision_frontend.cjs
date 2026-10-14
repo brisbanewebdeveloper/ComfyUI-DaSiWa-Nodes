@@ -23,6 +23,7 @@ class Element {
   focus() {}
   getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: 640, height: 480 }; }
   setAttribute(key, value) { this.attributes[key] = value; }
+  removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); }
   async dispatch(type) {
     const event = { target: this };
@@ -58,7 +59,7 @@ class Element {
 }
 const root = path.join(__dirname, '..');
 const image = (role = 'character-1') => ({ kind: 'image', path: 'a.png', easy_role: role, role: 'subject', instructions: '', item: { id: 'a' } });
-async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, history = [], prefs = {}, beforeReply = null, castReply = null } = {}) {
+async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, history = [], prefs = {}, beforeReply = null, castReply = null, peopleReply = null } = {}) {
   const document = { head: new Element('head'), body: new Element('body'), createElement: t => new Element(t), getElementById: () => null, addEventListener() {}, removeEventListener() {} };
   const requests = [], applied = [], timers = new Map(); let timerId = 0;
   const node = { id: 1, properties: { dasiwaH3ForgeHistory: history }, graph: { setDirtyCanvas() {} }, __dasiwaH3Forge: {
@@ -73,6 +74,7 @@ async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, hi
       if (url.endsWith('/models')) return { ok: true, json: async () => ({ models: [{ id: 'local:test', label: 'Test' }], creativity: ['balanced'], default_creativity: 'balanced', detail_levels: {}, default_detail: 5, shot_counts: ['Auto'] }) };
       const request = JSON.parse(options.body); requests.push(request);
       if (url.endsWith('/cast') && castReply) return castReply;
+      if (url.endsWith('/people') && peopleReply) return peopleReply;
       if (beforeReply) await beforeReply(document);
       return { ok: true, json: async () => ({ mode, continuity: !!continuity, source_id: continuity?.clip_id, simple_prompt: 'Generated draft', fields: {}, model: 'local:test', easy: request.easy, vision: true, saw_images: request.see_pictures ? 1 : 0, unloaded: true, stats: { seconds: 1 } }) };
     } },
@@ -91,6 +93,55 @@ async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, hi
     brief: all.find(c => c.tagName === 'TEXTAREA'), historyButton: () => all.find(c => c.title === 'Show this prompt; Apply to node to use it'),
     close: () => context.window.DaSiWaH3Forge.close(node) };
 }
+
+test('renumbering during a Cast read preserves the edited card now occupying that number', async () => {
+  let d;
+  d = await dialog({ refs: [{ ...image(), boxes: [{ n:1, box:[0.1,0.1,0.4,0.9] }, { n:2, box:[0.6,0.1,0.9,0.9] }] }],
+    castReply: { ok:true, json:async () => {
+      const select = d.all.find(c => c.tagName === 'SELECT' && c.title?.startsWith('Character 1: pick'));
+      d.autoCast.checked = false;
+      select.value = '2'; await select.dispatch('change');
+      return { text:'Old automatic description.' };
+    } } });
+  d.node.properties.dasiwaH3ForgeCast = { 2: { text:'Edited adult in a dark coat.', edited:true, sig:'old' } };
+  await d.readTimer();
+  assert.equal(d.node.properties.dasiwaH3ForgeCast[1].text, 'Edited adult in a dark coat.');
+  assert.equal(d.node.properties.dasiwaH3ForgeCast[1].edited, true);
+  assert.equal(d.node.properties.dasiwaH3ForgeCast[2], undefined);
+  d.close();
+});
+
+test('Generate skips stale automatic cards but preserves explicitly edited cards', async () => {
+  for (const edited of [false, true]) {
+    const d = await dialog({ prefs: { auto_cast: false } });
+    d.node.properties.dasiwaH3ForgeCast = { 1: { text: 'An adult in the previous outfit.', sig: 'stale', edited } };
+    d.brief.value = 'A new outfit'; await d.button('Generate').dispatch('click');
+    const request = d.requests.find(r => r.mode === 'REF2VA');
+    assert.equal(request.cast['1'], edited ? 'An adult in the previous outfit.' : undefined);
+    d.close();
+  }
+});
+
+test('Find people serializes Generate and rejects answers after a role change', async () => {
+  let finish;
+  const response = new Promise(resolve => { finish = resolve; });
+  const d = await dialog({ prefs: { auto_cast: false }, peopleReply: { ok: true, json: () => response } });
+  const finding = d.button('Find people').dispatch('click');
+  await Promise.resolve(); await Promise.resolve();
+  await d.button('Add character').dispatch('click');
+  assert.equal(d.refs[0].boxes, undefined);
+  d.brief.value = 'An idea';
+  const generating = d.button('Generate').dispatch('click');
+  await Promise.resolve();
+  assert.equal(d.requests.some(r => r.mode === 'REF2VA'), false);
+  d.refs[0].picture_kinds = ['pose'];
+  finish({ people: [{ box: [0.1,0.1,0.9,0.9] }], seconds: 1, unloaded: true });
+  await finding;
+  assert.equal(d.refs[0].boxes, undefined);
+  await d.readTimer(); await generating;
+  assert.equal(d.requests.filter(r => r.mode === 'REF2VA').length, 1);
+  d.close();
+});
 
 test('Cast rejects stale replies after an Idea change and permits manual edits during a read', async () => {
   let d;

@@ -22,11 +22,18 @@ picture_description system prompt and the message from describe_message.
 import re
 
 from .h3_people import boxes_of, crop_for
-from .h3_prompting import _join_and, describe_where, easy_cast, place_word
+from .h3_prompting import ForgeError, _join_and, describe_where, easy_cast, place_word
 
 # How long a card's text may be. Not cut by sentences: the person wrote it.
 CAST_TEXT_MAX = 600
 MAX_CHARACTERS = 32
+_NON_ADULT = re.compile(r"\b(?:girls?|boys?|maiden|children|child|kids?|teens?|teenage\w*|schoolgirls?|youthful|innocent|childlike|baby[- ]faced)\b", re.I)
+
+
+def validate_card_age(text):
+    if _NON_ADULT.search(str(text or "")):
+        raise ForgeError("bad_cast", "Cast descriptions must follow the existing adult-only prompt policy. Describe an adult and remove minor/age-reducing terms.")
+    return text
 _ORDINAL = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth")
 
 
@@ -52,6 +59,7 @@ def given_cast(raw):
         text = " ".join(str(v if isinstance(v, str) else "").split())[:CAST_TEXT_MAX]
         if not text:
             continue
+        validate_card_age(text)
         key = str(k)
         if _SCENE_KEY.match(key):
             out[key] = text
@@ -180,6 +188,7 @@ def kept_from_look(text):
 
 def written_look(text):
     """A card's text as it goes into the prompt: as written, with a full stop."""
+    validate_card_age(text)
     look = " ".join(str(text or "").split())[:CAST_TEXT_MAX]
     return look if re.search(r"[.!?][\"')\]]*$", look) else f"{look}."
 
@@ -339,7 +348,7 @@ def describe_message(unit, brief=""):
     if unit["kind"] == "group":
         lines.append(f"It shows {unit['people']} characters. Describe each of them in turn, left to right, one line each, starting with "
                      'their number and a colon: "1:" for the one furthest left, then "2:" and so on. Each line starts with who they are - a '
-                     "young man, a woman, a girl - then their hair (colour, length, style), eyes, build and what they are wearing, colours "
+                     "adult man, an adult woman - then their hair (colour, length, style), eyes, build and what they are wearing, colours "
                      "included. Never what they are doing or where they are: the video puts them in a new scene.")
     elif unit["kind"] == "character":
         lines.append("This shows a character.")

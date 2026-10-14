@@ -227,13 +227,14 @@ async function open(node) {
   const box = el("div", { className: "ds-forge" });
   overlay.append(box);
   // A run in flight, so Cancel and closing the pop-out can stop it.
-  let running = null, closed = false, loadingModels = true, statusTimer = null;
+  let running = null, closed = false, loadingModels = true, statusTimer = null, draftWaiting = false;
   const cancelRun = () => { clearInterval(statusTimer); statusTimer = null; if (running) { const id = running; running = null; api.fetchApi("/dasiwa/h3/forge/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: id }) }).catch(() => {}); } };
   // Set once a Find people or Cast read has run: closing then unloads the model they kept warm.
-  let warmed = false, castRequest = null;
+  let warmed = false, castRequest = null, peopleRequest = null;
   const close = () => {
     if (closed) return; closed = true; cancelRun();
     if (castRequest) api.fetchApi("/dasiwa/h3/forge/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: castRequest }) }).catch(() => {});
+    if (peopleRequest) api.fetchApi("/dasiwa/h3/forge/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: peopleRequest }) }).catch(() => {});
     if (warmed) api.fetchApi("/dasiwa/h3/forge/release", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
     overlay.remove(); document.removeEventListener("keydown", onKey); openDialogs.delete(node);
   };
@@ -294,7 +295,7 @@ async function open(node) {
     const img = el("img", { src: viewUrl(ref.path), alt: "", draggable: false });
     const stage = el("div", { className: "people-stage" }, img);
     wrap.append(el("div", { className: "people-tools" }, findBtn, addBtn, clearBtn, scanBtn, note), stage);
-    const busy = () => running || loadingModels;
+    const busy = () => running || loadingModels || peopleRequest;
     const commit = next => {
       boxes = next.map(b => ({ n: b.n, box: b.box.map(v => Number(clamp01(v).toFixed(4))) }));
       if (boxes.length) ref.boxes = boxes; else delete ref.boxes;
@@ -384,18 +385,25 @@ async function open(node) {
       if (busy()) return;
       const model = modelSel.value;
       if (!model) { note.textContent = "Pick a model first."; return; }
+      const snapshot = () => JSON.stringify([ref.path, kindsOf(ref), boxes, ref.instructions, ref.keep, ref.drop, hook.contextKey?.()]);
+      const before = snapshot();
+      const requestId = `people-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      peopleRequest = requestId;
+      const cardBefore = JSON.stringify(savedCards());
       findBtn.disabled = true;
       // The server runs one model call at a time: wait for a card being read,
       // and hold the card queue until the boxes are back.
       if (castBusy) note.textContent = "Waiting for the Cast card being read…";
-      await castQuiet();
+      await castQuiet(false);
       note.textContent = `Looking for people with ${modelSel.selectedOptions[0]?.textContent || model}…`;
       try {
+        if (closed) return;
+        warmed = true;
         const res = await api.fetchApi("/dasiwa/h3/forge/people", { timeoutMs: null, method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model, settings: forgeSettings(), path: ref.path, keep_warm: castOn }) });
+          body: JSON.stringify({ request_id: requestId, model, settings: forgeSettings(), path: ref.path, keep_warm: castOn }) });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || res.statusText);
-        if (closed) return;
+        if (closed || snapshot() !== before || modelSel.value !== model) return;
         if (!data.people.length) { note.textContent = "Nobody was found: this model may not give boxes. Use Add character to box them yourself."; return; }
         // The numbers already on this picture carry over, left to right, when
         // the count matches; otherwise Character 1, 2, 3... left to right.
@@ -405,12 +413,13 @@ async function open(node) {
         warmed = true;
         // Find people again is how a card is read again: everyone it boxes is
         // read fresh, cards the person edited included (PromptForge, 14 Oct 2026).
-        for (const n of numbers) { const l = liveOf(n); l.force = true; l.failedSig = null; }
+        if (JSON.stringify(savedCards()) === cardBefore) for (const n of numbers) { const l = liveOf(n); l.force = true; l.failedSig = null; }
         commit(data.people.map((p, i) => ({ n: numbers[i], box: p.box })));
         note.textContent = `Found ${data.people.length} ${data.people.length === 1 ? "person" : "people"} in ${data.seconds}s${data.unloaded ? "" : " (model still loaded)"}. Drag, resize or renumber any box that is off.`;
       } catch (err) {
         note.textContent = err.message;
       } finally {
+        if (peopleRequest === requestId) peopleRequest = null;
         findBtn.disabled = false;
         castResume();
       }
@@ -441,10 +450,10 @@ async function open(node) {
   // Find people and Generate wait for a card being read and hold the queue
   // while they run: the server does one model call at a time, and refused a
   // Find people pressed during a read ("Another Forge analysis is running").
-  async function castQuiet() {
+  async function castQuiet(waitPeople = true) {
     castHeld += 1;
     clearTimeout(castTimer);
-    while (castBusy && !closed) await new Promise(r => setTimeout(r, 200));
+    while ((castBusy || (waitPeople && peopleRequest)) && !closed) await new Promise(r => setTimeout(r, 200));
   }
   function castResume() {
     castHeld = Math.max(0, castHeld - 1);
@@ -570,6 +579,7 @@ async function open(node) {
     paintCard(key);
     const requestId = `cast-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     castRequest = requestId;
+    warmed = true;
     const which = isScene(key) ? { subject: requestKey(key) } : { character: key };
     try {
       const res = await api.fetchApi("/dasiwa/h3/forge/cast", { timeoutMs: null, method: "POST", headers: { "Content-Type": "application/json" },
@@ -580,7 +590,7 @@ async function open(node) {
       if (!res.ok && data.error === "no_vision") { castNoVision = true; castNotice.textContent = data.message; }
       if (!res.ok) throw new Error(data.message || res.statusText);
       // Typed into while it was being read: what they typed stays.
-      if (!l.typedDuring && !closed && castKeys().includes(key) && castSig(key) === sig && modelSel.value === readingModel) { saveCard(key, { text: String(data.text || "").slice(0, CAST_MAX), edited: false, sig }); refsChanged(); }
+      if (!l.typedDuring && !closed && live.get(key) === l && castKeys().includes(key) && castSig(key) === sig && modelSel.value === readingModel) { saveCard(key, { text: String(data.text || "").slice(0, CAST_MAX), edited: false, sig }); refsChanged(); }
       l.failedSig = null;
     } catch (err) {
       l.error = err.message;
@@ -625,7 +635,7 @@ async function open(node) {
     card.querySelector(".cast-name").textContent = cardLabel(key);
     const text = card.querySelector("textarea");
     if (document.activeElement !== text && text.value !== e.text) text.value = e.text;
-    text.disabled = !!running;
+    text.disabled = !!running || draftWaiting;
     card.querySelector(".cast-count").textContent = `${e.text.length}/${CAST_MAX}`;
     const stale = !!e.text && e.sig !== castSig(key);
     card.dataset.state = l.reading ? "reading" : l.error ? "error" : stale && e.edited ? "stale" : "";
@@ -683,7 +693,7 @@ async function open(node) {
   // The cards with text, for the draft: used as written.
   function castForDraft() {
     const out = {};
-    for (const key of castKeys()) { const t = cardOf(key).text.trim(), k = requestKey(key); if (t && k) out[k] = t; }
+    for (const key of castKeys()) { const card = cardOf(key), t = card.text.trim(), k = requestKey(key); if (t && k && (card.edited || card.sig === castSig(key))) out[k] = t; }
     return out;
   }
   if (continuity) box.append(el("div", { className: "muted", textContent: "The source ending and Duration guide this draft. A vision model uses tail frames internally; audio is not analyzed. Review the result, then Apply to node." }));
@@ -1091,6 +1101,7 @@ async function open(node) {
   referenceControls.filter(c => c.tagName !== "BUTTON").forEach(c => c.addEventListener("change", renderCast));
   genBtn.onclick = async () => {
     if (closed) return;
+    if (draftWaiting) return;
     if (running) { cancelRun(); genBtn.disabled = true; setStatus("Cancelling… the model stops at its next token, then unloads."); return; }
     const text = brief.value.trim();
     if (openedKey !== hook.contextKey?.()) { setStatus("Director context changed. Close and reopen Forge.", true); return; }
@@ -1099,10 +1110,13 @@ async function open(node) {
     const missing = refs.find(r => r.role === "custom" && !r.instructions.trim());
     if (missing) { setStatus("Custom reference: describe what this image should contribute, or choose a preset role.", true); return; }
     genBtn.disabled = true;
+    draftWaiting = true; setControlsDisabled(true);
     if (castBusy) setStatus("Waiting for the Cast card being read, then writing…");
     await castQuiet();
+    draftWaiting = false;
+    setControlsDisabled(false);
     genBtn.disabled = false;
-    if (closed) { castResume(); return; }
+    if (closed || openedKey !== hook.contextKey?.()) { castResume(); return; }
     briefs.set(briefKey, text);
     remember({ model: modelSel.value, creativity: creativity.value, detail: Number(detail.value), shots: shots.value, see_pictures: seePictures.checked });
     result = null; output.hidden = true; output.textContent = ""; renderHistory();

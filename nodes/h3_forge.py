@@ -108,7 +108,7 @@ from .h3_prompting import (
 )
 from .h3_people import FIND_PEOPLE_PROMPT, crop_image_b64, parse_people, picture_size
 from .h3_cast import (CAST_TEXT_MAX, MAX_CHARACTERS, cast_for, cast_look, cast_unit, carded_tags, character_cards,
-                      describe_message, given_cast, scene_unit, usable_reading)
+                      describe_message, given_cast, scene_unit, usable_reading, validate_card_age)
 from .llm_backends import (IMAGE_MAX_EDGE, NUM_PREDICT, refresh_server_model_choices,
                            check_fits, context_for, server_context_error, sets_its_context)
 
@@ -177,9 +177,8 @@ def unload_forge_models():
     with _REQUEST_LOCK:
         _cancel_warm()
         for backend, name in list(_FORGE_LOADED):
-            if name in backend.loaded():
-                log_dasiwa("H3 Forge", f"{name} was still loaded; unloading before the Director runs")
-                backend.unload(name)
+            log_dasiwa("H3 Forge", f"{name}: requesting unload before the Director runs")
+            backend.unload(name)
         _FORGE_LOADED.clear()
 
 
@@ -232,14 +231,22 @@ def _cancel_warm(keep=None):
     """Unload every warm model except `keep`; returns True when `keep` was warm."""
     kept = False
     for key in list(_WARM):
-        backend, name, timer = _WARM.pop(key)
-        timer.cancel()
         if key == keep:
             kept = True
             continue
+        backend, name, timer = _WARM.pop(key)
+        timer.cancel()
         if backend.unload(name):
             _FORGE_LOADED.discard((backend, name))
     return kept
+
+
+def _forget_warm(kind, backend, name):
+    entry = _WARM.pop(_warm_key(kind, backend, name), None)
+    if entry:
+        old_backend, old_name, timer = entry
+        timer.cancel()
+        _FORGE_LOADED.discard((old_backend, old_name))
 
 
 def _cool(key):
@@ -257,6 +264,8 @@ def _cool(key):
 
 def _keep_warm(kind, backend, name):
     key = _warm_key(kind, backend, name)
+    _forget_warm(kind, backend, name)
+    _FORGE_LOADED.add((backend, name))
     timer = threading.Timer(WARM_SECONDS, _cool, args=(key,))
     timer.daemon = True
     _WARM[key] = (backend, name, timer)
@@ -407,6 +416,7 @@ def _generate(body, input_directory, release_memory, stop):
     finally:
         unloaded = backend.unload(name) if kind != "local" else True
         if unloaded:
+            _forget_warm(kind, backend, name)
             _FORGE_LOADED.discard((backend, name))
 
     stats["seconds"] = round(time.time() - started, 1)
@@ -583,6 +593,7 @@ def _after_read(kind, backend, name, warm):
         return False
     unloaded = backend.unload(name)
     if unloaded:
+        _forget_warm(kind, backend, name)
         _FORGE_LOADED.discard((backend, name))
     return unloaded
 
@@ -611,6 +622,10 @@ def _read_cast(body, input_directory, release_memory, stop):
     system = bundle.get("picture_description")
     if not system:
         raise ForgeError("bad_bundle", "This copy of data/h3_forge.json has no picture reader. Update the node pack.")
+    shared = bundle["modes"]["T2VA"]["system"]
+    age = re.search(r"(?ms)^## Age\n.*?(?=^## Outfits\n|\Z)", shared)
+    if age:
+        system += "\n\n" + age.group(0)
     mode = body.get("mode")
     if mode not in ("REF2VA", "I2VA", "FL2VA", "L2VA"):
         raise ForgeError("bad_mode", "The Cast list is for REF2VA, I2VA, FL2VA and L2VA.")
@@ -669,6 +684,7 @@ def _read_cast(body, input_directory, release_memory, stop):
     finally:
         unloaded = _after_read(kind, backend, name, warm)
     text = cast_look(usable_reading(raw) or "", unit)
+    validate_card_age(text)
     seconds = round(time.time() - started, 1)
     log_dasiwa("H3 Forge", f"{what} read by {name} in {seconds}s, {len(text)} chars")
     if not text:
@@ -959,6 +975,7 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
     finally:
         unloaded = backend.unload(name) if kind != "local" else True
         if unloaded:
+            _forget_warm(kind, backend, name)
             _FORGE_LOADED.discard((backend, name))
     stats["seconds"] = round(time.time() - started, 1)
     prompt = _THINK.sub("", str(raw or "")).strip()
