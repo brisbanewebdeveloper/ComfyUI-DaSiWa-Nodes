@@ -132,7 +132,7 @@ def test_a_seeing_writer_is_not_asked_to_describe_a_carded_character():
     targets = [t for t, _, _ in hp.describe_targets(cast, ["<Picture 1>", "<Picture 2>"], carded)]
     assert targets == ["<Subject 1>"]
     lines = "\n".join(hp.easy_lines(cast, sees_pictures=True, cards=carded))
-    assert "Record visible reference appearance in Descriptions" in lines and 'A "looks:" line is already written' in lines
+    assert "Record visible reference appearance in Descriptions" in lines and 'A "looks:" line supplies reference appearance' in lines
     # The writer's own Description of a carded character does not replace the card.
     segments = {"Subject definitions": "N/A", "Summary": "s", "Detailed description": "[Shot 1] <Subject 1> and <Subject 2>.",
                 "Soundscape": "x", "Music": "N/A", "Descriptions": "<Subject 1>: Red hair.\n<Subject 2>: Green hair."}

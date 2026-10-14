@@ -246,6 +246,7 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
     from .h3_cast import carded_tags, character_cards, frame_cast, framed_cast_lines
     cards = cards or {}
     carded = carded_tags(cast, cards) if cast is not None else {}
+    card_priority = ("Cast cards supply reference appearance only. Explicit appearance, outfit, setting or style changes in the Idea or Shot instructions take priority over conflicting card traits; preserve all other traits. Never combine a replaced garment or trait with its replacement.")
     if cast is not None:
         brief = easy_brief(brief, cast)
     else:
@@ -325,6 +326,8 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
         # A frame mode has no Subject definitions: the cards reach the writer here.
         if mode in ("I2VA", "FL2VA", "L2VA") and cards:
             lines += framed_cast_lines(frame_cast(references, mode), character_cards(cards))
+    if cards:
+        lines += ["", card_priority]
     return "\n".join(lines)
 
 
@@ -847,12 +850,12 @@ def easy_lines(cast, sees_pictures=False, cards=None):
                      "Use exactly these subjects: add none, merge none, split none. "
                      "Record visible reference appearance in Descriptions and keep the shots consistent with it; "
                      "use attached sources only."
-                     + (' A "looks:" line is already written for that character: keep them looking as it says, and never contradict it.'
+                     + (' A "looks:" line supplies reference appearance; explicit Idea/Shot changes override only conflicting traits.'
                         if cards else ""))
     elif cards:
         lines[-1] = ("Cast (fixed). The person labelled every picture, and Subject definitions are already written from those labels. "
                      'Use exactly these subjects: add none, merge none, split none. "looks:" is what was seen in the pictures: '
-                     "set each shot in that place and light, and keep everyone looking as described. Never contradict it.")
+                     "set each shot in that place and light, and keep everyone looking as described. Explicit Idea/Shot changes take priority; otherwise never contradict it.")
     for s in cast["subjects"]:
         tail = _tail(s["refs"])
         if s["tag"] in cards:
@@ -873,6 +876,8 @@ def easy_lines(cast, sees_pictures=False, cards=None):
                       "their clothes or the background" if u["which"] == "pose"
                       else f"- <Picture {u['picture']}> is used only as its instructions say") + _tail([u["ref"]])
                      + (f" · pose: {stance}" if stance else ""))
+    if cards:
+        lines.append("Explicit Idea/Shot changes override conflicting looks or pose traits; all unchanged traits remain the reference baseline.")
     return lines
 
 
@@ -1069,12 +1074,13 @@ def easy_segments(cast, segments, description_targets=None, cards=None):
 
     def define(head, tag, notes, fallback):
         look = descriptions.get(tag, "")
-        return " ".join(x for x in (f"{head}{'.' if look or notes else fallback}", look, notes and f"{_cap(notes)}.") if x)
+        priority = "Reference appearance only: explicit changes in detailed_description override conflicting traits above; retain all unchanged traits." if tag in cards else ""
+        return " ".join(x for x in (f"{head}{'.' if look or notes else fallback}", look, notes and f"{_cap(notes)}.", priority) if x)
 
     def kept(notes, stock, tag=None):
         if notes:
             return f"partially_preserved — {notes}."
-        return f"fully_preserved — {card_kept[tag]} are retained." if card_kept.get(tag) else f"fully_preserved — {stock}"
+        return f"fully_preserved — {card_kept[tag]} are retained, except traits explicitly changed in detailed_description." if card_kept.get(tag) else f"fully_preserved — {stock}"
 
     citation_warnings = fix_picture_citations(cast, segments)
     shots = _shots(_bare(segments.get("Detailed description"), ["Detailed description", "integrated_multimodal_description"]))

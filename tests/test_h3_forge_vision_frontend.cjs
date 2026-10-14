@@ -21,6 +21,7 @@ class Element {
   insertBefore(child, before) { const i = this.children.indexOf(before); this.children.splice(i, 0, child); child.parentElement = this; }
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(c => c !== this); }
   focus() {}
+  getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: 640, height: 480 }; }
   setAttribute(key, value) { this.attributes[key] = value; }
   addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); }
   async dispatch(type) {
@@ -30,11 +31,13 @@ class Element {
       for (const callback of element.listeners[type] || []) await callback(event);
     }
   }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) {
     const descendants = this.children.flatMap(c => typeof c === 'string' ? [] : [c, ...c.querySelectorAll('*')]);
     if (selector === '*') return descendants;
     return descendants.filter(c => selector.split(',').some(s => {
       const parts = s.trim().split(' '); const tag = parts.pop();
+      if (tag.startsWith('.')) return c.className?.split(' ').includes(tag.slice(1));
       if (c.tagName !== tag.toUpperCase()) return false;
       if (!parts.length) return true;
       let parent = c.parentElement;
@@ -55,20 +58,21 @@ class Element {
 }
 const root = path.join(__dirname, '..');
 const image = (role = 'character-1') => ({ kind: 'image', path: 'a.png', easy_role: role, role: 'subject', instructions: '', item: { id: 'a' } });
-async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, history = [], prefs = {}, beforeReply = null } = {}) {
+async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, history = [], prefs = {}, beforeReply = null, castReply = null } = {}) {
   const document = { head: new Element('head'), body: new Element('body'), createElement: t => new Element(t), getElementById: () => null, addEventListener() {}, removeEventListener() {} };
-  const requests = [], applied = [];
+  const requests = [], applied = [], timers = new Map(); let timerId = 0;
   const node = { id: 1, properties: { dasiwaH3ForgeHistory: history }, graph: { setDirtyCanvas() {} }, __dasiwaH3Forge: {
     references: () => refs, mode: () => mode, continuity: () => continuity, contextKey: () => 'context', duration: () => 5,
     updateReference: () => true, apply: entry => { applied.push(entry); return true; }, setStatus() {},
   } };
   let stored = JSON.stringify(prefs);
-  const context = vm.createContext({ document, window: {}, app: { registerExtension() {} },
+  const context = vm.createContext({ document, window: {}, Image: class {}, app: { registerExtension() {} },
     localStorage: { getItem: () => stored, setItem: (_, value) => { stored = value; } },
-    setInterval: () => 1, clearInterval() {},
+    setInterval: () => 1, clearInterval() {}, setTimeout: callback => { timers.set(++timerId, callback); return timerId; }, clearTimeout: id => timers.delete(id),
     api: { apiURL: p => p, fetchApi: async (url, options) => {
       if (url.endsWith('/models')) return { ok: true, json: async () => ({ models: [{ id: 'local:test', label: 'Test' }], creativity: ['balanced'], default_creativity: 'balanced', detail_levels: {}, default_detail: 5, shot_counts: ['Auto'] }) };
       const request = JSON.parse(options.body); requests.push(request);
+      if (url.endsWith('/cast') && castReply) return castReply;
       if (beforeReply) await beforeReply(document);
       return { ok: true, json: async () => ({ mode, continuity: !!continuity, source_id: continuity?.clip_id, simple_prompt: 'Generated draft', fields: {}, model: 'local:test', easy: request.easy, vision: true, saw_images: request.see_pictures ? 1 : 0, unloaded: true, stats: { seconds: 1 } }) };
     } },
@@ -82,9 +86,51 @@ async function dialog({ refs = [image()], mode = 'REF2VA', continuity = null, hi
   const choice = all.find(c => c.tagName === 'LABEL' && c.textContent.includes('Let the model see the pictures'));
   const visible = element => !!element && !element.hidden && (!element.parentElement || visible(element.parentElement));
   return { node, refs, requests, applied, all, button, choice, checkbox: choice?.children[0], visible,
+    autoCast: all.find(c => c.tagName === 'LABEL' && c.textContent.includes('Read Cast automatically'))?.children[0],
+    async readTimer() { const pending = [...timers.values()]; timers.clear(); for (const callback of pending) await callback(); },
     brief: all.find(c => c.tagName === 'TEXTAREA'), historyButton: () => all.find(c => c.title === 'Show this prompt; Apply to node to use it'),
     close: () => context.window.DaSiWaH3Forge.close(node) };
 }
+
+test('Cast rejects stale replies after an Idea change and permits manual edits during a read', async () => {
+  let d;
+  d = await dialog({ castReply: { ok: true, json: async () => {
+    const area = d.all.find(c => c.attributes['aria-label'] === 'Character 1: description');
+    assert.equal(area.disabled, false);
+    d.brief.value = 'A changed outfit';
+    d.autoCast.checked = false;
+    return { text: 'Old outfit.' };
+  } } });
+  await d.readTimer();
+  assert.equal(d.node.properties.dasiwaH3ForgeCast, undefined);
+  d.close();
+});
+
+test('Cast autoload is default on, independent of draft vision, with a remembered opt-out', async () => {
+  const d = await dialog({ castReply: { ok: true, json: async () => ({ text: 'An adult with dark hair.' }) } });
+  assert.equal(d.autoCast.checked, true);
+  assert.equal(d.checkbox.checked, false);
+  await d.readTimer();
+  assert.equal(d.requests.filter(r => r.character === 1).length, 1);
+  assert.equal(d.node.properties.dasiwaH3ForgeCast[1].text, 'An adult with dark hair.');
+  d.close();
+  const off = await dialog({ prefs: { auto_cast: false } });
+  assert.equal(off.autoCast.checked, false);
+  await off.readTimer();
+  assert.equal(off.requests.length, 0);
+  off.close();
+});
+
+test('a non-vision reader stops the automatic queue without blocking normal drafting', async () => {
+  const d = await dialog({ refs: [image(), { ...image('character-2'), path: 'b.png', item: { id: 'b' } }],
+    castReply: { ok: false, json: async () => ({ error: 'no_vision', message: 'Write their description yourself.' }) } });
+  await d.readTimer(); await d.readTimer();
+  assert.equal(d.requests.filter(r => r.character).length, 1);
+  assert.equal(d.node.properties.dasiwaH3ForgeCast, undefined);
+  d.brief.value = 'An idea'; await d.button('Generate').dispatch('click');
+  assert.equal(d.button('Apply to node').disabled, false);
+  d.close();
+});
 
 test('picture button clicks invalidate drafts and repainted Who buttons disable during generation', async () => {
   const d = await dialog({ beforeReply: async document => {

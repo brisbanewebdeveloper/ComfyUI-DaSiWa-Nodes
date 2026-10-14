@@ -483,12 +483,24 @@ READ_WAIT = 180
 def _wait_turn(function):
     @wraps(function)
     def call(*args, **kwargs):
-        if not _REQUEST_LOCK.acquire(timeout=READ_WAIT):
-            raise ForgeError("busy", "Forge is still busy with another model call. Try again in a moment.")
+        body = args[0] if args else kwargs.get("body", {})
+        request_id = str(body.get("request_id") or "")
+        stop = _CANCELS.get(request_id) or threading.Event()
+        if request_id:
+            _CANCELS[request_id] = stop
+        acquired = False
         try:
+            acquired = _REQUEST_LOCK.acquire(timeout=READ_WAIT)
+            if not acquired:
+                raise ForgeError("busy", "Forge is still busy with another model call. Try again in a moment.")
+            if stop.is_set():
+                raise ForgeError("cancelled", CANCELLED)
             return function(*args, **kwargs)
         finally:
-            _REQUEST_LOCK.release()
+            if acquired:
+                _REQUEST_LOCK.release()
+            if request_id and _CANCELS.get(request_id) is stop:
+                _CANCELS.pop(request_id, None)
     return call
 
 
@@ -496,7 +508,7 @@ def _wait_turn(function):
 def find_people(body, input_directory, release_memory=None):
     """Boxes for everyone in one picture. Blocking: call it off the event loop."""
     request_id = str(body.get("request_id") or "")
-    stop = threading.Event()
+    stop = _CANCELS.get(request_id) or threading.Event()
     if request_id:
         _CANCELS[request_id] = stop
     try:
@@ -585,7 +597,7 @@ def read_cast(body, input_directory, release_memory=None):
     """One character's card, read from all their pictures (each from their
     people box, where they have one). Blocking: call it off the event loop."""
     request_id = str(body.get("request_id") or "")
-    stop = threading.Event()
+    stop = _CANCELS.get(request_id) or threading.Event()
     if request_id:
         _CANCELS[request_id] = stop
     try:

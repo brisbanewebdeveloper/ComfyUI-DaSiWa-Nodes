@@ -437,7 +437,7 @@ async function open(node) {
   const CAST_KEY = "dasiwaH3ForgeCast", CAST_MAX = 600;
   const castOn = !continuity && refs.length > 0 && (mode === "REF2VA" ? refs.some(r => r.kind === "image" && r.easy_role) : !!BASE_ROLE[mode]);
   const live = new Map();
-  let castTimer = null, castBusy = false, castHeld = 0;
+  let castTimer = null, castBusy = false, castHeld = 0, castNoVision = false;
   // Find people and Generate wait for a card being read and hold the queue
   // while they run: the server does one model call at a time, and refused a
   // Find people pressed during a read ("Another Forge analysis is running").
@@ -452,8 +452,12 @@ async function open(node) {
   }
   const castEls = new Map();
   const castCards = el("div", { className: "cast-cards" });
+  const autoCast = el("input", { type: "checkbox", checked: prefs.auto_cast !== false });
+  const castNotice = el("span", { className: "muted" });
+  autoCast.addEventListener("change", () => { remember({ auto_cast: autoCast.checked }); renderCast(); });
   const castWrap = el("div", { className: "field cast", hidden: true }, el("label", { textContent: "Cast and scene" }),
     el("span", { className: "muted", textContent: "One card per character, and one for the place, the style and each pose, read from their pictures (a character from their box, where they have one) with the model picked below. Edit a card and it is used as written. An empty card is drafted as before." }),
+    el("label", { title: "Automatically read empty or unchanged cards with the selected vision model. This sends pictures independently of the draft's vision checkbox. Turn off to use manual scans or descriptions only." }, autoCast, " Read Cast automatically"), castNotice,
     castCards);
   // Card keys: a character's number, or "place", "style" and "pose:<item id>"
   // (a pose belongs to its picture, which keeps its id when pictures move).
@@ -505,15 +509,17 @@ async function open(node) {
   // Everything the reader is told for a card, so a change shows as out of
   // date. Not the frame kinds: a mode switch is not a change to how they look.
   function castSig(key) {
-    if (isScene(key)) return JSON.stringify(cardRefs(key).map(r => [r.path, kindsOf(r).join(","), key.startsWith("pose:") ? peopleIn(r).length : 0, r.instructions || "", r.keep || "", r.drop || ""]));
+    const idea = [brief.value.trim(), shots.value, shotRows()];
+    if (isScene(key)) return JSON.stringify([idea, cardRefs(key).map(r => [r.path, kindsOf(r).join(","), key.startsWith("pose:") ? peopleIn(r).length : 0, r.instructions || "", r.keep || "", r.drop || ""])]);
     const n = key;
-    return JSON.stringify(castRefs(n).map(r => [r.path, kindsOf(r).filter(k => !k.endsWith("-frame")).join(","), (r.boxes || []).find(b => b.n === n)?.box ?? null,
-      peopleIn(r).indexOf(n), peopleIn(r).length, r.who_axis ?? "", r.instructions || "", r.keep || "", r.drop || ""]));
+    return JSON.stringify([idea, castRefs(n).map(r => [r.path, kindsOf(r).filter(k => !k.endsWith("-frame")).join(","), (r.boxes || []).find(b => b.n === n)?.box ?? null,
+      peopleIn(r).indexOf(n), peopleIn(r).length, r.who_axis ?? "", r.instructions || "", r.keep || "", r.drop || ""])]);
   }
   function needsRead(key) {
     const e = cardOf(key), l = liveOf(key), sig = castSig(key);
     if (l.reading || !cardRefs(key).length) return false;
     if (l.force) return true;
+    if (!autoCast.checked || castNoVision) return false;
     if (e.edited || l.failedSig === sig) return false;
     return !e.text || e.sig !== sig;
   }
@@ -559,7 +565,7 @@ async function open(node) {
     return key;
   }
   async function readCard(key, redo) {
-    const l = liveOf(key), sig = castSig(key);
+    const l = liveOf(key), sig = castSig(key), readingModel = modelSel.value;
     Object.assign(l, { reading: true, typedDuring: false, error: null });
     paintCard(key);
     const requestId = `cast-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -571,9 +577,10 @@ async function open(node) {
           shot_briefs: shotRows(), references: refs.map(({ item, ...r }) => r), ...which, redo: !!redo, keep_warm: true }) });
       const data = await res.json();
       warmed = true;
+      if (!res.ok && data.error === "no_vision") { castNoVision = true; castNotice.textContent = data.message; }
       if (!res.ok) throw new Error(data.message || res.statusText);
       // Typed into while it was being read: what they typed stays.
-      if (!l.typedDuring && !closed) { saveCard(key, { text: String(data.text || "").slice(0, CAST_MAX), edited: false, sig }); refsChanged(); }
+      if (!l.typedDuring && !closed && castKeys().includes(key) && castSig(key) === sig && modelSel.value === readingModel) { saveCard(key, { text: String(data.text || "").slice(0, CAST_MAX), edited: false, sig }); refsChanged(); }
       l.failedSig = null;
     } catch (err) {
       l.error = err.message;
@@ -618,7 +625,7 @@ async function open(node) {
     card.querySelector(".cast-name").textContent = cardLabel(key);
     const text = card.querySelector("textarea");
     if (document.activeElement !== text && text.value !== e.text) text.value = e.text;
-    text.disabled = l.reading || !!running;
+    text.disabled = !!running;
     card.querySelector(".cast-count").textContent = `${e.text.length}/${CAST_MAX}`;
     const stale = !!e.text && e.sig !== castSig(key);
     card.dataset.state = l.reading ? "reading" : l.error ? "error" : stale && e.edited ? "stale" : "";
@@ -930,7 +937,7 @@ async function open(node) {
       const input = el("textarea", { rows: 2, value: typed[i] || "", disabled: loadingModels || !!running,
         placeholder: count === 1 ? "What happens in the shot (optional)" : `What happens in shot ${i + 1} (optional)` });
       input.setAttribute("aria-label", `Shot ${i + 1}`);
-      input.addEventListener("input", () => { typed[i] = input.value; clearDraft(); });
+      input.addEventListener("input", () => { typed[i] = input.value; clearDraft(); renderCast(); });
       return el("div", { className: "field" }, el("label", { textContent: `Shot ${i + 1}` }), input);
     }));
     shotBox.hidden = !count;
@@ -954,7 +961,7 @@ async function open(node) {
     return JSON.stringify([brief.value.trim(), structured.checked, definitions.value, refs.map(({ item, ...r }) => r), ...(rows.some(Boolean) ? [rows] : []), ...(Object.keys(cards).length ? [cards] : [])]);
   };
   const referenceControls = Array.from(box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button"));
-  const controls = [brief, modelSel, detail, creativity, shots, structured, seePictures];
+  const controls = [brief, modelSel, detail, creativity, shots, structured, seePictures, autoCast];
   const setControlsDisabled = disabled => {
     [...controls, ...box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button, .refs .people button, .cast textarea")].forEach(c => { c.disabled = disabled; });
     if (!disabled) for (const n of castEls.keys()) paintCard(n);
@@ -1068,13 +1075,13 @@ async function open(node) {
     setStatus("Idea or options changed. Generate a new draft, or choose a saved draft.");
     renderHistory();
   };
-  brief.addEventListener("input", clearDraft);
+  brief.addEventListener("input", () => { clearDraft(); renderCast(); });
   refsChanged = () => { clearDraft(); renderCast(); };
   modelSel.addEventListener("change", clearDraft);
   // Another model may be able to read what this one could not.
-  modelSel.addEventListener("change", () => { for (const l of live.values()) l.failedSig = null; renderCast(); });
+  modelSel.addEventListener("change", () => { castNoVision = false; castNotice.textContent = ""; for (const l of live.values()) l.failedSig = null; renderCast(); });
   creativity.addEventListener("change", clearDraft);
-  shots.addEventListener("change", () => { renderShots(); clearDraft(); });
+  shots.addEventListener("change", () => { renderShots(); clearDraft(); renderCast(); });
   detail.addEventListener("input", clearDraft);
   structured.addEventListener("change", clearDraft);
   seePictures.addEventListener("change", clearDraft);
