@@ -513,6 +513,64 @@ function drawPill(ctx, t, x, y, w, h, label, val, color, zeroed) {
   ctx.textAlign = "left";
 }
 
+function loraActionAt(node, [x, y]) {
+  if (node.flags.collapsed) return null;
+  const row = Math.floor((y - 59) / 28);
+  const data = JSON.parse(node.properties.stack_data);
+  if (!data[row] || y < 61 + row * 28 || y > 85 + row * 28) return null;
+  const s = node.size[0] / 1000;
+  if (x > 934 * s && x < 960 * s) return { row, action: "info", enabled: data[row].lora !== "None" };
+  if (x > 966 * s && x < 992 * s) return { row, action: "trash", enabled: data[row].lora !== "None" };
+  return null;
+}
+
+function drawLoraAction(ctx, t, x, y, w, action, enabled, hovered) {
+  const color = enabled ? (action === "info" ? t.strColor : t.offColor) : t.arrowColor;
+  ctx.save();
+  ctx.fillStyle = enabled ? color + (hovered ? "40" : "18") : t.btnBg;
+  ctx.strokeStyle = enabled ? color + (hovered ? "FF" : "99") : t.arrowColor;
+  ctx.lineWidth = hovered ? 1.4 : 0.8;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, 24, 4);
+  ctx.fill();
+  ctx.stroke();
+  // Vector glyphs stay independent of platform icon fonts.
+  ctx.translate(x + w / 2, y + 12);
+  const scale = Math.min(w / 22, 1);
+  ctx.scale(scale, scale);
+  ctx.strokeStyle = ctx.fillStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  if (action === "info") {
+    ctx.arc(0, 0, 6, 0, Math.PI * 2);
+    ctx.moveTo(0, -1);
+    ctx.lineTo(0, 3);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, -3.5, 0.8, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.moveTo(-5, -4);
+    ctx.lineTo(5, -4);
+    ctx.moveTo(-2, -4);
+    ctx.lineTo(-2, -6);
+    ctx.lineTo(2, -6);
+    ctx.lineTo(2, -4);
+    ctx.moveTo(-4, -1);
+    ctx.lineTo(-3, 6);
+    ctx.lineTo(3, 6);
+    ctx.lineTo(4, -1);
+    ctx.moveTo(-1, 0);
+    ctx.lineTo(-1, 3);
+    ctx.moveTo(1, 0);
+    ctx.lineTo(1, 3);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // Both renderers mount DOM widgets. Reuse the existing painter/hit tests rather
 // than maintaining a second stack editor or relying on canvas-only node hooks.
 function mountLoraSurface(node, calcHeight, getTooltipAt) {
@@ -556,7 +614,16 @@ function mountLoraSurface(node, calcHeight, getTooltipAt) {
     repaint();
   });
   surface.addEventListener("pointermove", event => {
-    surface.title = getTooltipAt(node, localPosition(event));
+    const position = localPosition(event);
+    surface.title = getTooltipAt(node, position);
+    node.onMouseMove(event, position);
+    const action = loraActionAt(node, position);
+    surface.style.cursor = action ? (action.enabled ? "pointer" : "not-allowed") : "";
+  });
+  surface.addEventListener("pointerleave", () => {
+    surface.title = "";
+    surface.style.cursor = "";
+    node.onMouseLeave();
   });
   surface.addEventListener("contextmenu", event => {
     if (root.closest(".lg-node")) return;
@@ -687,6 +754,13 @@ app.registerExtension({
         return "";
       }
 
+      const action = loraActionAt(node, local_pos);
+      if (action) {
+        if (!action.enabled) return "Select a LoRA to enable this button";
+        return action.action === "info"
+          ? "Show LoRA info (Civitai, trigger words, images)"
+          : "Clear this slot (does not delete the LoRA file)";
+      }
       const [x, y] = local_pos;
       const W = node.size[0];
       const s = W / 1000;
@@ -719,9 +793,7 @@ app.registerExtension({
         stX: 548 * s, stW: 80 * s,
         vX: 635 * s, vW: 60 * s,
         aX: 702 * s, aW: 60 * s,
-        rX: 770 * s, rW: W - 770 * s - 8,
-        iX: 952 * s, iW: 18 * s,
-        tX: 974 * s, tW: 18 * s,
+        rX: 770 * s, rW: 158 * s,
       };
 
       for (let i = 0; i < data.length; i++) {
@@ -733,8 +805,6 @@ app.registerExtension({
         if (x > C.vX && x < C.vX + C.vW) return CONTROL_DESCRIPTIONS.video;
         if (x > C.aX && x < C.aX + C.aW) return CONTROL_DESCRIPTIONS.audio;
         if (x > C.rX && x < C.rX + C.rW) return CONTROL_DESCRIPTIONS.keys;
-        if (x > C.iX && x < C.iX + C.iW) return "Show LoRA info (Civitai, trigger words, images)";
-        if (x > C.tX && x < C.tX + C.tW) return "Trash this LoRA (set the slot back to None)";
       }
 
       return "";
@@ -742,11 +812,21 @@ app.registerExtension({
 
     nodeType.prototype.onMouseMove = function (_e, local_pos) {
       setCanvasTooltip(getTooltipAt(this, local_pos));
+      const action = loraActionAt(this, local_pos);
+      const hovered = action?.enabled ? `${action.row}:${action.action}` : null;
+      if (this._loraHoveredAction !== hovered) {
+        this._loraHoveredAction = hovered;
+        this.setDirtyCanvas(true);
+      }
       return false;
     };
 
     nodeType.prototype.onMouseLeave = function () {
       setCanvasTooltip("");
+      if (this._loraHoveredAction) {
+        this._loraHoveredAction = null;
+        this.setDirtyCanvas(true);
+      }
       return false;
     };
 
@@ -779,9 +859,9 @@ app.registerExtension({
         stX: 548 * s, stW: 80 * s,
         vX: 635 * s, vW: 60 * s,
         aX: 702 * s, aW: 60 * s,
-        rX: 770 * s, rW: W - 770 * s - 8,
-        iX: 952 * s, iW: 18 * s,
-        tX: 974 * s, tW: 18 * s,
+        rX: 770 * s, rW: 158 * s,
+        iX: 934 * s, iW: 26 * s,
+        tX: 966 * s, tW: 26 * s,
       };
 
       const modeW = 150, modeX = (W - modeW) / 2;
@@ -958,52 +1038,11 @@ app.registerExtension({
           }
         }
 
-        // Info button (row right edge): drawn circle + "i"; opens the
-        // Civitai/trigger-words panel.
-        {
-          const infoCol = row.lora !== "None" ? t.strColor + "AA" : t.nameEmpty;
-          const cx = C.iX + C.iW / 2, cy = ry + ROW_H / 2;
-          const r = 8.5 * s;
-          ctx.strokeStyle = infoCol;
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.fillStyle = infoCol;
-          ctx.font = "bold " + Math.max(4, Math.round(9 * s)) + "px 'Courier New',monospace";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText("i", cx, cy + 0.5 * s);
-          ctx.textBaseline = "alphabetic";
-          ctx.textAlign = "left";
-        }
-
-        // Trash button (right of info): drawn trash-can shape; resets this
-        // slot back to "None".
-        {
-          const trCol = row.lora !== "None" ? t.offColor + "CC" : t.nameEmpty;
-          const cx = C.tX + C.tW / 2, cy = ry + ROW_H / 2;
-          ctx.strokeStyle = trCol;
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          // lid + handle
-          ctx.moveTo(cx - 5.8 * s, cy - 5 * s);
-          ctx.lineTo(cx + 5.8 * s, cy - 5 * s);
-          ctx.moveTo(cx, cy - 6.4 * s);
-          ctx.lineTo(cx, cy - 5 * s);
-          // body
-          ctx.moveTo(cx - 4.4 * s, cy - 2.9 * s);
-          ctx.lineTo(cx + 4.4 * s, cy - 2.9 * s);
-          ctx.lineTo(cx + 3.2 * s, cy + 5.8 * s);
-          ctx.lineTo(cx - 3.2 * s, cy + 5.8 * s);
-          ctx.closePath();
-          // ribs
-          ctx.moveTo(cx - 1.5 * s, cy - 1.6 * s);
-          ctx.lineTo(cx - 1 * s, cy + 3.8 * s);
-          ctx.moveTo(cx + 1.5 * s, cy - 1.6 * s);
-          ctx.lineTo(cx + 1 * s, cy + 3.8 * s);
-          ctx.stroke();
-        }
+        const enabled = row.lora !== "None";
+        drawLoraAction(ctx, t, C.iX, pY, C.iW, "info", enabled,
+          enabled && this._loraHoveredAction === `${i}:info`);
+        drawLoraAction(ctx, t, C.tX, pY, C.tW, "trash", enabled,
+          enabled && this._loraHoveredAction === `${i}:trash`);
       }
     };
 
@@ -1102,26 +1141,24 @@ app.registerExtension({
           stX: 548 * s, stW: 80 * s,
           vX: 635 * s, vW: 60 * s,
           aX: 702 * s, aW: 60 * s,
-          iX: 952 * s, iW: 18 * s,
-          tX: 974 * s, tW: 18 * s,
       };
 
       for (let i = 0; i < data.length; i++) {
         const ry = ROW_START + i * ROW_H;
         if (y < ry || y > ry + ROW_H) continue;
 
-        // Info glyph (row right edge)
-        if (x > C.iX && x < C.iX + C.iW && data[i].lora !== "None") {
-          openLoraInfo(data[i].lora, t);
-          return true;
-        }
-
-        // Trash button (right of info): reset this slot back to "None".
-        if (x > C.tX && x < C.tX + C.tW && data[i].lora !== "None") {
-          data[i].lora = "None";
-          this.properties.stack_data = JSON.stringify(data);
-          sync(this);
-          this.setDirtyCanvas(true);
+        const action = loraActionAt(this, local_pos);
+        if (action) {
+          if (!action.enabled) return true;
+          if (action.action === "info") {
+            openLoraInfo(data[i].lora, t);
+          } else {
+            data[i].lora = "None";
+            this.properties.stack_data = JSON.stringify(data);
+            this._loraHoveredAction = null;
+            sync(this);
+            this.setDirtyCanvas(true);
+          }
           return true;
         }
 
