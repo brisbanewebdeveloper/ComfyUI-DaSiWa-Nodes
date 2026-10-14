@@ -237,11 +237,15 @@ def output_canvas_context(canvas):
             "Use this aspect ratio only; reference-image dimensions and example formats are not the output canvas.")
 
 
-def build_user_message(bundle, brief, mode, duration, detail, creativity, references, carries_image, attached_labels=None, output_canvas=None, cast=None, shots=None):
+def build_user_message(bundle, brief, mode, duration, detail, creativity, references, carries_image, attached_labels=None, output_canvas=None, cast=None, shots=None, cards=None):
     """`cast` is easy mode's (easy_cast): the brief's names become tags and the
     cast block replaces the labelled picture lines; video, audio and saved
     references keep theirs. `shots` is the Shots control: "Auto" or None sends
-    nothing."""
+    nothing. `cards` are the Cast list's, {character number: text}, used as
+    written (nodes/h3_cast.py)."""
+    from .h3_cast import carded_tags, character_cards, frame_cast, framed_cast_lines
+    cards = cards or {}
+    carded = carded_tags(cast, cards) if cast is not None else {}
     if cast is not None:
         brief = easy_brief(brief, cast)
     else:
@@ -279,9 +283,9 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
         others = [line for line in ref_lines if not any(line.startswith(f"- {tag}") for tag in labelled)]
         if others:
             lines += ["", "References:", *others]
-        lines += easy_lines(cast, sees_pictures=bool(carries_image and attached_labels))
+        lines += easy_lines(cast, sees_pictures=bool(carries_image and attached_labels), cards=carded)
         if carries_image and attached_labels:
-            wanted = describe_targets(cast, attached_labels)
+            wanted = describe_targets(cast, attached_labels, carded)
             unseen = [tag for _ref, tag in pictures if tag not in attached_labels]
             if unseen:
                 lines.append(f"Reference pictures {', '.join(unseen)} are not visible. Do not invent visual attributes; use explicit text only.")
@@ -318,6 +322,9 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
                 if len(labels) == 1 else
                 f"The pictures for {', '.join(labels)} are attached to this message, in that order. Look at them — the lines above say what each one is FOR, the pictures say what is in them."
             )
+        # A frame mode has no Subject definitions: the cards reach the writer here.
+        if mode in ("I2VA", "FL2VA", "L2VA") and cards:
+            lines += framed_cast_lines(frame_cast(references, mode), character_cards(cards))
     return "\n".join(lines)
 
 
@@ -472,8 +479,9 @@ _DESCRIBE_FRAME = "a general description of the whole picture - who and what is 
 _DESCRIBE_POSE = "the pose only - stance, where the arms and legs are, the gesture and which way they face; not who it is or what they wear."
 
 
-def describe_targets(cast, attached_labels=None):
-    """Targets backed by attached pictures; None preserves the helper's old API."""
+def describe_targets(cast, attached_labels=None, carded=()):
+    """Targets backed by attached pictures; None preserves the helper's old API.
+    A character with a Cast card is never a target: the card is their look."""
     visible = None if attached_labels is None else set(attached_labels)
 
     def attached(numbers):
@@ -495,7 +503,7 @@ def describe_targets(cast, attached_labels=None):
                          f"{', not ' + not_them if not_them else ''}; every detail must belong to that person.")
         return "".join(notes)
     out = [(s["tag"], what, about + (only(s) if s["kind"] == "character" else ""))
-           for s in cast["subjects"] if s["kind"] in _DESCRIBE
+           for s in cast["subjects"] if s["kind"] in _DESCRIBE and s["tag"] not in carded
            # A picture of several people with no order picked cannot say which
            # one this is, so it does not make a target on its own.
            and attached(s["pictures"] + [p["picture"] for p in s.get("placements", []) if p.get("position")]
@@ -504,7 +512,7 @@ def describe_targets(cast, attached_labels=None):
     out += [(f"<Picture {f['picture']}>", f"the {f['which']} frame", _DESCRIBE_FRAME)
             for f in cast["frames"] if attached([f["picture"]])]
     out += [(f"<Picture {u['picture']}>", "a pose", _DESCRIBE_POSE)
-            for u in cast["uses"] if u["which"] == "pose" and attached([u["picture"]])]
+            for u in cast["uses"] if u["which"] == "pose" and attached([u["picture"]]) and f"<Picture {u['picture']}>" not in carded]
     return out
 
 
@@ -825,8 +833,12 @@ def _tail(refs):
     return f" · {extra}" if extra else ""
 
 
-def easy_lines(cast, sees_pictures=False):
-    """The cast block, in place of the per-picture reference lines."""
+def easy_lines(cast, sees_pictures=False, cards=None):
+    """The cast block, in place of the per-picture reference lines. `cards` are
+    {subject tag: Cast card text}: a carded character's line says `looks:`,
+    which the bundle's labelled system prompt tells the writer to keep."""
+    from .h3_cast import written_look
+    cards = cards or {}
     lines = ["", "Cast (fixed). The person labelled every picture, and Subject definitions are already written from those labels. "
              "Use exactly these subjects: add none, merge none, split none. The video model sees the pictures itself, "
              "so never describe how anyone or anything looks."]
@@ -834,9 +846,17 @@ def easy_lines(cast, sees_pictures=False):
         lines[-1] = ("Cast (fixed). The person labelled every picture, and Subject definitions are already written from those labels. "
                      "Use exactly these subjects: add none, merge none, split none. "
                      "Record visible reference appearance in Descriptions and keep the shots consistent with it; "
-                     "use attached sources only.")
+                     "use attached sources only."
+                     + (' A "looks:" line is already written for that character: keep them looking as it says, and never contradict it.'
+                        if cards else ""))
+    elif cards:
+        lines[-1] = ("Cast (fixed). The person labelled every picture, and Subject definitions are already written from those labels. "
+                     'Use exactly these subjects: add none, merge none, split none. "looks:" is what was seen in the pictures: '
+                     "set each shot in that place and light, and keep everyone looking as described. Never contradict it.")
     for s in cast["subjects"]:
         tail = _tail(s["refs"])
+        if s["tag"] in cards:
+            tail += f" · looks: {written_look(cards[s['tag']])}"
         pics = _picture_list(s["pictures"])
         if s["kind"] == "character":
             lines.append(f'- {s["tag"]} is "{s["name"]}" in the brief, a character, shown {_shown_in(s)}{tail}')
@@ -848,9 +868,11 @@ def easy_lines(cast, sees_pictures=False):
         lines.append((f"- <Picture {f['picture']}> is the first frame: [Shot 1] opens on it exactly" if f["which"] == "first"
                       else f"- <Picture {f['picture']}> is the last frame: the final shot ends on it exactly") + _tail([f["ref"]]))
     for u in cast["uses"]:
+        stance = cards.get(f"<Picture {u['picture']}>") if u["which"] == "pose" else None
         lines.append((f"- <Picture {u['picture']}> gives a pose only{pose_takers(cast, u)}: stance, limb position and gesture; not who anyone is, "
                       "their clothes or the background" if u["which"] == "pose"
-                      else f"- <Picture {u['picture']}> is used only as its instructions say") + _tail([u["ref"]]))
+                      else f"- <Picture {u['picture']}> is used only as its instructions say") + _tail([u["ref"]])
+                     + (f" · pose: {stance}" if stance else ""))
     return lines
 
 
@@ -1001,7 +1023,7 @@ def fix_picture_citations(cast, segments, written=("Subject definitions", "Reten
                for n in shared])
 
 
-def easy_segments(cast, segments, description_targets=None):
+def easy_segments(cast, segments, description_targets=None, cards=None):
     """Subject definitions and Retention analysis written in code, into the
     parsed segments, in the reference guide's shape: the definition says what
     the subject looks like (from Descriptions, when the writer saw the
@@ -1025,6 +1047,16 @@ def easy_segments(cast, segments, description_targets=None):
                 ". The base draft is available, but its visual descriptions are incomplete; regenerate or review before applying."
             )
 
+    # The Cast list's cards, used as written: never cut, and never replaced by
+    # the writer's own Descriptions. A character's Retention kept list is made
+    # from their card; a place or style card is prose about a whole picture,
+    # so its Retention keeps the stock wording.
+    from .h3_cast import kept_from_look, written_look
+    cards = cards or {}
+    descriptions.update({tag: written_look(text) for tag, text in cards.items()})
+    people = {s["tag"] for s in cast["subjects"] if s["kind"] == "character"}
+    card_kept = {tag: kept_from_look(text) for tag, text in cards.items() if tag in people}
+
     def described(tag):
         return f" As the pictures show: {descriptions[tag]}" if descriptions.get(tag) else ""
 
@@ -1039,8 +1071,10 @@ def easy_segments(cast, segments, description_targets=None):
         look = descriptions.get(tag, "")
         return " ".join(x for x in (f"{head}{'.' if look or notes else fallback}", look, notes and f"{_cap(notes)}.") if x)
 
-    def kept(notes, stock):
-        return f"partially_preserved — {notes}." if notes else f"fully_preserved — {stock}"
+    def kept(notes, stock, tag=None):
+        if notes:
+            return f"partially_preserved — {notes}."
+        return f"fully_preserved — {card_kept[tag]} are retained." if card_kept.get(tag) else f"fully_preserved — {stock}"
 
     citation_warnings = fix_picture_citations(cast, segments)
     shots = _shots(_bare(segments.get("Detailed description"), ["Detailed description", "integrated_multimodal_description"]))
@@ -1057,16 +1091,16 @@ def easy_segments(cast, segments, description_targets=None):
             if every and not cited:
                 warnings.append(f"{s['name']} ({s['tag']}) is never named in a shot. Check detailed_description, or say in the idea what {s['name']} does.")
             where = _span(cited) or (_span(every) if every else "every shot")
-            retention.append(f"{s['tag']} (appears in {where}): " + kept(notes, "their face, hair, build and outfit are retained in every shot."))
+            retention.append(f"{s['tag']} (appears in {where}): " + kept(notes, "their face, hair, build and outfit are retained in every shot.", s["tag"]))
         elif s["kind"] == "place":
             definitions.append(define(f"{s['tag']} is the place in {pics}, where the video happens", s["tag"], notes,
                                       "; keep it as the picture shows."))
             retention.append(f"{s['tag']} (appears in {_span(every) if every else 'every shot'}): "
-                             + kept(notes, "its layout, landmarks, light and time of day are retained."))
+                             + kept(notes, "its layout, landmarks, light and time of day are retained.", s["tag"]))
         else:
             definitions.append(define(f"{s['tag']} is the rendering style of {pics}, applied to the whole video and not its content",
                                       s["tag"], notes, "."))
-            retention.append(f"{s['tag']} (applies to every shot): " + kept(notes, "its rendering is retained throughout."))
+            retention.append(f"{s['tag']} (applies to every shot): " + kept(notes, "its rendering is retained throughout.", s["tag"]))
     for f in cast["frames"]:
         shot = "[Shot 1]" if f["which"] == "first" else (f"[Shot {last}]" if last else "the final shot")
         tag = f"<Picture {f['picture']}>"

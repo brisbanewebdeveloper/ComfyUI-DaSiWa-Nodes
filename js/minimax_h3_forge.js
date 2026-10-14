@@ -174,6 +174,7 @@ function installStyles() {
   .ds-forge .people summary{cursor:pointer;color:#9fb3c2;font-size:11px}
   .ds-forge .people-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
   .ds-forge .people-tools button{padding:3px 9px;font-size:11px}
+  .ds-forge .people-tools .muted{flex:1 1 240px}
   .ds-forge .people-stage{position:relative;display:inline-block;line-height:0;user-select:none;touch-action:none;max-width:100%}
   .ds-forge .people-stage img{display:block;max-width:100%;max-height:360px;width:auto;height:auto;object-fit:contain;border-radius:3px}
   .ds-forge .people-box{position:absolute;box-sizing:border-box;border:2px solid #b180ff;background:rgba(151,91,255,.10);cursor:move;line-height:normal}
@@ -181,6 +182,22 @@ function installStyles() {
   .ds-forge .people-tag{position:absolute;top:-1px;left:-1px;max-width:max-content;background:#b180ff;color:#0d1217;font-size:10px;font-weight:600;padding:1px 4px;border-radius:0 0 3px 0;white-space:nowrap}
   .ds-forge .people-box.active .people-tag{background:#f3c67a}
   .ds-forge .people-tag select{position:absolute;inset:0;opacity:0;width:100%;height:100%;padding:0;cursor:pointer}
+  .ds-forge .cast{display:flex;flex-direction:column;gap:6px}
+  .ds-forge .cast-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:6px}
+  .ds-forge .cast-card{display:grid;grid-template-columns:72px 1fr;gap:8px;align-items:start;border:1px solid #344452;border-radius:6px;padding:6px;transition:box-shadow .3s}
+  .ds-forge .cast-card.flash{box-shadow:0 0 0 2px #f3c67a}
+  .ds-forge .cast-card[data-state=error]{border-color:#ff8a8a}
+  .ds-forge .cast-card[data-state=stale]{border-color:#f3c67a}
+  .ds-forge .cast-thumb{width:72px;height:96px;display:flex;align-items:center;justify-content:center;background:#090d11;border-radius:4px;overflow:hidden}
+  .ds-forge .cast-thumb img{max-width:100%;max-height:100%}
+  .ds-forge .cast-body{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .ds-forge .cast-top{display:flex;gap:8px;align-items:baseline}
+  .ds-forge .cast-name{font-weight:600}
+  .ds-forge .cast-status{color:#8fa3b2;font-size:11px;flex:1}
+  .ds-forge .cast-card[data-state=error] .cast-status{color:#ff8a8a}
+  .ds-forge .cast-card[data-state=stale] .cast-status{color:#f3c67a}
+  .ds-forge .cast-card textarea{min-height:64px;font-size:12px}
+  .ds-forge .cast-count{color:#8fa3b2;font-size:10px;text-align:right}
   .ds-forge .people-resize{position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;background:#b180ff;border-radius:2px;cursor:nwse-resize}
   `;
   document.head.append(style);
@@ -212,7 +229,14 @@ async function open(node) {
   // A run in flight, so Cancel and closing the pop-out can stop it.
   let running = null, closed = false, loadingModels = true, statusTimer = null;
   const cancelRun = () => { clearInterval(statusTimer); statusTimer = null; if (running) { const id = running; running = null; api.fetchApi("/dasiwa/h3/forge/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: id }) }).catch(() => {}); } };
-  const close = () => { if (closed) return; closed = true; cancelRun(); overlay.remove(); document.removeEventListener("keydown", onKey); openDialogs.delete(node); };
+  // Set once a Find people or Cast read has run: closing then unloads the model they kept warm.
+  let warmed = false, castRequest = null;
+  const close = () => {
+    if (closed) return; closed = true; cancelRun();
+    if (castRequest) api.fetchApi("/dasiwa/h3/forge/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: castRequest }) }).catch(() => {});
+    if (warmed) api.fetchApi("/dasiwa/h3/forge/release", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+    overlay.remove(); document.removeEventListener("keydown", onKey); openDialogs.delete(node);
+  };
   openDialogs.set(node, close);
   const onKey = e => { if (e.key === "Escape") close(); };
   document.addEventListener("keydown", onKey);
@@ -264,9 +288,12 @@ async function open(node) {
     const findBtn = el("button", { type: "button", textContent: "Find people", title: "The model picked below boxes everyone in this picture. It needs to see pictures and answer with boxes (Qwen-VL models do)." });
     const addBtn = el("button", { type: "button", textContent: "Add character", title: "Drop a box to drag over someone." });
     const clearBtn = el("button", { type: "button", textContent: "Clear boxes" });
+    // Read everyone in this picture again from the boxes as they are; Find
+    // people boxes the picture afresh (PromptForge, 14 Oct 2026).
+    const scanBtn = el("button", { type: "button", textContent: "Scan people", title: "Read everyone in this picture again for their Cast cards, from their boxes as they are. Cards you edited are read again too." });
     const img = el("img", { src: viewUrl(ref.path), alt: "", draggable: false });
     const stage = el("div", { className: "people-stage" }, img);
-    wrap.append(el("div", { className: "people-tools" }, findBtn, addBtn, clearBtn, note), stage);
+    wrap.append(el("div", { className: "people-tools" }, findBtn, addBtn, clearBtn, scanBtn, note), stage);
     const busy = () => running || loadingModels;
     const commit = next => {
       boxes = next.map(b => ({ n: b.n, box: b.box.map(v => Number(clamp01(v).toFixed(4))) }));
@@ -296,6 +323,7 @@ async function open(node) {
         // Picking a number another box has swaps the two.
         const to = Number(pick.value);
         active = to;
+        swapCards(ref, b.n, to);
         commit(boxes.map(x => x.n === b.n ? { ...x, n: to } : x.n === to ? { ...x, n: b.n } : x));
       });
       tag.append(pick);
@@ -325,12 +353,14 @@ async function open(node) {
       const up = () => {
         node.removeEventListener("pointermove", move); node.removeEventListener("pointerup", up); node.removeEventListener("pointercancel", up);
         if (next !== b.box) commit(boxes.map(x => x.n === b.n ? { ...x, box: next } : x));
+        else focusCard(b.n);
       };
       node.addEventListener("pointermove", move); node.addEventListener("pointerup", up); node.addEventListener("pointercancel", up);
     }
     function paint() {
       summary.textContent = boxes.length ? `People boxes (${boxes.length}): who is in it, left to right` : "People boxes: box each character instead of tapping numbers";
       clearBtn.hidden = !boxes.length;
+      scanBtn.hidden = !castOn || !peopleIn(ref).length;
       for (const x of stage.querySelectorAll(".people-box")) x.remove();
       if (!boxes.some(b => b.n === active)) active = null;
       const offered = whoShown(refs.filter(r => r.kind === "image").length, usedNumbers());
@@ -355,10 +385,14 @@ async function open(node) {
       const model = modelSel.value;
       if (!model) { note.textContent = "Pick a model first."; return; }
       findBtn.disabled = true;
+      // The server runs one model call at a time: wait for a card being read,
+      // and hold the card queue until the boxes are back.
+      if (castBusy) note.textContent = "Waiting for the Cast card being read…";
+      await castQuiet();
       note.textContent = `Looking for people with ${modelSel.selectedOptions[0]?.textContent || model}…`;
       try {
         const res = await api.fetchApi("/dasiwa/h3/forge/people", { timeoutMs: null, method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model, settings: forgeSettings(), path: ref.path }) });
+          body: JSON.stringify({ model, settings: forgeSettings(), path: ref.path, keep_warm: castOn }) });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || res.statusText);
         if (closed) return;
@@ -368,18 +402,283 @@ async function open(node) {
         const had = boxes.length ? whoFromBoxes(boxes) : whoOf(ref);
         const numbers = had.length === data.people.length ? had : data.people.map((_, i) => i + 1);
         active = null;
+        warmed = true;
+        // Find people again is how a card is read again: everyone it boxes is
+        // read fresh, cards the person edited included (PromptForge, 14 Oct 2026).
+        for (const n of numbers) { const l = liveOf(n); l.force = true; l.failedSig = null; }
         commit(data.people.map((p, i) => ({ n: numbers[i], box: p.box })));
         note.textContent = `Found ${data.people.length} ${data.people.length === 1 ? "person" : "people"} in ${data.seconds}s${data.unloaded ? "" : " (model still loaded)"}. Drag, resize or renumber any box that is off.`;
       } catch (err) {
         note.textContent = err.message;
       } finally {
         findBtn.disabled = false;
+        castResume();
       }
+    };
+    scanBtn.onclick = () => {
+      if (busy()) return;
+      for (const n of peopleIn(ref)) { const l = liveOf(n); l.force = true; l.failedSig = null; }
+      renderCast();
+      clearTimeout(castTimer);
+      runCastQueue();
     };
     paint();
     return { element: wrap, boxes: () => boxes, clear: () => { if (boxes.length) commit([]); } };
   }
+
   let includeReferences = null;
+  // ── The Cast list (PromptForge's, 13-14 Oct 2026; nodes/h3_cast.py) ──
+  // One card per character in the pictures: a thumbnail from their box, and
+  // what they look like, read from all their pictures and editable. The text
+  // is used at Generate as written; an empty card is drafted as before. A card
+  // the person never touched is read again when their pictures or box change;
+  // one they edited is only marked out of date, never overwritten. Saved with
+  // the node (properties.dasiwaH3ForgeCast), so a shared workflow carries them.
+  const CAST_KEY = "dasiwaH3ForgeCast", CAST_MAX = 600;
+  const castOn = !continuity && refs.length > 0 && (mode === "REF2VA" ? refs.some(r => r.kind === "image" && r.easy_role) : !!BASE_ROLE[mode]);
+  const live = new Map();
+  let castTimer = null, castBusy = false, castHeld = 0;
+  // Find people and Generate wait for a card being read and hold the queue
+  // while they run: the server does one model call at a time, and refused a
+  // Find people pressed during a read ("Another Forge analysis is running").
+  async function castQuiet() {
+    castHeld += 1;
+    clearTimeout(castTimer);
+    while (castBusy && !closed) await new Promise(r => setTimeout(r, 200));
+  }
+  function castResume() {
+    castHeld = Math.max(0, castHeld - 1);
+    if (!castHeld) renderCast();
+  }
+  const castEls = new Map();
+  const castCards = el("div", { className: "cast-cards" });
+  const castWrap = el("div", { className: "field cast", hidden: true }, el("label", { textContent: "Cast and scene" }),
+    el("span", { className: "muted", textContent: "One card per character, and one for the place, the style and each pose, read from their pictures (a character from their box, where they have one) with the model picked below. Edit a card and it is used as written. An empty card is drafted as before." }),
+    castCards);
+  // Card keys: a character's number, or "place", "style" and "pose:<item id>"
+  // (a pose belongs to its picture, which keeps its id when pictures move).
+  const SCENE_LABEL = { place: "The place", style: "The style" };
+  const imagesOf = () => refs.filter(r => r.kind === "image");
+  const pictureNumber = r => imagesOf().indexOf(r) + 1;
+  const isScene = key => typeof key === "string";
+  function savedCards() { const c = node.properties?.[CAST_KEY]; return c && typeof c === "object" && !Array.isArray(c) ? c : {}; }
+  function cardOf(key) { const c = savedCards()[key]; return { text: typeof c?.text === "string" ? c.text.slice(0, CAST_MAX) : "", sig: typeof c?.sig === "string" ? c.sig : null, edited: !!c?.edited }; }
+  function saveCard(key, patch) {
+    const next = { ...cardOf(key), ...patch };
+    const all = { ...savedCards() };
+    if (!next.text && !next.edited) delete all[key]; else all[key] = next;
+    node.properties ||= {};
+    if (Object.keys(all).length) node.properties[CAST_KEY] = all; else delete node.properties[CAST_KEY];
+    node.graph?.setDirtyCanvas(true, true);
+  }
+  function liveOf(key) { if (!live.has(key)) live.set(key, { reading: false, error: null, failedSig: null, force: false, typedDuring: false }); return live.get(key); }
+  // Who is in a picture: its boxes, else its Who buttons (or its label).
+  function peopleIn(r) { return Array.isArray(r.boxes) && r.boxes.length ? whoFromBoxes(r.boxes) : mode === "REF2VA" ? whoOf(r) : Array.isArray(r.who) ? r.who : []; }
+  // Pictures that show people: characters and frames, never a Pose or Custom one.
+  function castRefs(n = null) {
+    return refs.filter(r => r.kind === "image" && r.path && !["pose", "custom"].includes(kindsOf(r)[0])
+      && (mode !== "REF2VA" || kindsOf(r).some(k => k === "character" || k.endsWith("-frame")))
+      && (n == null || peopleIn(r).includes(n)));
+  }
+  function castNumbers() { return castOn ? [...new Set(castRefs().flatMap(peopleIn))].sort((a, b) => a - b) : []; }
+  // Every card in order: the characters, then the place, the style and each pose (labelled REF2VA only).
+  function castKeys() {
+    if (!castOn) return [];
+    const keys = castNumbers();
+    if (mode !== "REF2VA") return keys;
+    const shown = imagesOf().filter(r => r.path);
+    for (const kind of ["place", "style"]) if (shown.some(r => kindsOf(r)[0] !== "pose" && kindsOf(r).includes(kind))) keys.push(kind);
+    for (const r of shown) if (kindsOf(r)[0] === "pose" && r.item?.id) keys.push(`pose:${r.item.id}`);
+    return keys;
+  }
+  // The pictures a card is read from.
+  function cardRefs(key) {
+    if (!isScene(key)) return castRefs(key);
+    if (key.startsWith("pose:")) return imagesOf().filter(r => r.path && r.item?.id === key.slice(5) && kindsOf(r)[0] === "pose");
+    return imagesOf().filter(r => r.path && kindsOf(r)[0] !== "pose" && kindsOf(r).includes(key));
+  }
+  function cardLabel(key) {
+    if (!isScene(key)) return `Character ${key}`;
+    if (key.startsWith("pose:")) { const r = cardRefs(key)[0]; return `Pose (Picture ${r ? pictureNumber(r) : "?"})`; }
+    return SCENE_LABEL[key];
+  }
+  // Everything the reader is told for a card, so a change shows as out of
+  // date. Not the frame kinds: a mode switch is not a change to how they look.
+  function castSig(key) {
+    if (isScene(key)) return JSON.stringify(cardRefs(key).map(r => [r.path, kindsOf(r).join(","), key.startsWith("pose:") ? peopleIn(r).length : 0, r.instructions || "", r.keep || "", r.drop || ""]));
+    const n = key;
+    return JSON.stringify(castRefs(n).map(r => [r.path, kindsOf(r).filter(k => !k.endsWith("-frame")).join(","), (r.boxes || []).find(b => b.n === n)?.box ?? null,
+      peopleIn(r).indexOf(n), peopleIn(r).length, r.who_axis ?? "", r.instructions || "", r.keep || "", r.drop || ""]));
+  }
+  function needsRead(key) {
+    const e = cardOf(key), l = liveOf(key), sig = castSig(key);
+    if (l.reading || !cardRefs(key).length) return false;
+    if (l.force) return true;
+    if (e.edited || l.failedSig === sig) return false;
+    return !e.text || e.sig !== sig;
+  }
+  function renderCast() {
+    if (closed) return;
+    const keys = castKeys();
+    castWrap.hidden = !keys.length;
+    for (const [key, card] of castEls) if (!keys.includes(key)) { card.remove(); castEls.delete(key); }
+    keys.forEach((key, i) => {
+      const card = castEls.get(key) ?? castCardEl(key);
+      if (castCards.children[i] !== card) castCards.insertBefore(card, castCards.children[i] ?? null);
+      paintCard(key);
+    });
+    clearTimeout(castTimer);
+    if (keys.some(needsRead)) castTimer = setTimeout(runCastQueue, 1500);
+  }
+  async function runCastQueue() {
+    if (castBusy || castHeld || running || loadingModels || closed || !modelSel.value) return;
+    const key = castKeys().find(needsRead);
+    if (key == null) return;
+    castBusy = true;
+    try { await readCard(key, liveOf(key).force); } finally { castBusy = false; }
+    if (closed) return;
+    renderCast();
+    // The wait is for the person to stop changing things, not between reads.
+    if (castKeys().some(needsRead)) { clearTimeout(castTimer); runCastQueue(); }
+  }
+  // Read a picture's cards again: everyone in it, or its place, style or pose.
+  function scanCards(keys) {
+    for (const key of keys) { const l = liveOf(key); l.force = true; l.failedSig = null; }
+    renderCast();
+    clearTimeout(castTimer);
+    runCastQueue();
+  }
+  function keysOfPicture(r) {
+    if (kindsOf(r)[0] === "pose") return r.item?.id ? [`pose:${r.item.id}`] : [];
+    return [...peopleIn(r), ...["place", "style"].filter(k => kindsOf(r).includes(k))];
+  }
+  // What the draft and the reader call a card: "2", "place", "style", "pose@3".
+  function requestKey(key) {
+    if (!isScene(key)) return String(key);
+    if (key.startsWith("pose:")) { const r = cardRefs(key)[0]; return r ? `pose@${pictureNumber(r)}` : null; }
+    return key;
+  }
+  async function readCard(key, redo) {
+    const l = liveOf(key), sig = castSig(key);
+    Object.assign(l, { reading: true, typedDuring: false, error: null });
+    paintCard(key);
+    const requestId = `cast-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    castRequest = requestId;
+    const which = isScene(key) ? { subject: requestKey(key) } : { character: key };
+    try {
+      const res = await api.fetchApi("/dasiwa/h3/forge/cast", { timeoutMs: null, method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId, model: modelSel.value, settings: forgeSettings(), mode, brief: brief.value, shots: shots.value,
+          shot_briefs: shotRows(), references: refs.map(({ item, ...r }) => r), ...which, redo: !!redo, keep_warm: true }) });
+      const data = await res.json();
+      warmed = true;
+      if (!res.ok) throw new Error(data.message || res.statusText);
+      // Typed into while it was being read: what they typed stays.
+      if (!l.typedDuring && !closed) { saveCard(key, { text: String(data.text || "").slice(0, CAST_MAX), edited: false, sig }); refsChanged(); }
+      l.failedSig = null;
+    } catch (err) {
+      l.error = err.message;
+      l.failedSig = sig;
+    } finally {
+      if (castRequest === requestId) castRequest = null;
+      Object.assign(l, { reading: false, force: false, typedDuring: false });
+      paintCard(key);
+    }
+  }
+  const PLACEHOLDER = {
+    character: "What they look like: hair, eyes, build, clothes. Read from their pictures, or write it yourself.",
+    place: "The setting: where it is, its landmarks, the light and the time of day.",
+    style: "How it is drawn: the medium, linework, colour and shading.",
+    pose: "The pose only: the stance, where the arms and legs are, the gesture, which way they face. Looks and clothes are left out.",
+  };
+  const kindOfKey = key => !isScene(key) ? "character" : key.startsWith("pose:") ? "pose" : key;
+  function castCardEl(key) {
+    const img = el("img", { alt: "" });
+    const text = el("textarea", { rows: 3, maxLength: CAST_MAX, placeholder: PLACEHOLDER[kindOfKey(key)] });
+    text.setAttribute("aria-label", `${cardLabel(key)}: description`);
+    text.addEventListener("input", () => {
+      const l = liveOf(key);
+      // What they type wins over a read on its way, and over a Find people still waiting.
+      l.force = false; l.error = null;
+      if (l.reading) l.typedDuring = true;
+      saveCard(key, { text: text.value, edited: true, sig: castSig(key) });
+      paintCard(key);
+      refsChanged();
+    });
+    const card = el("div", { className: "cast-card" }, el("div", { className: "cast-thumb" }, img),
+      el("div", { className: "cast-body" }, el("div", { className: "cast-top" }, el("span", { className: "cast-name" }), el("span", { className: "cast-status" })),
+        text, el("span", { className: "cast-count" })));
+    card.dataset.n = String(key);
+    castEls.set(key, card);
+    return card;
+  }
+  function paintCard(key) {
+    const card = castEls.get(key);
+    if (!card) return;
+    const e = cardOf(key), l = liveOf(key);
+    card.querySelector(".cast-name").textContent = cardLabel(key);
+    const text = card.querySelector("textarea");
+    if (document.activeElement !== text && text.value !== e.text) text.value = e.text;
+    text.disabled = l.reading || !!running;
+    card.querySelector(".cast-count").textContent = `${e.text.length}/${CAST_MAX}`;
+    const stale = !!e.text && e.sig !== castSig(key);
+    card.dataset.state = l.reading ? "reading" : l.error ? "error" : stale && e.edited ? "stale" : "";
+    const scene = isScene(key);
+    card.querySelector(".cast-status").textContent = l.reading ? (scene ? "Reading the picture…" : "Reading their pictures…")
+      : l.error ? l.error
+        : stale && e.edited ? (scene ? "Out of date: its picture or notes changed. Your text is used as it is; Scan picture reads it again."
+          : "Out of date: their pictures or box changed. Your text is used as it is; Scan people on their picture reads them again.")
+          : !e.text ? (needsRead(key) ? "Waiting to read…" : "Empty: drafted from the pictures as before.")
+            : e.edited ? "Edited by you" : scene ? "From the picture" : "From their pictures";
+    paintThumb(key, card.querySelector("img"));
+  }
+  // The card's picture: a character's box in the first picture that has one, else the first picture whole.
+  function paintThumb(key, img) {
+    const shown = cardRefs(key);
+    const n = isScene(key) ? null : key;
+    const r = (n != null && shown.find(x => (x.boxes || []).some(b => b.n === n))) || shown[0];
+    if (!r) { img.removeAttribute("src"); return; }
+    const box = (n != null && (r.boxes || []).find(b => b.n === n)?.box) || [0, 0, 1, 1];
+    const thumbKey = `${r.path}:${box.join(",")}`;
+    if (img.dataset.key === thumbKey) return;
+    img.dataset.key = thumbKey;
+    const pic = new Image();
+    pic.onload = () => {
+      if (img.dataset.key !== thumbKey) return;
+      const [x1, y1, x2, y2] = box;
+      const sw = Math.max(1, (x2 - x1) * pic.naturalWidth), sh = Math.max(1, (y2 - y1) * pic.naturalHeight);
+      const scale = Math.min(1, 192 / sh, 144 / sw);
+      const c = document.createElement("canvas");
+      c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
+      c.getContext("2d").drawImage(pic, x1 * pic.naturalWidth, y1 * pic.naturalHeight, sw, sh, 0, 0, c.width, c.height);
+      img.src = c.toDataURL("image/jpeg", 0.85);
+    };
+    pic.src = viewUrl(r.path);
+  }
+  // A click on a box (no drag): their card, scrolled to and lit for a moment.
+  function focusCard(key) {
+    const card = castEls.get(key);
+    if (!card || castWrap.hidden) return;
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash");
+    setTimeout(() => card.classList.remove("flash"), 1200);
+  }
+  // Renumbering a box swaps its card with the other number's, when only this picture holds them.
+  function swapCards(ref, a, b) {
+    if (castRefs().some(r => r !== ref && (peopleIn(r).includes(a) || peopleIn(r).includes(b)))) return;
+    const all = { ...savedCards() };
+    const [ca, cb] = [all[a], all[b]];
+    if (ca) all[b] = ca; else delete all[b];
+    if (cb) all[a] = cb; else delete all[a];
+    node.properties ||= {};
+    node.properties[CAST_KEY] = all;
+    for (const n of [a, b]) live.delete(n);
+  }
+  // The cards with text, for the draft: used as written.
+  function castForDraft() {
+    const out = {};
+    for (const key of castKeys()) { const t = cardOf(key).text.trim(), k = requestKey(key); if (t && k) out[k] = t; }
+    return out;
+  }
   if (continuity) box.append(el("div", { className: "muted", textContent: "The source ending and Duration guide this draft. A vision model uses tail frames internally; audio is not analyzed. Review the result, then Apply to node." }));
   if (continuity && mode === "REF2VA" && hook.setUseReferences) {
     includeReferences = el("input", { type: "checkbox", checked: continuity.use_references, onchange: e => {
@@ -418,7 +717,7 @@ async function open(node) {
       const thumb = ref.kind === "image" && ref.path ? el("img", { src: viewUrl(ref.path) }) : el("span", { className: "muted", textContent: ref.saved_reference ? "saved" : ref.kind });
       let roleCell;
       let instructions = null;
-      let people = null;
+      let people = null, scanPicture = null;
       if (ref.kind === "image" && mode === "REF2VA" && ref.item) {
         // What the picture is (kinds that combine: Characters 1 + 2 and the
         // place behind them) and who is in it, tapped in order. A picture the
@@ -454,6 +753,7 @@ async function open(node) {
           // Where takers stand comes from the shots, not from the pose picture.
           axisButtons.hidden = !takesWho() || isPose() || who.length < 2 || boxed;
           if (people) people.element.hidden = !canBox();
+          if (scanPicture) scanPicture.hidden = !castOn || !ref.path || !(isPose() || kinds.includes("place") || kinds.includes("style"));
         };
         const save = () => {
           if (isPose()) axis = "";
@@ -470,6 +770,9 @@ async function open(node) {
           syncVisionUI();
           if (instructions) instructions.placeholder = INSTRUCTIONS_HINT[label] || "What should this reference contribute? (optional)";
           node.graph?.setDirtyCanvas(true, true);
+          // Called here, not from a click listener: the buttons are redrawn
+          // above, so a listener higher up sees a detached button and misses it.
+          refsChanged();
         };
         // Character picks a number no other picture uses.
         const freeCharacter = () => {
@@ -509,8 +812,11 @@ async function open(node) {
           if (boxes.length) { who = whoFromBoxes(boxes); axis = who.length > 1 ? "x" : ""; }
           save();
         }) : null;
+        // A place, style or pose picture has no people to box: this reads its card again.
+        scanPicture = el("button", { type: "button", textContent: "Scan picture", title: "Read this picture's place, style or pose card again. A card you edited is read again too.",
+          onclick: () => { if (!running && !loadingModels) scanCards(keysOfPicture(ref).filter(isScene)); } });
         paint();
-        roleCell = el("span", { className: "pick" }, kindButtons, whoButtons, axisButtons);
+        roleCell = el("span", { className: "pick" }, kindButtons, whoButtons, axisButtons, el("span", { className: "who-axis" }, scanPicture));
       } else if (ref.kind === "image" && BASE_ROLE[mode] && ref.item && !ref.saved_reference) {
         // A frame in I2VA / FL2VA / L2VA: who is in it, so the idea's
         // "Character 1" can say which person in the frame that is (a
@@ -529,6 +835,7 @@ async function open(node) {
           persistReference(ref, { forge_who: who.join(","), forge_who_axis: stored });
           paint();
           node.graph?.setDirtyCanvas(true, true);
+          refsChanged();
         };
         const paint = () => {
           const most = whoShown(refs.filter(r => r.kind === "image").length, who);
@@ -583,6 +890,7 @@ async function open(node) {
         ? "Pictures with the same Character number are one character."
         : 'Pictures with the same Character number are one character. A picture with several people: tap each number in order, left to right (or pick top to bottom, front to back). A picture can be more than one thing: Character and Place for people with the background behind them, or a character who is also the first frame. On a Pose, the numbers say who takes the pose. In the idea, write "Character 1", "Character 2" and "the place". Image-only labelled drafts need no writer vision; mixed media and saved references use the full REF2VA path.' }));
     }
+    box.append(castWrap);
     box.append(visionChoice, visionHint, normalReferenceHint);
   } else if (mode !== "T2VA" && !continuity) {
     box.append(el("div", { className: "muted", textContent: `${mode} expects pictures on the timeline; none are loaded, so the model writes from the idea alone.` }));
@@ -641,12 +949,15 @@ async function open(node) {
   // before they existed still match.
   const inputKey = () => {
     const rows = shotRows().map(r => r.trim());
-    return JSON.stringify([brief.value.trim(), structured.checked, definitions.value, refs.map(({ item, ...r }) => r), ...(rows.some(Boolean) ? [rows] : [])]);
+    const cards = castForDraft();
+    // The cards join the key only when there are some, so drafts saved before them still match.
+    return JSON.stringify([brief.value.trim(), structured.checked, definitions.value, refs.map(({ item, ...r }) => r), ...(rows.some(Boolean) ? [rows] : []), ...(Object.keys(cards).length ? [cards] : [])]);
   };
   const referenceControls = Array.from(box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button"));
   const controls = [brief, modelSel, detail, creativity, shots, structured, seePictures];
   const setControlsDisabled = disabled => {
-    [...controls, ...box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button, .refs .people button")].forEach(c => { c.disabled = disabled; });
+    [...controls, ...box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button, .refs .people button, .cast textarea")].forEach(c => { c.disabled = disabled; });
+    if (!disabled) for (const n of castEls.keys()) paintCard(n);
     shotBox.querySelectorAll("textarea").forEach(c => { c.disabled = disabled; });
     if (includeReferences) includeReferences.disabled = !!running;
   };
@@ -738,6 +1049,7 @@ async function open(node) {
     renderShots();
     genBtn.disabled = false;
     setStatus("Ready. Generate a draft, then review and Apply.");
+    renderCast();
   } catch (err) {
     setStatus(err.message, true);
     genBtn.disabled = true;
@@ -757,15 +1069,19 @@ async function open(node) {
     renderHistory();
   };
   brief.addEventListener("input", clearDraft);
-  refsChanged = clearDraft;
+  refsChanged = () => { clearDraft(); renderCast(); };
   modelSel.addEventListener("change", clearDraft);
+  // Another model may be able to read what this one could not.
+  modelSel.addEventListener("change", () => { for (const l of live.values()) l.failedSig = null; renderCast(); });
   creativity.addEventListener("change", clearDraft);
   shots.addEventListener("change", () => { renderShots(); clearDraft(); });
   detail.addEventListener("input", clearDraft);
   structured.addEventListener("change", clearDraft);
   seePictures.addEventListener("change", clearDraft);
   referenceControls.filter(c => c.tagName !== "BUTTON").forEach(c => c.addEventListener(c.tagName === "SELECT" ? "change" : "input", clearDraft));
-  box.addEventListener("click", e => { if (e.target.closest?.(".refs .pick button")) clearDraft(); });
+  box.addEventListener("click", e => { if (e.target.closest?.(".refs .pick button")) { clearDraft(); renderCast(); } });
+  // A picture's notes go to the reader too.
+  referenceControls.filter(c => c.tagName !== "BUTTON").forEach(c => c.addEventListener("change", renderCast));
   genBtn.onclick = async () => {
     if (closed) return;
     if (running) { cancelRun(); genBtn.disabled = true; setStatus("Cancelling… the model stops at its next token, then unloads."); return; }
@@ -775,6 +1091,11 @@ async function open(node) {
     if (!text && !continuity && !rows.some(r => r.trim())) { setStatus("Write the idea first.", true); return; }
     const missing = refs.find(r => r.role === "custom" && !r.instructions.trim());
     if (missing) { setStatus("Custom reference: describe what this image should contribute, or choose a preset role.", true); return; }
+    genBtn.disabled = true;
+    if (castBusy) setStatus("Waiting for the Cast card being read, then writing…");
+    await castQuiet();
+    genBtn.disabled = false;
+    if (closed) { castResume(); return; }
     briefs.set(briefKey, text);
     remember({ model: modelSel.value, creativity: creativity.value, detail: Number(detail.value), shots: shots.value, see_pictures: seePictures.checked });
     result = null; output.hidden = true; output.textContent = ""; renderHistory();
@@ -797,6 +1118,7 @@ async function open(node) {
           output_canvas: hook.outputCanvas?.() ?? null,
           detail: Number(detail.value), creativity: creativity.value, shots: shots.value, shot_briefs: rows,
           references: refs.map(({ item, ...r }) => r), settings: forgeSettings(), continuity, easy, see_pictures: easy && seePictures.checked,
+          ...(castOn ? { cast: castForDraft() } : {}),
           structured: !!continuity && mode === "REF2VA" && structured.checked, existing_definitions: definitions.value.trim(),
         }),
       });
@@ -824,6 +1146,7 @@ async function open(node) {
       genBtn.disabled = false;
       genBtn.textContent = "Regenerate";
       renderHistory();
+      castResume();
     }
   };
   applyBtn.onclick = () => {

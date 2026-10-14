@@ -106,7 +106,9 @@ from .h3_prompting import (
     _alignment_line,
     simple_prompt,
 )
-from .h3_people import FIND_PEOPLE_PROMPT, parse_people, picture_size
+from .h3_people import FIND_PEOPLE_PROMPT, crop_image_b64, parse_people, picture_size
+from .h3_cast import (CAST_TEXT_MAX, MAX_CHARACTERS, cast_for, cast_look, cast_unit, carded_tags, character_cards,
+                      describe_message, given_cast, scene_unit, usable_reading)
 from .llm_backends import (IMAGE_MAX_EDGE, NUM_PREDICT, refresh_server_model_choices,
                            check_fits, context_for, server_context_error, sets_its_context)
 
@@ -173,6 +175,7 @@ _FORGE_LOADED = set()  # (backend object, model name)
 def unload_forge_models():
     """Backstop for the Director: make sure no Forge model is still resident."""
     with _REQUEST_LOCK:
+        _cancel_warm()
         for backend, name in list(_FORGE_LOADED):
             if name in backend.loaded():
                 log_dasiwa("H3 Forge", f"{name} was still loaded; unloading before the Director runs")
@@ -204,6 +207,66 @@ def list_all(settings):
 
 # request_id -> threading.Event, set by POST /dasiwa/h3/forge/cancel.
 _CANCELS = {}
+
+
+# ── A warm model for the Cast reads ───────────────────────────────────────
+#
+# Find people and the Cast cards are read one character at a time, each a
+# separate call, so a model that unloaded after every read would load again
+# for the next one (about 50 s for a 27B). While the Forge panel reads, the
+# model stays loaded; WARM_SECONDS after the last read it is unloaded, or at
+# once when the panel closes (POST /dasiwa/h3/forge/release), when a draft
+# starts with another model, and before the Director runs. Nothing is kept
+# loaded for long: the GPU is not left on for an open panel.
+# Models in ComfyUI/models/llm load in-process and are freed after every call
+# by the pack's loader, so for them there is nothing to keep.
+WARM_SECONDS = 30
+_WARM = {}  # (kind, address, name) -> (backend, name, threading.Timer)
+
+
+def _warm_key(kind, backend, name):
+    return (kind, getattr(backend, "base", ""), name)
+
+
+def _cancel_warm(keep=None):
+    """Unload every warm model except `keep`; returns True when `keep` was warm."""
+    kept = False
+    for key in list(_WARM):
+        backend, name, timer = _WARM.pop(key)
+        timer.cancel()
+        if key == keep:
+            kept = True
+            continue
+        if backend.unload(name):
+            _FORGE_LOADED.discard((backend, name))
+    return kept
+
+
+def _cool(key):
+    with _REQUEST_LOCK:
+        # A read that started while this timer waited for the lock has warmed
+        # the model again with a timer of its own: that one decides.
+        entry = _WARM.get(key)
+        if entry and entry[2] is threading.current_thread():
+            del _WARM[key]
+            backend, name, _ = entry
+            log_dasiwa("H3 Forge", f"{name}: no read for {WARM_SECONDS}s, unloading")
+            if backend.unload(name):
+                _FORGE_LOADED.discard((backend, name))
+
+
+def _keep_warm(kind, backend, name):
+    key = _warm_key(kind, backend, name)
+    timer = threading.Timer(WARM_SECONDS, _cool, args=(key,))
+    timer.daemon = True
+    _WARM[key] = (backend, name, timer)
+    timer.start()
+
+
+def release_warm():
+    """The panel closed: nothing stays loaded for it."""
+    with _REQUEST_LOCK:
+        _cancel_warm()
 
 
 def cancel(request_id):
@@ -262,6 +325,16 @@ def _generate(body, input_directory, release_memory, stop):
         raise ForgeError("bad_mode", "This copy of data/h3_forge.json predates picture labels. Update the node pack.")
     cast = easy_cast(references) if easy else None
 
+    raw_cards = body.get("cast")
+    if raw_cards is not None and (not isinstance(raw_cards, dict) or len(raw_cards) > MAX_CHARACTERS * 2
+                                  or any(not isinstance(v, str) or len(v) > CAST_TEXT_MAX * 2 for v in raw_cards.values())):
+        raise ForgeError("bad_cast", f"Cast cards must be text of at most {CAST_TEXT_MAX} characters, one per character.")
+    # Cards are used in labelled REF2VA and in the frame modes.
+    # The place, the style and the poses only in labelled REF2VA, where they exist.
+    cards = given_cast(raw_cards) if easy else character_cards(given_cast(raw_cards)) if mode in ("I2VA", "FL2VA", "L2VA") else {}
+    carded = carded_tags(cast, cards) if cast else {}
+    _cancel_warm(keep=_warm_key(kind, backend, name))
+
     sees = backend.can_see(name)
     images, image_labels = [], []
     # Easy mode sends no picture to the writer unless asked: the labels say who
@@ -292,7 +365,7 @@ def _generate(body, input_directory, release_memory, stop):
     def run(with_images):
         attached_labels = image_labels if with_images else []
         user = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(with_images), attached_labels,
-                                  output_canvas=body.get("output_canvas"), cast=cast, shots=shots)
+                                  output_canvas=body.get("output_canvas"), cast=cast, shots=shots, cards=cards)
         if mode == "REF2VA" and existing_definitions.strip():
             user += ("\n\nApproved existing definitions: preserve explicit Subject IDs and allocate new IDs "
                      "after existing ones; verify current media citations:\n" + existing_definitions)
@@ -344,8 +417,8 @@ def _generate(body, input_directory, release_memory, stop):
     if lost:
         raise ForgeError("runaway", f"The model lost the thread in {lost[0]} (one sentence ran {lost[1]:,} characters), "
                          "so nothing was applied. Regenerate, or pick a different model.", raw)
-    targets = [tag for tag, _, _ in describe_targets(cast, image_labels if images else [])] if easy else []
-    easy_warnings = easy_segments(cast, segments, targets) if easy else []
+    targets = [tag for tag, _, _ in describe_targets(cast, image_labels if images else [], carded)] if easy else []
+    easy_warnings = easy_segments(cast, segments, targets, carded) if easy else []
     if easy and not images and "Detailed description" in segments:
         segments["Detailed description"] = keep_reference_look(segments["Detailed description"], brief)
     music_warning = music_request_warning(bundle, brief, segments)
@@ -377,6 +450,8 @@ def _generate(body, input_directory, release_memory, stop):
         "unloaded": unloaded or not local_gpu,
         "stats": stats,
         "raw": raw,
+        # The cards that went in as written, by character number.
+        "cards_used": sorted(str(k) for k in cards),
     }
 
 
@@ -398,7 +473,26 @@ def _model_backend(body):
     return kind, name, backend
 
 
-@_one_draft
+# Find people and the Cast reads are short, and the panel fires them while
+# another may still be finishing - a read from a panel that was just closed and
+# reopened (a picture added). They wait their turn rather than refuse, as a
+# draft does ("Another Forge analysis is running").
+READ_WAIT = 180
+
+
+def _wait_turn(function):
+    @wraps(function)
+    def call(*args, **kwargs):
+        if not _REQUEST_LOCK.acquire(timeout=READ_WAIT):
+            raise ForgeError("busy", "Forge is still busy with another model call. Try again in a moment.")
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _REQUEST_LOCK.release()
+    return call
+
+
+@_wait_turn
 def find_people(body, input_directory, release_memory=None):
     """Boxes for everyone in one picture. Blocking: call it off the event loop."""
     request_id = str(body.get("request_id") or "")
@@ -433,12 +527,15 @@ def _find_people(body, input_directory, release_memory, stop):
     if release_memory and local_gpu:
         release_memory()
     ctx = context_for(8192, [image]) if sets_its_context(kind, name) else 8192
+    _cancel_warm(keep=_warm_key(kind, backend, name))
     if kind != "local":
         _FORGE_LOADED.add((backend, name))
     started = time.time()
+    warm = bool(body.get("keep_warm")) and kind != "local"
     try:
         try:
-            raw, _ = backend.chat(name, "", FIND_PEOPLE_PROMPT, [image], {"temperature": 0, "top_p": 1}, ctx, 300, stop)
+            raw, _ = backend.chat(name, "", FIND_PEOPLE_PROMPT, [image], {"temperature": 0, "top_p": 1}, ctx, 300, stop,
+                                  **_warm_kwargs(kind, warm))
         except urlerror.HTTPError as exc:
             if _key_refused(exc):
                 raise ForgeError("backend", KEY_REFUSED.format(where=backend.base, code=exc.code))
@@ -450,9 +547,7 @@ def _find_people(body, input_directory, release_memory, stop):
         except (urlerror.URLError, TimeoutError, OSError) as exc:
             raise ForgeError("backend", f"Could not reach {kind} at {getattr(backend, 'base', '')}: {exc}")
     finally:
-        unloaded = backend.unload(name) if kind != "local" else True
-        if unloaded:
-            _FORGE_LOADED.discard((backend, name))
+        unloaded = _after_read(kind, backend, name, warm)
     people = parse_people(_THINK.sub("", str(raw or "")), sent)
     seconds = round(time.time() - started, 1)
     log_dasiwa("H3 Forge", f"{name} found {len(people)} people in {seconds}s")
@@ -460,6 +555,115 @@ def _find_people(body, input_directory, release_memory, stop):
             "unloaded": unloaded or not local_gpu,
             # What the model said instead, when it gave no boxes: the panel shows the start.
             **({} if people else {"raw": str(raw or "")[:300]})}
+
+
+def _warm_kwargs(kind, warm):
+    """Ollama unloads after every call unless told to keep the model a while."""
+    return {"keep_alive": f"{WARM_SECONDS * 2}s"} if warm and kind == "ollama" else {}
+
+
+def _after_read(kind, backend, name, warm):
+    """Unload, or keep the model warm for the next read. True when unloaded."""
+    if kind == "local":
+        return True
+    if warm:
+        _keep_warm(kind, backend, name)
+        return False
+    unloaded = backend.unload(name)
+    if unloaded:
+        _FORGE_LOADED.discard((backend, name))
+    return unloaded
+
+
+# ── The Cast list: read one character ────────────────────────────────────
+
+NO_VISION_CAST = "{name} cannot see pictures, so it cannot read the cast. Write their description yourself."
+
+
+@_wait_turn
+def read_cast(body, input_directory, release_memory=None):
+    """One character's card, read from all their pictures (each from their
+    people box, where they have one). Blocking: call it off the event loop."""
+    request_id = str(body.get("request_id") or "")
+    stop = threading.Event()
+    if request_id:
+        _CANCELS[request_id] = stop
+    try:
+        return _read_cast(body, input_directory, release_memory, stop)
+    finally:
+        _CANCELS.pop(request_id, None)
+
+
+def _read_cast(body, input_directory, release_memory, stop):
+    bundle = load_bundle()
+    system = bundle.get("picture_description")
+    if not system:
+        raise ForgeError("bad_bundle", "This copy of data/h3_forge.json has no picture reader. Update the node pack.")
+    mode = body.get("mode")
+    if mode not in ("REF2VA", "I2VA", "FL2VA", "L2VA"):
+        raise ForgeError("bad_mode", "The Cast list is for REF2VA, I2VA, FL2VA and L2VA.")
+    # A character by number, or the place, the style or a pose ("pose@3").
+    number, subject = body.get("character"), body.get("subject")
+    scene = isinstance(subject, str) and mode == "REF2VA"
+    if not scene and (not isinstance(number, int) or isinstance(number, bool) or not 1 <= number <= MAX_CHARACTERS):
+        raise ForgeError("bad_character", "Say which character to read.")
+    kind, name, backend = _model_backend(body)
+    references = validate_references(body.get("references"))
+    cast = cast_for(references, mode)
+    unit = scene_unit(cast, subject) if scene else cast_unit(cast, number)
+    what = ({"place": "the place", "style": "the style"}.get(subject, "the pose")) if scene else f"Character {number}"
+    if unit is None:
+        raise ForgeError("not_shown", f"No picture shows {what} so that it can be read. Write the description yourself." if scene else
+                         f"No picture shows Character {number} so that they can be read on their own. "
+                         "Box them, pick an order, or write their description yourself.")
+    if backend.can_see(name) is False:
+        raise ForgeError("no_vision", NO_VISION_CAST.format(name=name))
+    brief = fold_shot_briefs(body.get("brief"), body.get("shots"), body.get("shot_briefs")) or ""
+    message = describe_message(unit, brief)
+    from .helper_minimax_h3_director import resolve_input_path
+    images = []
+    try:
+        for p in unit["pictures"]:
+            path = resolve_input_path(p["ref"]["path"], input_directory)
+            images.append(crop_image_b64(path, p["crop"], IMAGE_MAX_EDGE) if p["crop"] else _image_b64(path))
+    except (ValueError, OSError) as exc:
+        raise ForgeError("bad_references", f"Invalid reference image: {exc}") from exc
+    local_gpu = kind == "local" or _is_this_machine(getattr(backend, "base", "http://127.0.0.1"))
+    if release_memory and local_gpu:
+        release_memory()
+    _cancel_warm(keep=_warm_key(kind, backend, name))
+    ctx = context_for(8192, images) if sets_its_context(kind, name) else 8192
+    if kind != "local":
+        _FORGE_LOADED.add((backend, name))
+    warm = bool(body.get("keep_warm")) and kind != "local"
+    # A read asked for again comes back a little looser, so it can differ.
+    sampling = {"temperature": 0.5 if body.get("redo") else 0.2, "top_p": 0.8}
+    extra = {} if kind == "local" else {"max_tokens": unit.get("max_tokens", 240), **_warm_kwargs(kind, warm)}
+    started = time.time()
+    try:
+        try:
+            raw, _ = backend.chat(name, system, message, images, sampling, ctx, 300, stop, **extra)
+        except urlerror.HTTPError as exc:
+            if _key_refused(exc):
+                raise ForgeError("backend", KEY_REFUSED.format(where=backend.base, code=exc.code))
+            detail_text = exc.read().decode(errors="replace")
+            if server_context_error(detail_text):
+                raise server_context_error(detail_text)
+            if 400 <= exc.code < 500:
+                raise ForgeError("no_vision", NO_VISION_CAST.format(name=name))
+            raise ForgeError("backend", f"{kind} returned {exc.code}: {detail_text[:400]}")
+        except (urlerror.URLError, TimeoutError, OSError) as exc:
+            raise ForgeError("backend", f"Could not reach {kind} at {getattr(backend, 'base', '')}: {exc}")
+    finally:
+        unloaded = _after_read(kind, backend, name, warm)
+    text = cast_look(usable_reading(raw) or "", unit)
+    seconds = round(time.time() - started, 1)
+    log_dasiwa("H3 Forge", f"{what} read by {name} in {seconds}s, {len(text)} chars")
+    if not text:
+        raise ForgeError("no_reading", f"{name} did not come back with a description of {what}. "
+                         "Scan the picture to try again, or write it yourself.", str(raw or "")[:400])
+    return {"number": None if scene else number, "subject": subject if scene else None, "text": text[:CAST_TEXT_MAX], "model": f"{kind}:{name}", "seconds": seconds,
+            "unloaded": unloaded or not local_gpu, "read_from": len(images), "cropped": sum(1 for p in unit["pictures"] if p["crop"])}
 
 
 # ── Continuity drafting ──────────────────────────────────────────────────
@@ -828,6 +1032,25 @@ def register_routes():
             log_dasiwa("H3 Forge", f"find people failed: {exc}")
             return web.json_response({"error": "internal", "message": str(exc)}, status=500)
         return web.json_response(result)
+
+    @server.routes.post("/dasiwa/h3/forge/cast")
+    async def forge_cast(request):
+        if server.prompt_queue.get_tasks_remaining() > 0:
+            return web.json_response({"error": "busy", "message": "A workflow is running. The cast is read after it finishes."}, status=409)
+        try:
+            body = await request.json()
+            result = await asyncio.to_thread(read_cast, body, folder_paths.get_input_directory(), _release)
+        except ForgeError as exc:
+            return web.json_response({"error": exc.code, "message": exc.message}, status=422)
+        except Exception as exc:
+            log_dasiwa("H3 Forge", f"cast read failed: {exc}")
+            return web.json_response({"error": "internal", "message": str(exc)}, status=500)
+        return web.json_response(result)
+
+    @server.routes.post("/dasiwa/h3/forge/release")
+    async def forge_release(request):
+        await asyncio.to_thread(release_warm)
+        return web.json_response({"released": True})
 
     @server.routes.post("/dasiwa/h3/forge")
     async def forge(request):

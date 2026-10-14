@@ -1390,6 +1390,8 @@ function install(node) {
     // Clearing the Director also removes Forge drafts saved with this node.
     if (window.DaSiWaH3Forge?.clearHistory) window.DaSiWaH3Forge.clearHistory(node);
     else if (node.properties) delete node.properties.dasiwaH3ForgeHistory;
+    // The Cast cards describe the characters in those pictures, so they go too.
+    if (node.properties) delete node.properties.dasiwaH3ForgeCast;
     mutate(s => { s.items = []; s.prompt_blocks = []; if (s.continuity) s.continuity = { ...DEFAULT_CONTINUITY, session: s.continuity.session }; (s.refmods || []).forEach(row => { row.enabled = false; }); });
     updateRefModActiveBadge();
     setStatus("All media, prompts and Forge drafts cleared.");
