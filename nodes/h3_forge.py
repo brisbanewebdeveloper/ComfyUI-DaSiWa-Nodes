@@ -106,6 +106,7 @@ from .h3_prompting import (
     _alignment_line,
     simple_prompt,
 )
+from .h3_people import FIND_PEOPLE_PROMPT, parse_people, picture_size
 from .llm_backends import (IMAGE_MAX_EDGE, NUM_PREDICT, refresh_server_model_choices,
                            check_fits, context_for, server_context_error, sets_its_context)
 
@@ -377,6 +378,88 @@ def _generate(body, input_directory, release_memory, stop):
         "stats": stats,
         "raw": raw,
     }
+
+
+# ── Find people ──────────────────────────────────────────────────────────
+#
+# A box round each person in one picture, from the model picked in Forge. It
+# must see, and it must answer with boxes: Qwen-VL models (Qwen3-VL, Qwen2.5-VL
+# and finetunes of them) return bbox_2d on a 0-1000 grid. Any other model
+# finds nobody, and the panel says to draw the boxes with Add character.
+
+NO_VISION_FIND = "{name} cannot see pictures, so it cannot find people. Draw the boxes yourself with Add character."
+
+
+def _model_backend(body):
+    kind, _, name = str(body.get("model") or "").partition(":")
+    backend = backends(body.get("settings")).get(kind)
+    if not backend or not name:
+        raise ForgeError("no_model", "Pick a model.")
+    return kind, name, backend
+
+
+@_one_draft
+def find_people(body, input_directory, release_memory=None):
+    """Boxes for everyone in one picture. Blocking: call it off the event loop."""
+    request_id = str(body.get("request_id") or "")
+    stop = threading.Event()
+    if request_id:
+        _CANCELS[request_id] = stop
+    try:
+        return _find_people(body, input_directory, release_memory, stop)
+    finally:
+        _CANCELS.pop(request_id, None)
+
+
+def _find_people(body, input_directory, release_memory, stop):
+    kind, name, backend = _model_backend(body)
+    path = body.get("path")
+    if not isinstance(path, str) or not path or len(path) > 4096:
+        raise ForgeError("bad_references", "Pick a picture first.")
+    if backend.can_see(name) is False:
+        raise ForgeError("no_vision", NO_VISION_FIND.format(name=name))
+    from .helper_minimax_h3_director import resolve_input_path
+    try:
+        full = resolve_input_path(path, input_directory)
+        image = _image_b64(full)
+        width, height = picture_size(full)
+    except (ValueError, OSError) as exc:
+        raise ForgeError("bad_references", f"Invalid reference image: {exc}") from exc
+    # The picture goes to the model at most IMAGE_MAX_EDGE on its long side;
+    # an answer in pixels is in that picture's pixels.
+    scale = min(1.0, IMAGE_MAX_EDGE / max(width, height, 1))
+    sent = (max(1, round(width * scale)), max(1, round(height * scale)))
+    local_gpu = kind == "local" or _is_this_machine(getattr(backend, "base", "http://127.0.0.1"))
+    if release_memory and local_gpu:
+        release_memory()
+    ctx = context_for(8192, [image]) if sets_its_context(kind, name) else 8192
+    if kind != "local":
+        _FORGE_LOADED.add((backend, name))
+    started = time.time()
+    try:
+        try:
+            raw, _ = backend.chat(name, "", FIND_PEOPLE_PROMPT, [image], {"temperature": 0, "top_p": 1}, ctx, 300, stop)
+        except urlerror.HTTPError as exc:
+            if _key_refused(exc):
+                raise ForgeError("backend", KEY_REFUSED.format(where=backend.base, code=exc.code))
+            detail_text = exc.read().decode(errors="replace")
+            # A server that cannot take pictures answers a 4xx.
+            if 400 <= exc.code < 500 and not server_context_error(detail_text):
+                raise ForgeError("no_vision", NO_VISION_FIND.format(name=name))
+            raise ForgeError("backend", f"{kind} returned {exc.code}: {detail_text[:400]}")
+        except (urlerror.URLError, TimeoutError, OSError) as exc:
+            raise ForgeError("backend", f"Could not reach {kind} at {getattr(backend, 'base', '')}: {exc}")
+    finally:
+        unloaded = backend.unload(name) if kind != "local" else True
+        if unloaded:
+            _FORGE_LOADED.discard((backend, name))
+    people = parse_people(_THINK.sub("", str(raw or "")), sent)
+    seconds = round(time.time() - started, 1)
+    log_dasiwa("H3 Forge", f"{name} found {len(people)} people in {seconds}s")
+    return {"people": people, "model": f"{kind}:{name}", "seconds": seconds,
+            "unloaded": unloaded or not local_gpu,
+            # What the model said instead, when it gave no boxes: the panel shows the start.
+            **({} if people else {"raw": str(raw or "")[:300]})}
 
 
 # ── Continuity drafting ──────────────────────────────────────────────────
@@ -731,6 +814,20 @@ def register_routes():
     async def forge_cancel(request):
         body = await request.json()
         return web.json_response({"cancelled": cancel(body.get("request_id"))})
+
+    @server.routes.post("/dasiwa/h3/forge/people")
+    async def forge_people(request):
+        if server.prompt_queue.get_tasks_remaining() > 0:
+            return web.json_response({"error": "busy", "message": "A workflow is running. Find people after it finishes."}, status=409)
+        try:
+            body = await request.json()
+            result = await asyncio.to_thread(find_people, body, folder_paths.get_input_directory(), _release)
+        except ForgeError as exc:
+            return web.json_response({"error": exc.code, "message": exc.message}, status=422)
+        except Exception as exc:
+            log_dasiwa("H3 Forge", f"find people failed: {exc}")
+            return web.json_response({"error": "internal", "message": str(exc)}, status=500)
+        return web.json_response(result)
 
     @server.routes.post("/dasiwa/h3/forge")
     async def forge(request):

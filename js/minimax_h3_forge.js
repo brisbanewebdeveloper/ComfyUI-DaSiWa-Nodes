@@ -7,7 +7,7 @@
 // writing the result back.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { forgeReferences, labelRole, refPromptFields, referenceSnapshot, referenceTags } from "./minimax_h3_forge_state.js";
+import { forgeReferences, labelRole, refPromptFields, referenceSnapshot, referenceTags, whoFromBoxes } from "./minimax_h3_forge_state.js";
 
 // Server addresses live in ComfyUI Settings, never in the workflow, so a
 // downloaded workflow cannot point this machine at a server of its choosing.
@@ -132,7 +132,7 @@ function installStyles() {
   .ds-h3-modebar .ds-h3-forge-btn,.ds-h3-forge-btn{background:rgba(151,91,255,.14)!important;color:#e6d9ff!important;border-color:rgba(177,128,255,.7)!important}
   .ds-h3-modebar .ds-h3-forge-btn:hover,.ds-h3-forge-btn:hover{box-shadow:0 0 10px rgba(151,91,255,.6)}
   .ds-forge-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center}
-  .ds-forge{width:min(760px,94vw);max-height:90vh;overflow:auto;background:#111820;color:#e5eef4;border:1px solid #40515e;border-radius:8px;padding:14px;font:13px system-ui,sans-serif;display:flex;flex-direction:column;gap:10px;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  .ds-forge{width:min(1520px,96vw);max-height:92vh;overflow:auto;background:#111820;color:#e5eef4;border:1px solid #40515e;border-radius:8px;padding:14px;font:13px system-ui,sans-serif;display:flex;flex-direction:column;gap:10px;box-shadow:0 10px 40px rgba(0,0,0,.6)}
   .ds-forge h3{margin:0;font-size:15px;display:flex;justify-content:space-between;align-items:center}
   .ds-forge label{color:#9fb3c2;font-weight:600;font-size:12px}
   .ds-forge textarea,.ds-forge select,.ds-forge input[type=text]{width:100%;box-sizing:border-box;background:#0d1217;color:#e5eef4;border:1px solid #40515e;border-radius:4px;padding:7px;font:inherit}
@@ -170,6 +170,18 @@ function installStyles() {
   .ds-forge .history button{text-align:left;display:flex;flex-direction:column;gap:3px;min-width:0}
   .ds-forge .history button.selected{border-color:#b180ff;background:rgba(151,91,255,.18)}
   .ds-forge .history .excerpt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#9fb3c2;font-size:11px}
+  .ds-forge .people{grid-column:1/-1;font-size:12px}
+  .ds-forge .people summary{cursor:pointer;color:#9fb3c2;font-size:11px}
+  .ds-forge .people-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+  .ds-forge .people-tools button{padding:3px 9px;font-size:11px}
+  .ds-forge .people-stage{position:relative;display:inline-block;line-height:0;user-select:none;touch-action:none;max-width:100%}
+  .ds-forge .people-stage img{display:block;max-width:100%;max-height:360px;width:auto;height:auto;object-fit:contain;border-radius:3px}
+  .ds-forge .people-box{position:absolute;box-sizing:border-box;border:2px solid #b180ff;background:rgba(151,91,255,.10);cursor:move;line-height:normal}
+  .ds-forge .people-box.active{border-color:#f3c67a;z-index:2}
+  .ds-forge .people-tag{position:absolute;top:-1px;left:-1px;max-width:max-content;background:#b180ff;color:#0d1217;font-size:10px;font-weight:600;padding:1px 4px;border-radius:0 0 3px 0;white-space:nowrap}
+  .ds-forge .people-box.active .people-tag{background:#f3c67a}
+  .ds-forge .people-tag select{position:absolute;inset:0;opacity:0;width:100%;height:100%;padding:0;cursor:pointer}
+  .ds-forge .people-resize{position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;background:#b180ff;border-radius:2px;cursor:nwse-resize}
   `;
   document.head.append(style);
 }
@@ -221,12 +233,152 @@ async function open(node) {
     if (hook.contextKey?.() !== openedKey) return;
     if (ref.item && hook.updateReference?.(ref.item.id, patch) !== false) {
       for (const [key, value] of Object.entries(patch)) {
-        if (["forge_kinds", "forge_who", "forge_who_axis"].includes(key) && value === "") delete ref.item[key];
+        if (["forge_kinds", "forge_who", "forge_who_axis", "forge_boxes"].includes(key) && value === "") delete ref.item[key];
         else ref.item[key] = value;
       }
       openedKey = hook.contextKey?.();
     }
   };
+  // Set once the controls exist: a change to a picture's boxes drops the draft.
+  let refsChanged = () => {};
+
+  // ── People boxes (PromptForge's, 13 Oct 2026; nodes/h3_people.py) ──
+  // A box round each character on the picture itself. Find people asks the
+  // model picked below to box everyone; Add character drops one to drag over
+  // someone. Either way every box moves, resizes from its corner and
+  // renumbers, so a wrong guess is one drag to fix. With boxes on a picture,
+  // they say who is in it and where each one stands, left to right, so the
+  // Who buttons and the order step aside.
+  const BOX_MIN = 0.04;
+  const clamp01 = v => Math.min(1, Math.max(0, v));
+  const usedNumbers = () => refs.flatMap(r => r.kind === "image" ? (Array.isArray(r.boxes) && r.boxes.length ? r.boxes.map(b => b.n) : whoOf(r)) : []);
+  function peopleEditor(ref, name, onBoxes) {
+    let boxes = Array.isArray(ref.boxes) ? ref.boxes.map(b => ({ n: b.n, box: [...b.box] })) : [];
+    let active = null;
+    const summary = el("summary");
+    const wrap = el("details", { className: "people" }, summary);
+    // Open from the start, as PromptForge shows the picture with its boxes:
+    // folded away, Find people and the boxes were easy to miss.
+    wrap.open = true;
+    const note = el("span", { className: "muted" });
+    const findBtn = el("button", { type: "button", textContent: "Find people", title: "The model picked below boxes everyone in this picture. It needs to see pictures and answer with boxes (Qwen-VL models do)." });
+    const addBtn = el("button", { type: "button", textContent: "Add character", title: "Drop a box to drag over someone." });
+    const clearBtn = el("button", { type: "button", textContent: "Clear boxes" });
+    const img = el("img", { src: viewUrl(ref.path), alt: "", draggable: false });
+    const stage = el("div", { className: "people-stage" }, img);
+    wrap.append(el("div", { className: "people-tools" }, findBtn, addBtn, clearBtn, note), stage);
+    const busy = () => running || loadingModels;
+    const commit = next => {
+      boxes = next.map(b => ({ n: b.n, box: b.box.map(v => Number(clamp01(v).toFixed(4))) }));
+      if (boxes.length) ref.boxes = boxes; else delete ref.boxes;
+      persistReference(ref, { forge_boxes: boxes.length ? JSON.stringify(boxes) : "" });
+      onBoxes(boxes);
+      paint();
+      refsChanged();
+    };
+    const place = (node, [x1, y1, x2, y2]) => Object.assign(node.style, { left: `${x1 * 100}%`, top: `${y1 * 100}%`, width: `${(x2 - x1) * 100}%`, height: `${(y2 - y1) * 100}%` });
+    function boxEl(b, offered, full) {
+      const node = el("div", { className: `people-box${b.n === active ? " active" : ""}` });
+      node.dataset.n = String(b.n);
+      place(node, b.box);
+      // A plain tag sized to its text with the picker laid over it unseen: a
+      // <select> is as wide as its longest option, and ran past narrow boxes.
+      const tag = el("span", { className: "people-tag", textContent: full ? `Character ${b.n}` : String(b.n) });
+      const pick = el("select", { title: `Character ${b.n}: pick another number, or remove the box` });
+      pick.setAttribute("aria-label", `${name}: which character this box is (Character ${b.n})`);
+      for (let n = 1; n <= Math.max(offered, b.n); n += 1) pick.append(el("option", { value: String(n), textContent: `Character ${n}` }));
+      pick.append(el("option", { value: "remove", textContent: "Remove box" }));
+      pick.value = String(b.n);
+      pick.addEventListener("pointerdown", e => e.stopPropagation());
+      pick.addEventListener("change", () => {
+        if (busy()) { pick.value = String(b.n); return; }
+        if (pick.value === "remove") return commit(boxes.filter(x => x.n !== b.n));
+        // Picking a number another box has swaps the two.
+        const to = Number(pick.value);
+        active = to;
+        commit(boxes.map(x => x.n === b.n ? { ...x, n: to } : x.n === to ? { ...x, n: b.n } : x));
+      });
+      tag.append(pick);
+      const handle = el("span", { className: "people-resize" });
+      node.append(tag, handle);
+      node.addEventListener("pointerdown", e => drag(e, node, b, e.target === handle ? "resize" : "move"));
+      return node;
+    }
+    // Move a box, or resize it from its corner; saved when the pointer lets go.
+    function drag(e, node, b, how) {
+      if (e.button !== 0 || busy()) return;
+      e.preventDefault();
+      active = b.n;
+      for (const x of stage.querySelectorAll(".people-box")) x.classList.toggle("active", Number(x.dataset.n) === active);
+      const rect = stage.getBoundingClientRect();
+      const [x1, y1, x2, y2] = b.box, sx = e.clientX, sy = e.clientY;
+      let next = b.box;
+      node.setPointerCapture(e.pointerId);
+      const move = ev => {
+        const dx = (ev.clientX - sx) / rect.width, dy = (ev.clientY - sy) / rect.height;
+        if (how === "move") {
+          const ox = Math.min(1 - x2, Math.max(-x1, dx)), oy = Math.min(1 - y2, Math.max(-y1, dy));
+          next = [x1 + ox, y1 + oy, x2 + ox, y2 + oy];
+        } else next = [x1, y1, Math.max(x1 + BOX_MIN, clamp01(x2 + dx)), Math.max(y1 + BOX_MIN, clamp01(y2 + dy))];
+        place(node, next);
+      };
+      const up = () => {
+        node.removeEventListener("pointermove", move); node.removeEventListener("pointerup", up); node.removeEventListener("pointercancel", up);
+        if (next !== b.box) commit(boxes.map(x => x.n === b.n ? { ...x, box: next } : x));
+      };
+      node.addEventListener("pointermove", move); node.addEventListener("pointerup", up); node.addEventListener("pointercancel", up);
+    }
+    function paint() {
+      summary.textContent = boxes.length ? `People boxes (${boxes.length}): who is in it, left to right` : "People boxes: box each character instead of tapping numbers";
+      clearBtn.hidden = !boxes.length;
+      for (const x of stage.querySelectorAll(".people-box")) x.remove();
+      if (!boxes.some(b => b.n === active)) active = null;
+      const offered = whoShown(refs.filter(r => r.kind === "image").length, usedNumbers());
+      const width = img.getBoundingClientRect().width || 0;
+      // Under 84 px wide a box shows its number alone, so neighbours' labels do not collide.
+      for (const b of boxes) stage.append(boxEl(b, offered, !width || width * (b.box[2] - b.box[0]) >= 84));
+    }
+    img.addEventListener("load", paint);
+    wrap.addEventListener("toggle", paint);
+    addBtn.onclick = () => {
+      if (busy()) return;
+      const taken = new Set(boxes.map(b => b.n));
+      let n = 1; while (taken.has(n) && n < WHO_MAX) n += 1;
+      if (taken.has(n)) return;
+      const off = (boxes.length % 5) * 0.06;
+      active = n;
+      commit([...boxes, { n, box: [0.3 + off, 0.15, 0.6 + off, 0.95].map(clamp01) }]);
+    };
+    clearBtn.onclick = () => { if (!busy()) { active = null; commit([]); } };
+    findBtn.onclick = async () => {
+      if (busy()) return;
+      const model = modelSel.value;
+      if (!model) { note.textContent = "Pick a model first."; return; }
+      findBtn.disabled = true;
+      note.textContent = `Looking for people with ${modelSel.selectedOptions[0]?.textContent || model}…`;
+      try {
+        const res = await api.fetchApi("/dasiwa/h3/forge/people", { timeoutMs: null, method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model, settings: forgeSettings(), path: ref.path }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || res.statusText);
+        if (closed) return;
+        if (!data.people.length) { note.textContent = "Nobody was found: this model may not give boxes. Use Add character to box them yourself."; return; }
+        // The numbers already on this picture carry over, left to right, when
+        // the count matches; otherwise Character 1, 2, 3... left to right.
+        const had = boxes.length ? whoFromBoxes(boxes) : whoOf(ref);
+        const numbers = had.length === data.people.length ? had : data.people.map((_, i) => i + 1);
+        active = null;
+        commit(data.people.map((p, i) => ({ n: numbers[i], box: p.box })));
+        note.textContent = `Found ${data.people.length} ${data.people.length === 1 ? "person" : "people"} in ${data.seconds}s${data.unloaded ? "" : " (model still loaded)"}. Drag, resize or renumber any box that is off.`;
+      } catch (err) {
+        note.textContent = err.message;
+      } finally {
+        findBtn.disabled = false;
+      }
+    };
+    paint();
+    return { element: wrap, boxes: () => boxes, clear: () => { if (boxes.length) commit([]); } };
+  }
   let includeReferences = null;
   if (continuity) box.append(el("div", { className: "muted", textContent: "The source ending and Duration guide this draft. A vision model uses tail frames internally; audio is not analyzed. Review the result, then Apply to node." }));
   if (continuity && mode === "REF2VA" && hook.setUseReferences) {
@@ -266,6 +418,7 @@ async function open(node) {
       const thumb = ref.kind === "image" && ref.path ? el("img", { src: viewUrl(ref.path) }) : el("span", { className: "muted", textContent: ref.saved_reference ? "saved" : ref.kind });
       let roleCell;
       let instructions = null;
+      let people = null;
       if (ref.kind === "image" && mode === "REF2VA" && ref.item) {
         // What the picture is (kinds that combine: Characters 1 + 2 and the
         // place behind them) and who is in it, tapped in order. A picture the
@@ -275,6 +428,8 @@ async function open(node) {
         // On a Pose the numbers say who takes it, not who is in the picture.
         const isPose = () => kinds[0] === "pose";
         const takesWho = () => isPose() || kinds.some(k => k === "character" || k.endsWith("-frame"));
+        // Boxes go on a picture of characters; never on a Pose or Custom one.
+        const canBox = () => kinds.includes("character");
         const kindButtons = el("span", { className: "kinds", role: "group", title: "What this picture is. Character, Place, Style and the frames combine; Pose and Custom stand alone." });
         kindButtons.setAttribute("aria-label", `${name} is`);
         const whoButtons = el("span", { className: "who", role: "group", title: WHO_TITLE });
@@ -292,10 +447,13 @@ async function open(node) {
             b.dataset.order = axis && who.length > 1 && at >= 0 ? String(at + 1) : "";
             return b;
           }));
-          whoButtons.hidden = !takesWho();
+          // People boxes on a character picture say who is in it, left to right.
+          const boxed = !!people?.boxes().length;
+          whoButtons.hidden = !takesWho() || boxed;
           for (const b of axisButtons.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.axis === axis));
           // Where takers stand comes from the shots, not from the pose picture.
-          axisButtons.hidden = !takesWho() || isPose() || who.length < 2;
+          axisButtons.hidden = !takesWho() || isPose() || who.length < 2 || boxed;
+          if (people) people.element.hidden = !canBox();
         };
         const save = () => {
           if (isPose()) axis = "";
@@ -328,6 +486,8 @@ async function open(node) {
           if (wasPose !== isPose()) { who = []; axis = ""; }
           if (kinds.includes("character") && !who.length) who = [freeCharacter()];
           if (!takesWho()) { who = []; axis = ""; }
+          // Not a character picture any more: its boxes would say who is in it.
+          if (!canBox()) people?.clear();
           save();
         };
         // A tap adds that number at the end; a second tap takes it out. A
@@ -345,6 +505,10 @@ async function open(node) {
           b.dataset.axis = value;
           axisButtons.append(b);
         }
+        people = ref.path ? peopleEditor(ref, name, boxes => {
+          if (boxes.length) { who = whoFromBoxes(boxes); axis = who.length > 1 ? "x" : ""; }
+          save();
+        }) : null;
         paint();
         roleCell = el("span", { className: "pick" }, kindButtons, whoButtons, axisButtons);
       } else if (ref.kind === "image" && BASE_ROLE[mode] && ref.item && !ref.saved_reference) {
@@ -376,13 +540,19 @@ async function open(node) {
             return b;
           }));
           for (const b of axisButtons.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.axis === axis));
-          axisButtons.hidden = who.length < 2;
+          const boxed = !!people?.boxes().length;
+          whoButtons.hidden = boxed;
+          axisButtons.hidden = who.length < 2 || boxed;
         };
         for (const [value, text] of AXIS_BUTTONS) {
           const b = el("button", { type: "button", textContent: text, onclick: () => { axis = axis === value ? "" : value; save(); } });
           b.dataset.axis = value;
           axisButtons.append(b);
         }
+        people = ref.path ? peopleEditor(ref, name, boxes => {
+          if (boxes.length) { who = whoFromBoxes(boxes); axis = who.length > 1 ? "x" : ""; }
+          save();
+        }) : null;
         paint();
         // FL2VA's ends are its slots: the first picture is the first frame and
         // the second the last, as framed_brief reads them on the server.
@@ -405,7 +575,7 @@ async function open(node) {
         }
         notes.append(extra);
       }
-      list.append(el("div", { className: "ref" }, thumb, el("span", { textContent: name }), roleCell, notes));
+      list.append(el("div", { className: "ref" }, thumb, el("span", { textContent: name }), roleCell, notes, ...(people ? [people.element] : [])));
     }
     box.append(el("div", { className: "field" }, el("label", { textContent: "References on the timeline" }), list));
     if (labelled) {
@@ -476,7 +646,7 @@ async function open(node) {
   const referenceControls = Array.from(box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button"));
   const controls = [brief, modelSel, detail, creativity, shots, structured, seePictures];
   const setControlsDisabled = disabled => {
-    [...controls, ...box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button")].forEach(c => { c.disabled = disabled; });
+    [...controls, ...box.querySelectorAll(".refs input, .refs select, .refs textarea, .refs .pick button, .refs .people button")].forEach(c => { c.disabled = disabled; });
     shotBox.querySelectorAll("textarea").forEach(c => { c.disabled = disabled; });
     if (includeReferences) includeReferences.disabled = !!running;
   };
@@ -587,6 +757,7 @@ async function open(node) {
     renderHistory();
   };
   brief.addEventListener("input", clearDraft);
+  refsChanged = clearDraft;
   modelSel.addEventListener("change", clearDraft);
   creativity.addEventListener("change", clearDraft);
   shots.addEventListener("change", () => { renderShots(); clearDraft(); });

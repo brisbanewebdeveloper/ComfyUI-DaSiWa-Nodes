@@ -358,3 +358,18 @@ test('the who order is optional: "none" reaches the request, unset stays left to
   assert.equal(pick({ forge_kinds: 'character', forge_who: '1,2', forge_who_axis: 'sideways' }).who_axis, undefined);
   assert.equal(pick({ forge_who: '1,2', forge_who_axis: 'none' }, 'I2VA').who_axis, 'none');
 });
+
+test('people boxes ride on the item as forge_boxes and reach the request checked', () => {
+  const file = path.join(__dirname, '..', 'js', 'minimax_h3_forge_state.js');
+  const source = fs.readFileSync(file, 'utf8').replace(/^export /gm, '');
+  const { forgeReferences, peopleBoxes, whoFromBoxes } = vm.runInNewContext(source + '\n({ forgeReferences, peopleBoxes, whoFromBoxes })');
+  const boxes = [{ n: 2, box: [0.5, 0, 0.9, 1] }, { n: 1, box: [0.1, 0, 0.4, 1] }];
+  const item = { id: 'p', type: 'image', value: 'p.png', slot: 0, forge_label: 'group-21', forge_boxes: JSON.stringify(boxes) };
+  assert.equal(JSON.stringify(forgeReferences([item], 'REF2VA')[0].boxes), JSON.stringify(boxes));
+  assert.equal(JSON.stringify(forgeReferences([{ ...item, forge_label: undefined }], 'I2VA')[0].boxes), JSON.stringify(boxes));
+  assert.equal(JSON.stringify(whoFromBoxes(boxes)), '[1,2]');
+  // Malformed or out of range: dropped, and no boxes key at all when none are left.
+  assert.equal(peopleBoxes({ forge_boxes: '{oops' }).length, 0);
+  assert.equal(peopleBoxes({ forge_boxes: JSON.stringify([{ n: 1, box: [0, 0, 1.5, 1] }, { n: 1, box: [0, 0, 1, 1] }, { n: 1, box: [0, 0, 0.5, 1] }]) }).length, 1);
+  assert.ok(!('boxes' in forgeReferences([{ ...item, forge_boxes: '[]' }], 'REF2VA')[0]));
+});

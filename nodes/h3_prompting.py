@@ -6,6 +6,7 @@ import os
 import re
 
 from .llm_backends import ForgeError
+from .h3_people import MAX_BOXES, boxed_places, boxes_of, who_from_boxes
 
 BUNDLE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "h3_forge.json")
 BASE_MODES = ("T2VA", "I2VA", "FL2VA", "L2VA")
@@ -88,6 +89,10 @@ def validate_references(references):
                 total += len(value)
         if ref.get("role") == "custom" and not ref.get("instructions", "").strip():
             raise ForgeError("bad_references", "Custom references need nonblank reference instructions.")
+        boxes = ref.get("boxes")
+        if boxes is not None and (not isinstance(boxes, list) or len(boxes) > MAX_BOXES or not all(
+                isinstance(b, dict) and isinstance(b.get("box"), list) and len(b["box"]) == 4 for b in boxes)):
+            raise ForgeError("bad_references", f"People boxes must be a list of at most {MAX_BOXES} boxes of four numbers.")
     if total > 48000:
         raise ForgeError("bad_references", "Reference context exceeds 48,000 characters.")
     return references
@@ -571,7 +576,10 @@ def _who_axis(ref):
 
 
 def _places(count, ref):
-    """Positions in tap order, or () when no order was picked."""
+    """Positions in tap order, or () when no order was picked. People boxes
+    order a picture left to right by where they sit, and go on past four."""
+    if boxes_of(ref):
+        return boxed_places(count) if count > 4 else _POSITIONS.get(count, ())
     axis = _who_axis(ref)
     if axis is None:
         return ()
@@ -584,6 +592,9 @@ def place_word(position):
     """"on the left", "in the middle", "at the top", "in front", "behind"."""
     if position.startswith("position "):
         return f"at {position}"
+    # "furthest left", "second from the left": already a place on their own.
+    if position.startswith("furthest ") or position.endswith("from the left"):
+        return position
     if position == "front":
         return "in front"
     if position == "back":
@@ -623,7 +634,12 @@ def picture_kinds(ref):
 
 def picture_who(ref):
     """Who is in a picture, in tap order: the panel's buttons (`who`), else
-    the single label's numbers ("character-2", "group-21")."""
+    the single label's numbers ("character-2", "group-21"). People boxes,
+    when the picture has them, say it instead, left to right."""
+    # Not on a Pose: its numbers say who takes it, not who is in it.
+    boxed = boxes_of(ref) if picture_kinds(ref)[0] not in ("pose", "custom") else []
+    if boxed:
+        return who_from_boxes(boxed)
     role = _easy_role(ref)
     from_label = ([int(role.rsplit("-", 1)[1])] if role.startswith("character-")
                   else [int(d) for d in role.split("-", 1)[1]] if role.startswith("group-") else [])
@@ -649,7 +665,8 @@ def framed_brief(brief, references, mode):
         return brief
     phrase = {}
     for i, ref in enumerate(_images(references)):
-        given = ref.get("who") if isinstance(ref.get("who"), list) else []
+        boxed = boxes_of(ref)
+        given = who_from_boxes(boxed) if boxed else ref.get("who") if isinstance(ref.get("who"), list) else []
         who = []
         for n in given:
             if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 32 and n not in who:

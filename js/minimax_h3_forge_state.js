@@ -119,6 +119,25 @@ export function frameWho(item) {
   return { who, ...(axis ? { who_axis: axis } : {}) };
 }
 
+// People boxes (item.forge_boxes, JSON): a box round each character in a
+// picture, [{ n, box: [x1, y1, x2, y2] }] as fractions of the picture. They say
+// who is in it, left to right, and where each one stands (nodes/h3_people.py).
+export const MAX_BOXES = 32;
+export function peopleBoxes(item) {
+  let raw;
+  try { raw = JSON.parse(item.forge_boxes || "[]"); } catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set(), boxes = [];
+  for (const b of raw.slice(0, MAX_BOXES)) {
+    const n = Number(b?.n), box = Array.isArray(b?.box) ? b.box.map(Number) : [];
+    if (!Number.isInteger(n) || n < 1 || n > MAX_BOXES || seen.has(n) || box.length !== 4 || box.some(v => !Number.isFinite(v) || v < 0 || v > 1)) continue;
+    seen.add(n);
+    boxes.push({ n, box });
+  }
+  return boxes;
+}
+export const whoFromBoxes = boxes => [...boxes].sort((a, b) => (a.box[0] + a.box[2]) - (b.box[0] + b.box[2])).map(b => b.n);
+
 export function forgeReferences(items, mode, legacyGroups = {}) {
   const order = { image: 0, video: 1, audio: 2 };
   const sorted = items.filter(item => item.enabled !== false && item.value != null && order[item.type] !== undefined)
@@ -129,7 +148,8 @@ export function forgeReferences(items, mode, legacyGroups = {}) {
       const common = { item, instructions: String(item.forge_instructions || ""), keep: String(item.forge_keep || ""), drop: String(item.forge_drop || "") };
       if (item.type === "image") {
         const role = mode === "REF2VA" && IMAGE_ROLES.includes(item.forge_role) ? item.forge_role : mode === "REF2VA" ? "subject" : "keyframe";
-        return { ...common, kind: "image", path: typeof item.value === "string" ? item.value : undefined, role, subject_group: role === "subject" ? String(item.forge_subject_group ?? legacyGroups[item.id] ?? "") : "", ...(labels[item.id] ? { easy_role: labels[item.id], ...pictureButtons(item) } : mode !== "REF2VA" ? frameWho(item) : {}) };
+        const boxes = peopleBoxes(item);
+        return { ...common, kind: "image", path: typeof item.value === "string" ? item.value : undefined, role, subject_group: role === "subject" ? String(item.forge_subject_group ?? legacyGroups[item.id] ?? "") : "", ...(labels[item.id] ? { easy_role: labels[item.id], ...pictureButtons(item) } : mode !== "REF2VA" ? frameWho(item) : {}), ...(boxes.length ? { boxes } : {}) };
       }
       if (item.type === "audio") return { ...common, kind: "audio", duration_seconds: item.duration };
       return { ...common, kind: "video", role: "motion", stream: item.media_mode === "audio" ? "audio" : item.media_mode === "video_audio" || item.audio != null ? "both" : "video", duration_seconds: item.duration };
