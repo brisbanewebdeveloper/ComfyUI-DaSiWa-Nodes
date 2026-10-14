@@ -2,9 +2,11 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-13**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-14**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **H3 Forge Cast and People boxes (0.5.17, Gitea testing):** Integrates PR #78–#80 from @yoimtrashgaming-prog: mode-gated media, growing Who buttons, Pose takers, editable people boxes and character/place/style/pose cards. Automatic Cast reading defaults on with a saved opt-out; no-vision stops automatic retries, queued reads are cancellable, stale replies are discarded, and explicit Idea/Shot changes override conflicting card traits. Existing canvas/shot policy, dialogue, Continuity, native conditioning and node interfaces remain. Backend contracts and classic/Nodes 2.0 workflow roundtrips are tested with mocked LLM transport; real model adherence remains a live-test gate. This is a Git testing update, not a tagged or Registry-approved release. [Usage →](minimax_h3_director.md#prompt-forge-optional)
 
 - **Frontend fixes (Git update after 0.5.16):** Director manual prompt edits survive switching between a Continuity source and No source. Advanced LoRA Loader mounts its existing stack editor in both renderers; Prompt Writer keeps the prefix compact while the idea grows, Wildcard Builder retains its scroll panel, and Enhanced Video Combine exposes Help in Nodes 2.0. Saved node IDs and backend inputs remain unchanged; no package version bump.
 
@@ -154,6 +156,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.17 | 10-14 | Gitea testing: Forge People boxes, editable Cast/scene cards, automatic reading with opt-out, Idea priority and safe queued/stale reads |
 | 0.5.16 | 10-13 | H3 Memory Planning toggle and configurable reserve slider (0–100%, default 5%); legacy MB caps retained |
 | 0.5.15 | 10-13 | H3 Enhanced Upscale support for the Director Image Inpaint five-frame pass, including optional native refinement |
 | 0.5.14 | 10-12 | H3 Forge continuation idea priority, identity-only structured history, text-only fallback context and advisory repeated-action warning |
