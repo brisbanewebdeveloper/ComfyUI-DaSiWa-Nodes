@@ -158,6 +158,56 @@ Local media is bounded to 3,600 seconds and 33,554,432 pixels per source/canvas 
 
 No model monkeypatch is installed. Native tail/window/append code remains the MIT-licensed [ttulttul continuation implementation](https://github.com/ttulttul/ComfyUI-Minimax-H3-Continuation), with its license retained in `nodes/h3_continuity/vendor/LICENSE`. Native ComfyUI arbitrary-frame guides are required. The source prefix is exact at the latent level; re-decoding or postprocessing may change prior pixels/audio.
 
+### Continuity output: full timeline or new segment
+
+**Full timeline** remains the default. Existing workflows and schema-1 checkpoints keep their original behavior. For segment exports, choose **Advanced → Output → New segment only** and use this separate post-sampler path:
+
+```mermaid
+flowchart LR
+    G["Director Guide"] -->|continuity_context| P["Segment Prepare"]
+    S["Sampler"] -->|sampled| P
+    P -->|render_latent| U["Optional Enhanced Upscale"]
+    P -.->|segment_context| U
+    U -->|LATENT| D["Segment Decode"]
+    P -.->|segment_context| D
+    D -->|images and audio| E["Enhanced Video Combine"]
+    P -->|ticket| X["Publish Export"]
+    E -->|filename| X
+```
+
+Without upscale, connect `Segment Prepare.render_latent` directly to `Segment Decode.latent`. Supply the native H3 video/audio VAEs to Segment Decode. Feed **Segment Prepare.segment_context**, not the Guide's original context, to optional Upscale and Segment Decode. Keep Segment Prepare before spatial upscaling so checkpoints remain at the source canvas.
+
+[Download the post-sampler node template](../examples/H3_Continuity_Segments.json). This is deliberately a wiring fragment, not a complete model-loading/generation workflow: insert it after your existing sampler, connect its sampled latent and Guide context to Segment Prepare, connect the H3 VAEs to Segment Decode, and select New segment only in Director Advanced. The fragment has been restored through the actual graph loader.
+
+![Segment output node wiring](../assets/DaSiWa-H3-Segment-Nodes.png)
+
+| Output | Processed/exported media | Checkpoint storage |
+| --- | --- | --- |
+| Full timeline | Entire cumulative take | Existing complete AV checkpoint |
+| New segment only | Bounded original tail plus new section internally; only the new visible frames/audio exported | First captured take as a root, then immutable new-token deltas with parent links |
+
+Segment mode is opt-in and requires the new nodes; selecting it does not rewrite your graph. The existing Duration, overlap policy, capture switch, source pinning and REF2VA-reference controls retain their meanings. Capturing a new initial take is still opt-in. The first ordinary-video import still encodes the source; later compatible imports and continuation reads use the stored source.
+
+The local render includes original source context for native video/audio decoding, distinct from the hidden sampled overlap. Previous segments are not re-upscaled or re-decoded. Audio uses cumulative sample boundaries and no whole-take loudness normalization in Segment Decode. The implementation checks the validated native H3 decoder layout and refuses incompatible temporal/audio topologies rather than guessing crop positions. Output remains exactly 24 fps; segment publication does not currently accept interpolation, pingpong or downstream time trimming.
+
+Delta checkpoints depend on their entire parent chain: keep the root and all parents when backing up or moving a take. No automatic cleanup, migration or deletion is performed. A full-timeline workflow can materialize a delta chain with a RAM-budget check; this is deliberately more expensive than segment mode. Runtime and host-memory savings are expected from avoiding repeated old sections, but peak VRAM and pretrained seam quality still require representative render measurements.
+
+### Join exported clips
+
+Open **Join clips…** in the Director's Continuity row. The separate dialog does not enlarge the main authoring form or change the pinned source.
+
+- **Continuity segments:** select ready exports in one session, use **Chain to here** for the actual parent chain, or choose an ordered subset with complete export coverage. Sibling rerolls are alternatives, not successive segments. Older full-timeline exports supersede covered prefixes instead of being concatenated repeatedly. Verified output- and temp-directory exports retain their own preview location; keep temporary files until assembly completes.
+- **Imported source prefixes:** for the supported 24-fps SDR subset, assembly reads the original input using its recorded hash and recreates the saved contain scaling, leading repeated first frames and aligned silence/audio without a VAE. This prefix is not a fresh VAE reconstruction and can differ from legacy full-timeline pixels. Changed files, stale normalization, incompatible origins or unsupported source timing are rejected. Imported-root preflight streams the normalization under a 45-second guard; it does not allocate a full RGB movie.
+- **Video files:** add uploaded clips, or copy the enabled Director timeline videos with their trims. This is a separate saved selection; it never changes reference slots, Forge roles, enabled media or prompts. Reorder with the up/down buttons and deselect unwanted rows.
+- **Join only — no AI:** preflight shows duration and processing mode, then requires confirmation before queueing. The isolated job contains only **MiniMaxH3 • Join Clips**, with no model, sampler, upscaler or VAE.
+- **Current media support:** common-size, matching-color-property, square-pixel, nonrotated, 24-fps CFR, 8-bit `yuv420p` SDR video. Trims snap to the nearest output frame. Incompatible canvas/FPS/HDR/VFR sources are rejected; normalize them separately instead of relying on a silent conversion.
+- **Encoding:** this first testing implementation conventionally re-encodes video to H.264 and audio to stereo AAC at 48 kHz. It avoids new AI rendering, **not** video recompression. Audio gaps/silent clips are aligned to the selected video interval. No lossless packet-copy claim is made.
+- **H3 transition repair:** shown as unavailable until a real, bidirectional motion/audio quality gate has passed. Joining independent videos currently preserves their cut; it does not invent a seamless transition or silently crossfade them.
+
+Closing the dialog stops monitoring, not a submitted job. Use ComfyUI queue controls for cancellation. Sources and previously completed exports are never overwritten. Missing export files are distinguished from unavailable latent checkpoints; preflight validates the authoritative backend files before queueing.
+
+The **MiniMaxH3 • Join Clips** output node is also usable directly in API mode. Its `assembly_data` is a JSON object with `version: 1`, ordered `rows`, `repair_transitions: false` and `audio_policy: "preserve"`. A media row is `{"kind":"media","filename":"take.mp4","trim_start":0,"trim_end":null}` relative to ComfyUI input. A checkpoint row is `{"kind":"checkpoint","session":"your-session","clip_id":"your-clip-id"}`; do not mix checkpoint and independent-media rows. At most 100 clips and one hour total are accepted. `filename_prefix` uses 1–80 letters, digits, underscores or hyphens; each output gets a fresh filename. Arbitrary absolute media paths, network URLs and path escapes are refused.
+
 ## Maintainer validation
 
 Run the model-free policy, capture wiring and Python/JavaScript timing checks:

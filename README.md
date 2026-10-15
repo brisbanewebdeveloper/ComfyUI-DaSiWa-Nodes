@@ -54,6 +54,30 @@ One node that upscales a completed MiniMax H3 video/audio latent and refines it 
 
 ---
 
+### MiniMaxH3 Continuity • Segment Prepare
+
+- **Inputs:** sampler `LATENT` and the matching Guide `continuity_context`; select **New segment only** in Director Advanced.
+- **Outputs:** bounded `render_latent`, matching `segment_context`, publication `ticket`.
+- **Storage:** original-resolution root plus immutable new-token deltas; no repeated full-timeline checkpoint per extension.
+
+### MiniMaxH3 Continuity • Segment Decode
+
+- **Inputs:** local render latent, native H3 video/audio VAEs and **Segment Prepare.segment_context**.
+- **Outputs:** only the new visible `IMAGE` frames and synchronized `AUDIO`; optional Enhanced Upscale goes before this node.
+- **Compatibility:** full-timeline output remains the default; keep every delta's parent checkpoint.
+
+### MiniMaxH3 • Join Clips
+
+![Director clip assembly dialog](assets/DaSiWa-H3-Join-Clips.png)
+
+- **Selection:** Director **Join clips…** dialog for ordered Continuity exports or independent uploaded videos; separate from reference media.
+- **Execution:** isolated model-free queue job; H.264/AAC re-encode at 24 fps, with explicit preflight confirmation.
+- **Limits:** matching 8-bit SDR canvases; H3 transition repair remains unavailable pending real quality validation.
+
+[Segment wiring, clip selection, storage and media limits →](docs/h3_continuity.md#continuity-output-full-timeline-or-new-segment)
+
+---
+
 ### ⚡ MiniMaxH3 Cache
 
 An approximate, model-scoped whole-block-stack residual cache for ComfyUI's native MiniMax H3 model.

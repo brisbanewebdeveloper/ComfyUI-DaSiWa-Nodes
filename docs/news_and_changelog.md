@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the 
 
 ## News
 
+- **H3 segments and Join Clips (0.5.22, Gitea testing):** Opt-in segment-only Continuity uses immutable AV deltas and bounded source-tail rendering, with separate Segment Prepare/Decode nodes. The Director adds one contextual Join clips dialog for Continuity chains or uploaded videos; assembly is a model-free H.264/AAC re-encode with explicit preflight confirmation. Full-timeline workflows remain the default. CPU Core/codec contracts and real isolated classic/Nodes 2.0 queue tests are covered; pretrained seam quality and peak-VRAM savings remain live-test gates. AI repair of independent clip transitions is not released. [Usage and limits →](h3_continuity.md#continuity-output-full-timeline-or-new-segment)
+
 - **RefMod export fix (10-15, 0.5.21):** RefMod bundle saving fsyncs the temporary file with a read-write descriptor (`'rb+'`), fixing the Windows `OSError: [Errno 9] Bad file descriptor` that prevented exports from being saved.
 
 - **Director RefMod creation & editing (10-15, 0.5.20):** Create RefMod beside Save exports selected media as an independent v5 safetensors bundle through an isolated queue job. Selecting a supported saved standalone RefMod or v5 bundle loads its members automatically; edit bundle/member descriptions and concept type, deselect members, then **Save Changes** creates a new copy without re-encoding or overwriting the original. Reset the picker to restore the Director media-line creation view. Stored latents remain usable for generation; original media files are not embedded for preview. Includes the 0.5.19 export work below. Git publication is separate from Registry acceptance. [Usage →](minimax_h3_director.md#create-a-refmod)
@@ -166,6 +168,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.22 | 10-15 | Gitea testing: opt-in H3 delta segments, bounded decode and model-free Join Clips; AI transition repair gated |
 | 0.5.21 | 10-15 | RefMod export fix: read-write fsync descriptor so bundle saving works on Windows |
 | 0.5.20 | 10-15 | Director RefMod creation and editing: automatic saved-member loading, editable descriptions, media-line reset and no-overwrite Save Changes copies |
 | 0.5.18 | 10-14 | GitHub/Gitea update: Forge history reapply, Cast/People safety fixes, sharp LoRA DOM controls and preview seeking/fullscreen |

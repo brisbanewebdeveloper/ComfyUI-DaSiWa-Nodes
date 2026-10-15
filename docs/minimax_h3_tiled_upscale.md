@@ -44,6 +44,8 @@ flowchart TD
     X -->|actual exporter filename| P
 ```
 
+For the opt-in **New segment only** output path, replace Append & Stage with **Segment Prepare** before this upscaler. Connect its `render_latent` to `latent` and its **segment_context** to `continuity_context`; decode with **Segment Decode** using that same context. The upscaler processes only this bounded local window while the source-resolution delta is already staged. The legacy cumulative path above remains unchanged. [Full segment wiring and limits →](h3_continuity.md#continuity-output-full-timeline-or-new-segment)
+
 ## Sockets
 
 Required:
