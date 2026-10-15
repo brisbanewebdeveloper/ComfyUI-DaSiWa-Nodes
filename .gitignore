@@ -234,4 +234,8 @@ lorainfo/
 # Retired in-repository test suites; local probes stay local.
 /.tests/
 /test/
-/tests/
+/tests/*
+!/tests/test_h3_refmod_export.py
+!/tests/test_h3_refmod_edit.py
+!/tests/test_h3_refmod_export.cjs
+!/tests/test_h3_refmod_export_integration.cjs

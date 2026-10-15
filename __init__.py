@@ -17,6 +17,7 @@ if __package__:
     from .nodes.nodes_seamless_loop import DaSiWa_SeamlessLoop
     from .nodes.nodes_minimax_h3_director import MiniMaxH3Director
     from .nodes.nodes_minimax_h3_director_guide import MiniMaxH3DirectorGuide
+    from .nodes.refmod_export import DaSiWaH3RefModExport
     from .nodes.h3_continuity.nodes import DaSiWaH3ContinuityAppend, DaSiWaH3ContinuityPublish
     from .nodes.h3_continuity import routes as continuity_routes
     continuity_routes.register_routes(PromptServer.instance)
@@ -56,6 +57,7 @@ if __package__:
         "DaSiWa_InpaintComposite": DaSiWa_InpaintComposite,
         "MiniMaxH3Director": MiniMaxH3Director,
         "MiniMaxH3DirectorGuide": MiniMaxH3DirectorGuide,
+        "DaSiWaH3RefModExport": DaSiWaH3RefModExport,
         "DaSiWaH3ContinuityAppend": DaSiWaH3ContinuityAppend,
         "DaSiWaH3ContinuityPublish": DaSiWaH3ContinuityPublish,
         "MiniMaxH3Cache": MiniMaxH3Cache,
@@ -87,6 +89,7 @@ if __package__:
         "DaSiWa_InpaintComposite": "DaSiWa Inpaint Composite",
         "MiniMaxH3Director": "MiniMaxH3 Director",
         "MiniMaxH3DirectorGuide": "MiniMaxH3 Director Guide",
+        "DaSiWaH3RefModExport": "MiniMaxH3 Create RefMod",
         "DaSiWaH3ContinuityAppend": "MiniMaxH3 Continuity • Append & Stage",
         "DaSiWaH3ContinuityPublish": "MiniMaxH3 Continuity • Publish Export",
         "MiniMaxH3Cache": "MiniMaxH3 Cache",

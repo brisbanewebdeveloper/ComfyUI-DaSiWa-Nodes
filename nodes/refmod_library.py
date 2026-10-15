@@ -47,8 +47,30 @@ def library_entries():
     return _entries_cache["entries"]
 
 
+def refmod_details(name):
+    """Read editable metadata without loading tensors or exposing source paths."""
+    meta = read_refmod_meta(find_mod_path(name))
+    if not isinstance(meta, dict):
+        raise ValueError('RefMod has no supported metadata.')
+    members = _refmod_members(meta)
+    if not members:
+        raise ValueError('RefMod has no supported members.')
+    return {"name": name, "description": str(meta.get("description", "")),
+            "concept_type": meta.get("concept_type", "generic"),
+            "members": [{"kind": member["kind"], "description": str(member.get("description", ""))}
+                        for member in members]}
+
+
 def register_routes(server):
+    import asyncio
     from aiohttp import web
+
+    @server.routes.get("/dasiwa/refmods/detail")
+    async def refmod_detail_route(request):
+        try:
+            return web.json_response(await asyncio.to_thread(refmod_details, request.query.get("name", "")))
+        except (OSError, ValueError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
     @server.routes.get("/dasiwa/refmods")
     async def refmods_route(_request):

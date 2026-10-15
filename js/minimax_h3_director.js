@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { openDaSiWaRefModExport } from "./refmod_export.js";
 import { forgeReferences, refPromptFields, refTemplate, inheritedDefinitions, referenceSnapshot } from "./minimax_h3_forge_state.js";
 import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, normalizeContinuity, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
 
@@ -306,6 +307,32 @@ function install(node) {
   const updateRefModActiveBadge = () => { const active = (state.refmods || []).filter(row => row.enabled !== false && row.name && Number(row.strength) !== 0).length; if (refModActiveBadge) refModActiveBadge.textContent = `${active} active`; };
   let activeRefModOverlayCleanup = null;
   let activeRefModLibraryRefresh = null;
+  let activeRefModExportCleanup = null;
+  function openRefModExport() {
+    if (nodeRemoved) return;
+    activeRefModExportCleanup?.();
+    emit();
+    activeRefModExportCleanup = openDaSiWaRefModExport({
+      api, app, node, snapshot: structuredClone(state), viewUrl,
+      isRemoved: () => nodeRemoved,
+      onStatus: setStatus,
+      onSaved: async result => {
+        const response = await api.fetchApi("/dasiwa/refmods");
+        if (!response.ok) throw new Error(`Saved ${result.name}, but library refresh failed.`);
+        const entries = await response.json();
+        if (!entries.some(entry => entry.name === result.name)) {
+          throw new Error(`Saved ${result.name} was not found in the RefMod library.`);
+        }
+        refModLibrary.entries = entries;
+        refModLibrary.loaded = true;
+        refModLibrary.error = "";
+        if (!nodeRemoved) {
+          setStatus([result.message, ...(result.warnings || [])].join("\n"));
+          render();
+        }
+      },
+    });
+  }
   const onRefModReloadKey = event => {
     if (event.key.toLowerCase() !== "r" || event.ctrlKey || event.metaKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || "")) return;
     refModLibrary.loaded = false; refModLibrary.error = "";
@@ -1816,6 +1843,13 @@ function install(node) {
       { title: "Overwrite", items: dataTypeLabels.map(([id, text]) => [`overwrite:${id}`, text]) },
     ], ioSide, true, "Load", "ds-h3-io-dropdown load");
     addDropdown("", "save-picker", dataTypeLabels, id => { void saveReferencePack(id); }, false, false, null, ioSide, true, "Save", "ds-h3-io-dropdown save");
+    const exportButton = document.createElement("button");
+    exportButton.type = "button";
+    exportButton.className = "ds-h3-refmod-export-action";
+    exportButton.textContent = "Create RefMod";
+    exportButton.title = "Choose references, preview their crops and save an H3 RefMod safetensors bundle without generating a video.";
+    exportButton.onclick = openRefModExport;
+    ioSide.append(exportButton);
     const disableWhenExternal = () => { if (externalCanvas) resolutionPanel.querySelectorAll("select,input,button").forEach(control => { control.disabled = true; }); };
     const ratioOf = id => { const [w, h] = String(id).split(":").map(Number); return w && h ? w / h : 0; };
     const aspectItems = { general: [], horizontal: [], square: [], vertical: [] };
@@ -2160,6 +2194,7 @@ function install(node) {
     closePreview(true);
     closePromptNumberPopover?.();
     activeRefModOverlayCleanup?.();
+    activeRefModExportCleanup?.();
     document.removeEventListener("keydown", onRefModReloadKey);
     api.removeEventListener?.("df_h3_continuity_saved", onContinuitySaved);
     window.clearInterval(node.__dasiwaH3LengthPoll);

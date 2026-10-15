@@ -132,6 +132,20 @@ Put standalone or upstream v5 bundle `.safetensors` files in `ComfyUI/models/ref
 
 **Insert RefMod #** writes its expanded native `<Picture N>`, `<Video N>`, or `<Audio N>` label and description into the prompt. Saved `<RefMod N>` aliases still resolve at queue time. A v5 bundle expands to all members in order. Disabled/zero-strength rows contribute no reference; an unresolved alias is an error. Save/Load reference packs also preserve RefMod selection.
 
+### Create a RefMod
+
+To edit a saved archive, select it in **Saved RefMod**; it loads automatically and the action changes to **Save Changes** (saves a new copy, never overwrites). Choose **Select a saved RefMod…** again to restore the normal **Create RefMod** view with the Director media lines. Loading replaces the dialog’s export selection, not the Director timeline. Supported older standalone RefMods and v5 bundles expose their individual members: edit descriptions, uncheck unwanted members, and change the overall description or concept type. Save under a new name (or leave it empty for an automatic name). Original files and retained latent values remain unchanged; no VAE is required. Saved members have no original-media preview here. Pixel content and encoded crops cannot be edited in this metadata-only path.
+
+Click **Create RefMod** beside **Save**. The separate export overlay lists inserted images, video/audio crops and populated saved RefMod slots; disabled and mode-hidden references are initially included too. Uncheck anything you do not want to save. Preview media, edit each reference description, and enter an optional filename, overall description and concept type. These texts are metadata, not learned trigger words. Concept type is descriptive; it does not select a different learning algorithm.
+
+**Create RefMod** queues only reference encoding and saving, not the Director generation, CLIP, diffusion model or sampler. Raw images/videos need the H3 video VAE; raw audio needs the H3 audio VAE. The button uses the native VAE loaders connected directly to one Director Guide. For a different loader topology, use the separate **MiniMaxH3 Create RefMod** output node. Packing existing saved RefMods requires no VAE and preserves their unweighted tensors.
+
+The exporter keeps independent Full Reference VAE latents in a single upstream-compatible v5 `.safetensors` bundle in the first configured RefMod root. It preserves selected crops and video V/A/V+A choices; video plus audio become separate members. Reference pixels keep their source aspect rather than baking the generation canvas into the file. Long/invalid crops and unsafe decoder estimates fail clearly; native H3 frame-grid adjustments are reported. Existing filenames are never overwritten.
+
+The result appears in the RefMod library but is not automatically enabled beside its raw sources. Select it explicitly for later REF2VA use and avoid duplicate conditioning. A bundle’s storage capacity does not increase generation reference limits. RefMods do not guarantee identity isolation, voice cloning or audiovisual synchronization. Closing the overlay stops previews and monitoring, not an already submitted server job; use ComfyUI queue controls to manage that job.
+
+The exporter uses the unique `DaSiWaH3RefModExport` node ID and namespaced frontend controls. It does not replace or patch another RefMod pack.
+
 ## Continue an existing video (optional)
 
 Capture of new takes is **off by default**; enable **∞ Save new takes** before the initial generation if you want a checkpoint. Older active Continuity workflows migrate their saved added-frame count to Duration once, retaining next-action text and structured prompt definitions without moving action text into music. Later Duration edits remain authoritative. Save the workflow to retain migrated settings. [Older-workflow migration →](h3_continuity.md#loading-older-workflows)

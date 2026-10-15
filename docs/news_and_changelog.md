@@ -2,9 +2,13 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-14**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **Director RefMod creation & editing (10-15, 0.5.20):** Create RefMod beside Save exports selected media as an independent v5 safetensors bundle through an isolated queue job. Selecting a supported saved standalone RefMod or v5 bundle loads its members automatically; edit bundle/member descriptions and concept type, deselect members, then **Save Changes** creates a new copy without re-encoding or overwriting the original. Reset the picker to restore the Director media-line creation view. Stored latents remain usable for generation; original media files are not embedded for preview. Includes the 0.5.19 export work below. Git publication is separate from Registry acceptance. [Usage →](minimax_h3_director.md#create-a-refmod)
+
+- **Director RefMod export (0.5.19 development, included in 0.5.20):** Adds Create RefMod beside Save with a separate media-preview/settings overlay, selection and editable reference descriptions. A namespaced output node encodes selected references and saves a no-overwrite v5 safetensors bundle through an isolated queue job; no sampler, additional RefMod pack or automatic duplicate conditioning. Preserves crops and stream choices; concept texts are metadata, not model training. [Usage →](minimax_h3_director.md#create-a-refmod)
 
 - **Forge and frontend update (0.5.18):** Publishes the Cast/People-box work and subsequent safety fixes to GitHub and Gitea. Explicit history selection can reapply a saved prompt after editing or applying another prompt, but changed source, references, mode, duration, canvas or model connections still require a fresh compatible draft. Advanced LoRA Loader uses native DOM controls for sharp text at canvas zoom, with bounded info/clear buttons and hover feedback. Video Combine supports fullscreen and reliable preview seeking; the renderer fixes below are included. Git publication triggers the existing Registry workflow; Registry acceptance and real model adherence are separate checks.
 
@@ -160,6 +164,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.20 | 10-15 | Director RefMod creation and editing: automatic saved-member loading, editable descriptions, media-line reset and no-overwrite Save Changes copies |
 | 0.5.18 | 10-14 | GitHub/Gitea update: Forge history reapply, Cast/People safety fixes, sharp LoRA DOM controls and preview seeking/fullscreen |
 | 0.5.17 | 10-14 | Gitea testing: Forge People boxes, editable Cast/scene cards, automatic reading with opt-out, Idea priority and safe queued/stale reads |
 | 0.5.16 | 10-13 | H3 Memory Planning toggle and configurable reserve slider (0–100%, default 5%); legacy MB caps retained |
