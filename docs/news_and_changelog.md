@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the 
 
 ## News
 
+- **RefMod export fix (10-15, 0.5.21):** RefMod bundle saving fsyncs the temporary file with a read-write descriptor (`'rb+'`), fixing the Windows `OSError: [Errno 9] Bad file descriptor` that prevented exports from being saved.
+
 - **Director RefMod creation & editing (10-15, 0.5.20):** Create RefMod beside Save exports selected media as an independent v5 safetensors bundle through an isolated queue job. Selecting a supported saved standalone RefMod or v5 bundle loads its members automatically; edit bundle/member descriptions and concept type, deselect members, then **Save Changes** creates a new copy without re-encoding or overwriting the original. Reset the picker to restore the Director media-line creation view. Stored latents remain usable for generation; original media files are not embedded for preview. Includes the 0.5.19 export work below. Git publication is separate from Registry acceptance. [Usage →](minimax_h3_director.md#create-a-refmod)
 
 - **Director RefMod export (0.5.19 development, included in 0.5.20):** Adds Create RefMod beside Save with a separate media-preview/settings overlay, selection and editable reference descriptions. A namespaced output node encodes selected references and saves a no-overwrite v5 safetensors bundle through an isolated queue job; no sampler, additional RefMod pack or automatic duplicate conditioning. Preserves crops and stream choices; concept texts are metadata, not model training. [Usage →](minimax_h3_director.md#create-a-refmod)
@@ -164,6 +166,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.21 | 10-15 | RefMod export fix: read-write fsync descriptor so bundle saving works on Windows |
 | 0.5.20 | 10-15 | Director RefMod creation and editing: automatic saved-member loading, editable descriptions, media-line reset and no-overwrite Save Changes copies |
 | 0.5.18 | 10-14 | GitHub/Gitea update: Forge history reapply, Cast/People safety fixes, sharp LoRA DOM controls and preview seeking/fullscreen |
 | 0.5.17 | 10-14 | Gitea testing: Forge People boxes, editable Cast/scene cards, automatic reading with opt-out, Idea priority and safe queued/stale reads |

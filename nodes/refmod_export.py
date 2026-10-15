@@ -63,7 +63,7 @@ def dasiwa_save_bundle(refs, warnings, name='', description='', concept_type='ge
     os.close(fd)
     try:
         save_file(tensors, temporary, metadata={'refmod_meta': json.dumps(metadata)})
-        with open(temporary, 'rb') as handle:
+        with open(temporary, 'rb+') as handle:
             os.fsync(handle.fileno())
         dasiwa_interrupted()
         # Same-directory link publishes atomically without replacing existing archives.
