@@ -2084,7 +2084,7 @@ function install(node) {
       if (!entry) continue; // Missing files are also skipped by the Director backend.
       const kinds = Array.isArray(entry.kinds) && entry.kinds.length ? entry.kinds : [entry.kind];
       kinds.forEach((kind, member) => {
-        if (["image", "video", "audio"].includes(kind)) refs.push({ id: `refmod-${row.slot}-${row.name}-${member}-${kind}`, kind, role: kind === "video" ? "motion" : "subject", stream: kind === "video" ? "video" : undefined, instructions: String(row.description || entry.description || ""), saved_reference: true });
+        if (["image", "video", "audio"].includes(kind)) refs.push({ id: `refmod-${row.slot}-${row.name}-${member}-${kind}`, kind, role: kind === "video" ? "motion" : "subject", stream: kind === "video" ? "video" : undefined, instructions: String(entry.members?.[member]?.description ?? (row.description || entry.description || "")), saved_reference: true });
       });
     }
     return refs;

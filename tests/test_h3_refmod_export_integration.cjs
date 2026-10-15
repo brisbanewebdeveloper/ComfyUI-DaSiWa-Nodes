@@ -6,6 +6,27 @@ const { test } = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'js/minimax_h3_director.js'), 'utf8');
 
+test('Forge retains distinct saved member descriptions, including deliberately empty notes', () => {
+  const start = source.indexOf('  const forgeRefs = () => {');
+  const end = source.indexOf('  node.__dasiwaH3Continuity =', start);
+  assert.ok(start >= 0 && end > start);
+  const row = { slot: 1, name: 'bundle', description: 'Common Director description' };
+  const entry = { name: 'bundle', description: 'Bundle overview', kinds: ['image', 'image', 'audio'],
+    members: [{ kind: 'image', description: 'First picture' }, { kind: 'image', description: 'Second picture' }, { kind: 'audio', description: '' }] };
+  const context = vm.createContext({ state: { refmods: [row] }, refModLibrary: { entries: [entry] },
+    continuityContext: () => null, mode: () => 'REF2VA', node: {}, forgeItems: () => [],
+    forgeReferences: () => [{ id: 'current', instructions: 'Current image' }] });
+  vm.runInContext(source.slice(start, end) + '\nglobalThis.references = forgeRefs;', context);
+  const refs = context.references();
+  assert.deepEqual(Array.from(refs, ref => ref.instructions), ['Current image', 'First picture', 'Second picture', '']);
+  assert.equal(row.description, 'Common Director description');
+  assert.equal(entry.description, 'Bundle overview');
+  delete entry.members;
+  assert.deepEqual(Array.from(context.references().slice(1), ref => ref.instructions), Array(3).fill('Common Director description'));
+  row.description = '';
+  assert.deepEqual(Array.from(context.references().slice(1), ref => ref.instructions), Array(3).fill('Bundle overview'));
+});
+
 test('Director adds a separate namespaced export action directly after Save', () => {
   assert.match(source, /import \{ openDaSiWaRefModExport \} from "\.\/refmod_export\.js"/);
   const save = source.indexOf('addDropdown("", "save-picker"');

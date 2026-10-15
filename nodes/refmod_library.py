@@ -40,6 +40,8 @@ def library_entries():
                 for member in members
             )
             entries.append({"name": name, "kind": kind, "kinds": [member["kind"] for member in members],
+                            "members": [{"kind": member["kind"], "description": str(member.get("description", ""))}
+                                        for member in members],
                             "concept": meta.get("concept_type", "generic"),
                             "description": meta.get("description") or members[0].get("description", ""),
                             "tokens": tokens or None, "mtime": os.path.getmtime(_safetensors_path(path))})

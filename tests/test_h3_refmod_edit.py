@@ -59,6 +59,25 @@ def test_reject_invalid_member_selection(monkeypatch, members):
         m.dasiwa_export_refs(json.dumps({'refmods': [{'name': 'source', 'members': members}]}))
 
 
+def test_library_exposes_member_notes_without_replacing_bundle_description(tmp_path, archive, monkeypatch):
+    m, fmt, library = archive
+    monkeypatch.setattr(library, 'refmods_roots', lambda: [str(tmp_path)])
+    monkeypatch.setattr(library, '_entries_cache', {'sig': None, 'entries': []})
+    m.dasiwa_save_bundle([
+        (torch.zeros(1, 24, 1, 2, 2), {'kind': 'image', 'description': 'First picture'}),
+        (torch.ones(1, 24, 1, 2, 2), {'kind': 'image', 'description': 'Second picture'}),
+        (torch.ones(1, 32, 2, 7), {'kind': 'audio', 'description': ''}),
+    ], [], name='source', description='Bundle overview')
+    entry, = library.library_entries()
+    assert entry['description'] == 'Bundle overview'
+    assert entry['kinds'] == ['image', 'image', 'audio']
+    assert entry['members'] == [
+        {'kind': 'image', 'description': 'First picture'},
+        {'kind': 'image', 'description': 'Second picture'},
+        {'kind': 'audio', 'description': ''},
+    ]
+
+
 def test_refmod_detail_http_metadata_only(tmp_path, archive):
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
