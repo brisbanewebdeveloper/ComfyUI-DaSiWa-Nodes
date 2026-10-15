@@ -19,6 +19,8 @@ class DaSiWaH3ContinuityAppend:
     def commit(self, sampled, context):
         if context.get("disabled"):
             return sampled, {"disabled": True}
+        if context.get("output_mode", "full") == "segment":
+            raise ValueError("New segment only requires Segment Prepare → optional Upscale → Segment Decode → Export → Publish, not cumulative Append & Stage.")
         if context["operation"] == "continue":
             previous, _ = ClipStore().load(context["session"], context["source_id"])
             combined = append_tail(previous, sampled, context["layout"])
@@ -55,20 +57,31 @@ class DaSiWaH3ContinuityPublish:
         import av
         from .pyav_media import open_media, video_stream
         metadata = store.inspect(ticket["session"], ticket["clip_id"], ready=False)
+        export = None
+        if metadata.get("schema") == 2:
+            from .segment_store import verify_segment_export
+            export = verify_segment_export(path, metadata)
+            root = next(root for root in roots if path.is_relative_to(root))
+            export.update(filename=path.name, subfolder=str(path.parent.relative_to(root)),
+                          type="output" if root == roots[0] else "temp")
         with open_media(path) as media:
             video = video_stream(media)
             if video is None:
                 raise ValueError("Continuity export has no video stream.")
             seconds = (float(video.duration * video.time_base) if video.duration is not None
                        else float(media.duration or 0) / av.time_base)
-            if not math.isfinite(seconds) or seconds <= 0 or abs(seconds - metadata["seconds"]) > max(0.125, 2 / float(video.average_rate or 24)):
+            if not math.isfinite(seconds) or seconds <= 0 or abs(seconds - (metadata["segment_frames"] / 24 if export else metadata["seconds"])) > max(0.125, 2 / float(video.average_rate or 24)):
                 raise ValueError("Export duration differs from the saved H3 timeline. Check FPS, interpolation and trimming; checkpoint remains staged.")
-        data = store.publish(ticket, path)
-        message = f"Saved {data['frames']} frames ({data['seconds']:.3f}s), clip {data['clip_id'][:8]}."
+        import comfy.model_management
+        comfy.model_management.throw_exception_if_processing_interrupted()
+        data = store.publish(ticket, path, export=export)
+        message = (f"Saved segment: {data['segment_frames']} new frames ({data['segment_frames']/24:.3f}s); timeline {data['frames']} frames ({data['seconds']:.3f}s), clip {data['clip_id'][:8]}."
+                   if export else f"Saved {data['frames']} frames ({data['seconds']:.3f}s), clip {data['clip_id'][:8]}.")
         try:
             from server import PromptServer
             PromptServer.instance.send_sync("df_h3_continuity_saved", {
-                "session": ticket["session"], "clip_id": ticket["clip_id"], "status": message})
+                "session": ticket["session"], "clip_id": ticket["clip_id"], "status": message,
+                "export_kind": "segment" if export else "full"})
         except (ImportError, AttributeError):
             pass
         return {"ui": {"text": [message]}, "result": (message,)}

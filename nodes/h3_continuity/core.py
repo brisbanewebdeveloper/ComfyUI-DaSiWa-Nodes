@@ -114,7 +114,10 @@ def parse_settings(raw, duration_seconds=None):
     use_references = value.get("use_references", False)
     if not isinstance(use_references, bool):
         raise ValueError("Use Director references must be true or false.")
-    return {**value, "version": version, "operation": operation, "capture": capture, "session": session,
+    output_mode = value.get("output_mode", "full")
+    if not isinstance(output_mode, str) or output_mode not in {"full", "segment"}:
+        raise ValueError("Continuity output_mode must be full or segment.")
+    return {**value, "output_mode": output_mode, "version": version, "operation": operation, "capture": capture, "session": session,
             "source_kind": source_kind, "source_video_id": video_id, "use_references": use_references,
             "source_id": source, "overlap_frames": overlap, "extension_frames": extension,
             "continuation_prompt": prompt, "idea": idea}
@@ -200,6 +203,24 @@ def prepare_continuation(previous, metadata, guide, settings):
                             "overlap_audio_tokens": audio_tokens}
 
 
+def prepare_segment_continuation(store, metadata, guide, settings):
+    from .segment_policy import render_layout
+    from .vendor.continuation_nodes import _calculate_guided_continuation_layout, _assemble_guided_target, video_latent_t
+    _require_native_arbitrary_guides()
+    if metadata['fps'] != 24 or mode_family(guide['mode']) != metadata['mode_family'] or guide['mode'] == 'Image Inpaint':
+        raise ValueError('Source and Director must use the same native H3 video family.')
+    if (guide['width'],guide['height']) != (metadata['width'],metadata['height']):
+        raise ValueError('Restore the source canvas before continuing.')
+    native = _calculate_guided_continuation_layout(metadata['frames'],settings['overlap_frames'],settings['extension_frames'])
+    render = render_layout(metadata['frames'],settings['extension_frames'])
+    tail = store.load_range(settings['session'],settings['source_id'],render['video_start'],video_latent_t(metadata['frames']),render['audio_start'],round(metadata['frames']*40/24))
+    target = _assemble_guided_target(*tail['samples'].tensors,native)
+    resolved = compose_prompt(settings)
+    updated = {**guide,'length':native.window_frame_count,'prompt':resolved,'resolved_prompt':resolved,
+               'prompt_blocks':[],'first_frame':None,'last_frame':None}
+    return updated,target,{'overlap_video_tokens':native.overlap_video_t,'overlap_audio_tokens':native.overlap_audio_t},tail
+
+
 def add_tail(positive, previous, target, layout):
     return MiniMaxH3LatentTailGuide.execute(
         positive, previous, target, layout["overlap_video_tokens"],
@@ -283,6 +304,9 @@ class ClipStore:
     def inspect(self, session, clip, ready=True):
         """Read metadata and safetensors headers, never materialize AV tensors."""
         data = self.metadata(session, clip, ready)
+        if data.get("schema") == 2:
+            from .segment_store import inspect_delta
+            return inspect_delta(self, session, clip, ready)
         path = self.member(session, clip, "latent.safetensors")
         try:
             with safe_open(str(path), framework="pt", device="cpu") as file:
@@ -305,12 +329,27 @@ class ClipStore:
 
     def load(self, session, clip):
         metadata = self.inspect(session, clip)
+        if metadata.get("schema") == 2:
+            import psutil
+            required = ((metadata["frames"] - 5) // 17 * 5 + 2) * 24 * (metadata["height"] // 16) * (metadata["width"] // 16) * 8 + round(metadata["frames"] * 40 / 24) * 64 * 8
+            available = psutil.virtual_memory().available
+            if required * 2 + 256 * 1024**2 > available:
+                raise ValueError(f"Full-timeline materialization needs approximately {required * 2} bytes plus 256 MiB RAM reserve; {available} bytes available. Use the segment workflow or free RAM.")
+            return self.load_range(session, clip, 0, (metadata["frames"] - 5) // 17 * 5 + 2, 0, round(metadata["frames"] * 40 / 24)), metadata
         tensors = load_file(str(self.member(session, clip, "latent.safetensors")), device="cpu")
         latent = {"samples": NestedTensor((tensors["video"], tensors["audio"]))}
         _, _, frames = validate_h3_av_latent(latent, name="saved clip")
         if frames != metadata["frames"]:
             raise ValueError("Checkpoint frame count differs from its metadata.")
         return latent, metadata
+
+    def load_range(self, session, clip, video_start, video_end, audio_start, audio_end):
+        from .segment_store import load_range
+        return load_range(self, session, clip, video_start, video_end, audio_start, audio_end)
+
+    def stage_delta(self, sampled, context, source_metadata):
+        from .segment_store import stage_delta
+        return stage_delta(self, sampled, context, source_metadata)
 
     def stage(self, latent, context):
         video, audio, frames = validate_h3_av_latent(latent, name="completed clip")
@@ -337,15 +376,23 @@ class ClipStore:
             temp.unlink(missing_ok=True)
         return {"session": session, "clip_id": clip}
 
-    def publish(self, ticket, output_path, thumbnails=(), preview_warning=""):
+    def publish(self, ticket, output_path, thumbnails=(), preview_warning="", export=None):
         session, clip = ticket["session"], ticket["clip_id"]
         with _LOCK:
             data = self.inspect(session, clip, ready=False)
+            previous = dict(data)
+            if export is not None:
+                data["export"] = export
             data.update(status="ready", output_path=str(output_path),
                         completed_ns=time.time_ns(), thumbnails=list(thumbnails),
                         preview_warning=preview_warning)
             atomic_json(self.clip_dir(session, clip) / "clip.json", data)
-            atomic_json(self.session_dir(session) / "latest.json", {"clip_id": clip})
+            try:
+                atomic_json(self.session_dir(session) / "latest.json", {"clip_id": clip})
+            except BaseException:
+                if data.get("schema") == 2:
+                    atomic_json(self.clip_dir(session, clip) / "clip.json", previous)
+                raise
         return data
 
     def list_clips(self, session, selected_id=None):
@@ -358,7 +405,33 @@ class ClipStore:
                     staged += 1
                     continue
                 data = self.inspect(session, path.parent.name)
-                data.pop("output_path", None)
+                output_path = data.pop("output_path", None)
+                export = dict(data.get("export") or {"kind": "full", "start_frame": 0, "frames": data["frames"]})
+                export.pop("filename", None)
+                data["export_available"] = False
+                if isinstance(output_path, str) and output_path:
+                    import folder_paths
+                    imported = data.get("provenance", {}).get("kind") == "imported_video"
+                    if imported:
+                        roots = [("input", folder_paths.get_input_directory())]
+                        handle = data["provenance"].get("filename")
+                    else:
+                        roots = [("output", folder_paths.get_output_directory()), ("temp", folder_paths.get_temp_directory())]
+                        declared_type = (data.get("export") or {}).get("type")
+                        if declared_type is not None:
+                            roots = [(kind, root) for kind, root in roots if kind == declared_type]
+                        handle = output_path
+                    for kind, directory_root in roots:
+                        root = Path(directory_root).resolve()
+                        exported = (root / handle).resolve() if isinstance(handle, str) and handle else None
+                        if exported is not None and exported.is_relative_to(root) and exported.is_file() and exported.stat().st_size:
+                            relative = exported.relative_to(root)
+                            export.update(filename=relative.name, subfolder="" if relative.parent == Path(".") else relative.parent.as_posix(), type=kind)
+                            if imported:
+                                export["source_prefix"] = True
+                            data["export_available"] = True
+                            break
+                data["export"] = export
                 clips.append(data)
             except (ValueError, OSError, KeyError, TypeError):
                 unavailable += 1

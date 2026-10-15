@@ -11,6 +11,30 @@ def register_routes(server=None):
         server = PromptServer.instance
     routes = server.routes
 
+    @routes.post("/df_h3_continuity/assembly/preflight")
+    async def assembly_preflight(request):
+        import json
+        from .assembly import preflight
+        limit = 65536
+        if request.content_length is not None and request.content_length > limit:
+            return web.json_response({"ok": False, "issues": ["Clip assembly request exceeds 64 KiB."]}, status=413)
+        body = bytearray()
+        while True:
+            chunk = await request.content.read(min(8192, limit + 1 - len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+            if len(body) > limit:
+                return web.json_response({"ok": False, "issues": ["Clip assembly request exceeds 64 KiB."]}, status=413)
+        try:
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                raise ValueError("Clip assembly request must be an object.")
+            result = await asyncio.to_thread(preflight, data)
+            return web.json_response(result, status=200 if result.get("ok") else 400)
+        except (ValueError, KeyError, OSError, TypeError, UnicodeDecodeError) as exc:
+            return web.json_response({"ok": False, "issues": [str(exc)]}, status=400)
+
     @routes.post("/df_h3_continuity/video")
     async def prepare(request):
         try:

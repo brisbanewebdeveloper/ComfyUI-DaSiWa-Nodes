@@ -1,7 +1,7 @@
 import { refPromptFields } from "./minimax_h3_forge_state.js";
 
 // Pure frontend counterparts of nodes/h3_continuity/core.py. Tested for parity.
-export const CONTINUITY_DEFAULTS = { version: 3, source_kind: "checkpoint", source_id: "", source_video_id: "", source_video: null, use_references: false, operation: "new", capture: false, session: "", overlap_frames: 22, continuation_prompt: "", idea: "" };
+export const CONTINUITY_DEFAULTS = { version: 3, output_mode: "full", source_kind: "checkpoint", source_id: "", source_video_id: "", source_video: null, use_references: false, operation: "new", capture: false, session: "", overlap_frames: 22, continuation_prompt: "", idea: "" };
 export const sourceId = c => c?.source_kind === "video" ? c.source_video_id : c?.source_id;
 export function continuityTiming(seconds, preferred = 22, sourceFrames = null) {
   seconds = Number(seconds);
@@ -14,6 +14,7 @@ export function continuityTiming(seconds, preferred = 22, sourceFrames = null) {
 }
 export function normalizeContinuity(c, durationWidget) {
   if (!c || typeof c !== "object") return { ...CONTINUITY_DEFAULTS };
+  if (c.output_mode !== undefined && !["full", "segment"].includes(c.output_mode)) throw new Error("Invalid Continuity output mode.");
   if (Number(c.version || 2) < 3) {
     if (c.operation === "continue" && sourceId(c)) {
       // Migrate the old +frames authority once, before removing derived fields.
@@ -42,6 +43,27 @@ export function normalizeContinuity(c, durationWidget) {
   delete c.extension_frames; delete c.window_frames; delete c.added_seconds; delete c.duration_seconds;
   c.operation = sourceId(c) ? "continue" : "new";
   return c;
+}
+
+export function validateSegmentGraph(output, directorId) {
+  const linked=(link,id,slot=null)=>Array.isArray(link)&&String(link[0])===String(id)&&(slot===null||link[1]===slot);
+  const depends=(id,target,seen=new Set())=>{
+    if(String(id)===String(target))return true;
+    if(seen.has(String(id)))return false;seen.add(String(id));
+    return Object.values(output[id]?.inputs ?? {}).some(value=>Array.isArray(value)&&value.length===2&&Number.isInteger(value[1])&&output[value[0]]&&depends(value[0],target,seen));
+  };
+  for(const [prepareId,prepare]of Object.entries(output)) {
+    if(prepare.class_type!=='DaSiWaH3ContinuitySegmentPrepare')continue;
+    const guide=output[prepare.inputs?.context?.[0]];
+    if(guide?.class_type!=='MiniMaxH3DirectorGuide'||!linked(guide.inputs?.guide,directorId,0))continue;
+    for(const [decodeId,decode]of Object.entries(output)) {
+      const latent=decode.inputs?.latent, upscale=output[latent?.[0]];
+      const localLatent=linked(latent,prepareId,0)||(upscale?.class_type==='DaSiWaH3TiledUpscale' && latent?.[1]===0 && linked(upscale.inputs?.latent,prepareId,0) && linked(upscale.inputs?.continuity_context,prepareId,1));
+      if(decode.class_type!=='DaSiWaH3ContinuitySegmentDecode'||!linked(decode.inputs?.context,prepareId,1)||!localLatent)continue;
+      if(Object.values(output).some(node=>node.class_type==='DaSiWaH3ContinuityPublish'&&linked(node.inputs?.ticket,prepareId,2)&&depends(node.inputs?.filename?.[0],decodeId)))return;
+    }
+  }
+  throw new Error('New segment only requires Segment Prepare → optional Upscale → Segment Decode → Export → Publish, connected to this Director Guide. No full-timeline fallback.');
 }
 
 export function newContinuitySession() {

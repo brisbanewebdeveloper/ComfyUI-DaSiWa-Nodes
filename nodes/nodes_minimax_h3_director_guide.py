@@ -107,7 +107,7 @@ class MiniMaxH3DirectorGuide:
         if abs(float(guide.get("frame_rate", 24)) - 24) > 1e-6:
             raise ValueError("H3 continuity uses native 24 fps. Set Director frame_rate to 24.")
         from .h3_continuity.validation import validate_capture_graph
-        validate_capture_graph(prompt, unique_id)
+        validate_capture_graph(prompt, unique_id, settings["output_mode"])
         _require_native_arbitrary_guides()
         context = {**settings, "mode": guide["mode"],
                    "resolved_prompt": guide.get("resolved_prompt", guide.get("prompt", ""))}
@@ -116,9 +116,22 @@ class MiniMaxH3DirectorGuide:
             context.update(source_id="", overlap_frames=0, extension_frames=0)
             return positive, latent, context
         if settings["source_kind"] == "video":
-            from .h3_continuity.video_source import import_checkpoint
+            from .h3_continuity.video_source import import_checkpoint, read_manifest, input_video, file_digest, import_cache_id
             _validate_h3_vaes(vae, audio_vae, "REF2VA")
-            previous, metadata, source_id = import_checkpoint(settings, guide, vae, audio_vae)
+            store = ClipStore()
+            cached = None
+            if settings['output_mode'] == 'segment':
+                manifest = read_manifest(store,settings['source_video_id'])
+                source_id = import_cache_id(manifest,guide)
+                if store.member(settings['session'],source_id,'clip.json').exists():
+                    path = input_video(manifest['filename'])
+                    if file_digest(path,interrupt=True) != manifest['sha256']:
+                        raise ValueError('The selected source video changed. Select it again before continuing.')
+                    cached = store.inspect(settings['session'],source_id)
+            if cached is not None:
+                metadata = cached
+            else:
+                previous, metadata, source_id = import_checkpoint(settings, guide, vae, audio_vae)
             context["source_id"] = source_id
         else:
             from .h3_continuity.inspection import checkpoint_issues
@@ -127,11 +140,26 @@ class MiniMaxH3DirectorGuide:
             issues = checkpoint_issues(info, guide["mode"], guide["width"], guide["height"])
             if issues:
                 raise ValueError(" ".join(issues))
-            previous, metadata = store.load(settings["session"], settings["source_id"])
+            metadata = info
+            if settings["output_mode"] == "full":
+                previous, metadata = store.load(settings["session"], settings["source_id"])
         if settings.get("version", 2) >= 3:
             settings.update(continuation_timing(settings["duration_seconds"], settings["overlap_frames"], metadata["frames"]))
             context.update({key: settings[key] for key in ("overlap_frames", "extension_frames", "duration_seconds")})
-        updated, target, layout = prepare_continuation(previous, metadata, guide, settings)
+        if settings["output_mode"] == "segment":
+            from .h3_continuity.core import prepare_segment_continuation
+            settings["source_id"] = context["source_id"]
+            from .h3_continuity.segment_store import file_stamp
+            store = ClipStore()
+            source_path = store.member(settings['session'],settings['source_id'],'delta.safetensors' if metadata.get('schema') == 2 else 'latent.safetensors')
+            stamp = file_stamp(source_path)
+            updated, target, layout, previous = prepare_segment_continuation(store, metadata, guide, settings)
+            if stamp != file_stamp(source_path):
+                raise ValueError('Continuity source changed while preparing its tail.')
+            context['source_file_stamp'] = stamp
+            context["source_frames"] = metadata["frames"]
+        else:
+            updated, target, layout = prepare_continuation(previous, metadata, guide, settings)
         positive, _ = self._apply_native(clip, vae, updated, audio_vae)
         context.update(layout=layout, resolved_prompt=updated["resolved_prompt"],
                        provenance={"source_kind": settings["source_kind"],

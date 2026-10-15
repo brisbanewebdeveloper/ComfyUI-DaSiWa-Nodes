@@ -27,6 +27,28 @@ def continuity_plan(video, audio, context):
         raise TypeError("continuity_context must be a mapping.")
     if context.get("disabled") or context.get("operation") != "continue":
         return None
+    if context.get("render_kind") == "segment":
+        from .h3_continuity.segment_nodes import segment_render_plan
+        render = segment_render_plan(video,audio,context)
+        metadata = ClipStore().inspect(context['session'],context['source_id'])
+        source_frames = metadata['frames']
+        if source_frames != context['source_frames'] or (video.shape[4]*16,video.shape[3]*16) != (metadata['width'],metadata['height']):
+            raise ValueError('Segment upscale source identity or source-resolution canvas differs.')
+        source_t = video_latent_t(source_frames) - render['video_start']
+        overlap_t = _integer(context['layout'],'overlap_video_tokens')
+        overlap_frames = frame_count_from_video_latent_t(overlap_t)
+        if overlap_frames != context['overlap_frames'] or overlap_frames > source_frames:
+            raise ValueError('Segment upscale overlap differs from its source layout.')
+        audio_start = audio_t_at_frame_boundary(source_frames-overlap_frames) - render['audio_start']
+        source_audio_t = audio_t_at_frame_boundary(source_frames) - render['audio_start']
+        if _integer(context['layout'],'overlap_audio_tokens') != source_audio_t-audio_start:
+            raise ValueError('Segment upscale audio overlap differs from global boundaries.')
+        return dict(refine_start_token=source_t-overlap_t,source_tokens=source_t,
+                    frame_offset=source_frames-overlap_frames-render['frame_offset'],
+                    audio_start=audio_start,source_audio_tokens=source_audio_t,
+                    source_frames=source_frames-render['frame_offset'],overlap_tokens=overlap_t,
+                    total_frames=render['render_frames'],
+                    explanation='Segment continuity: freeze local original prefix, refine only the local source tail and new video; preserve original audio.')
     _, _, total_frames = validate_h3_av_latent(
         {"samples": NestedTensor((video, audio))}, name="cumulative upscale input")
     metadata = ClipStore().inspect(context["session"], context["source_id"])

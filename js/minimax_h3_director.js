@@ -1,8 +1,9 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { openDaSiWaRefModExport } from "./refmod_export.js";
+import { openClipAssembly } from "./minimax_h3_clips.js";
 import { forgeReferences, refPromptFields, refTemplate, inheritedDefinitions, referenceSnapshot } from "./minimax_h3_forge_state.js";
-import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, normalizeContinuity, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
+import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, normalizeContinuity, validateSegmentGraph, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
 
 let h3VaeErrorPopupInstalled = false;
 
@@ -308,6 +309,26 @@ function install(node) {
   let activeRefModOverlayCleanup = null;
   let activeRefModLibraryRefresh = null;
   let activeRefModExportCleanup = null;
+  let closeClipAssembly = null;
+  const checkSegmentTopology = () => {
+    const output = {};
+    for (const item of node.graph?._nodes || []) {
+      const inputs = {};
+      for (const input of item.inputs || []) {
+        const link = node.graph.getLink?.(input.link) ?? node.graph.links?.[input.link];
+        if (link) inputs[input.name] = [String(link.origin_id), link.origin_slot];
+      }
+      const type = item.comfyClass || item.type;
+      // Core routes a bypassed upscaler's LATENT through; retain it for this pre-queue check.
+      if (item.mode !== 2 && (item.mode !== 4 || type === "DaSiWaH3TiledUpscale")) output[String(item.id)] = { class_type: type, inputs };
+    }
+    validateSegmentGraph(output, node.id);
+  };
+  const originalSerializeTimeline = dataWidget.serializeValue;
+  dataWidget.serializeValue = function (...args) {
+    if (continuityState().output_mode === "segment") checkSegmentTopology();
+    return originalSerializeTimeline ? originalSerializeTimeline.apply(this, args) : this.value;
+  };
   function openRefModExport() {
     if (nodeRemoved) return;
     activeRefModExportCleanup?.();
@@ -657,9 +678,9 @@ function install(node) {
     const types = new Set(), seen = new Set();
     const visit = graph => { if (!graph || seen.has(graph)) return; seen.add(graph); for (const item of graph._nodes || []) { types.add(item.type || item.comfyClass); visit(item.subgraph); } };
     visit(graph.rootGraph || graph);
-    return types.has("DaSiWaH3ContinuityAppend") && types.has("DaSiWaH3ContinuityPublish");
+    return (continuityState().output_mode === "segment" ? types.has("DaSiWaH3ContinuitySegmentPrepare") && types.has("DaSiWaH3ContinuitySegmentDecode") : types.has("DaSiWaH3ContinuityAppend")) && types.has("DaSiWaH3ContinuityPublish");
   }
-  function continuityGraphError() { setStatus("Capture unavailable: wire Append & Stage and Publish Export as shown in the continuity workflow.", true); }
+  function continuityGraphError() { setStatus(continuityState().output_mode === "segment" ? "Capture unavailable: wire Segment Prepare → optional Upscale → Segment Decode → Export → Publish." : "Capture unavailable: wire Append & Stage and Publish Export as shown in the continuity workflow.", true); }
   function selectRealMode(value) {
     if (value === "Image Inpaint" && isContinuing()) {
       clearContinuitySource(); setStatus("Continuity source cleared: Image Inpaint produces one image.");
@@ -725,6 +746,15 @@ function install(node) {
       content.append(summary);
       const checked = currentCheck();
       if (checked?.estimated_scratch_bytes) { const budget = document.createElement("div"); budget.className = "ds-h3-continuity-info"; budget.textContent = `Import temporary disk estimate: ${formatBytes(checked.estimated_scratch_bytes)} · free ${formatBytes(checked.scratch_free_bytes)}. Excludes models and cumulative export.`; content.append(budget); }
+      const output = document.createElement("select"); output.setAttribute("aria-label", "Continuity output mode");
+      output.append(new Option("Full timeline (existing workflow)", "full"), new Option("New segment only", "segment")); output.value = c.output_mode;
+      const outputNote = document.createElement("div"); outputNote.className = "ds-h3-continuity-info";
+      const paintOutput = () => { outputNote.textContent = c.output_mode === "segment" ? "Requires Segment Prepare → optional Upscale → Segment Decode → Export → Publish" : ""; };
+      output.onchange = () => {
+        c.output_mode = output.value; emit(); paintOutput();
+        if (c.output_mode === "segment") { try { checkSegmentTopology(); } catch (error) { outputNote.textContent = error.message; setStatus(error.message, true); } }
+      };
+      const outputLabel = document.createElement("label"); outputLabel.append(document.createTextNode("Output "), output); content.append(outputLabel, outputNote); paintOutput();
       const overlap = document.createElement("select"); overlap.setAttribute("aria-label", "Preferred context frames");
       for (const value of [5, 22, 39, 56, 73]) overlap.append(new Option(`${value} frames`, String(value)));
       overlap.value = String(c.overlap_frames); overlap.onchange = () => { c.overlap_frames = Number(overlap.value); emit(); render(); };
@@ -770,6 +800,15 @@ function install(node) {
     source.disabled = mode() === "Image Inpaint";
     source.onchange = () => { const [kind, id] = source.value.split(":"); if (!id) clearContinuitySource(); else if (kind === "video") { sourceRevision++; pendingResume = ""; c.source_kind = kind; c.source_video_id = id; emit(); render(); } else selectContinuitySource(id); }; row.append(source);
     button("Use latest output", () => selectContinuitySource(continuityLatest)).disabled = !continuityLatest || mode() === "Image Inpaint";
+    button("Join clips…", () => {
+      closeClipAssembly?.();
+      closeClipAssembly = openClipAssembly({ api, timeline: state,
+        onChange: assembly => { state.clip_assembly = assembly; emit(); },
+        viewUrl: (path, type = "input") => api.apiURL(`/view?filename=${encodeURIComponent(path)}&type=${type}`),
+        upload: file => uploadFile(file, status), allowNativeEditing: allowNativeTextEditing,
+        isRemoved: () => nodeRemoved,
+      });
+    });
     button("Advanced", openContinuityAdvanced);
     if (active) button("Clear source", clearContinuitySource);
     row.append(badge);
@@ -2188,6 +2227,7 @@ function install(node) {
   node.onRemoved = function (...args) {
     nodeRemoved = true;
     closeContinuityAdvanced?.();
+    closeClipAssembly?.();
     window.clearTimeout(checkTimer); checkAbort?.abort();
     window.removeEventListener("dasiwa-h3-field-resized", onFieldResized);
     window.DaSiWaH3Forge?.close?.(node);

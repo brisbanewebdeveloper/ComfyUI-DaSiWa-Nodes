@@ -19,6 +19,8 @@ if __package__:
     from .nodes.nodes_minimax_h3_director_guide import MiniMaxH3DirectorGuide
     from .nodes.refmod_export import DaSiWaH3RefModExport
     from .nodes.h3_continuity.nodes import DaSiWaH3ContinuityAppend, DaSiWaH3ContinuityPublish
+    from .nodes.h3_continuity.segment_nodes import DaSiWaH3ContinuitySegmentPrepare, DaSiWaH3ContinuitySegmentDecode
+    from .nodes.h3_continuity.assembly_node import DaSiWaH3ClipAssemble
     from .nodes.h3_continuity import routes as continuity_routes
     continuity_routes.register_routes(PromptServer.instance)
     from .nodes.nodes_minimax_h3_cache import MiniMaxH3Cache
@@ -60,6 +62,9 @@ if __package__:
         "DaSiWaH3RefModExport": DaSiWaH3RefModExport,
         "DaSiWaH3ContinuityAppend": DaSiWaH3ContinuityAppend,
         "DaSiWaH3ContinuityPublish": DaSiWaH3ContinuityPublish,
+        "DaSiWaH3ContinuitySegmentPrepare": DaSiWaH3ContinuitySegmentPrepare,
+        "DaSiWaH3ContinuitySegmentDecode": DaSiWaH3ContinuitySegmentDecode,
+        "DaSiWaH3ClipAssemble": DaSiWaH3ClipAssemble,
         "MiniMaxH3Cache": MiniMaxH3Cache,
         "DaSiWaH3TiledUpscale": DaSiWaH3TiledUpscale,
 
@@ -92,6 +97,9 @@ if __package__:
         "DaSiWaH3RefModExport": "MiniMaxH3 Create RefMod",
         "DaSiWaH3ContinuityAppend": "MiniMaxH3 Continuity • Append & Stage",
         "DaSiWaH3ContinuityPublish": "MiniMaxH3 Continuity • Publish Export",
+        "DaSiWaH3ContinuitySegmentPrepare": "MiniMaxH3 Continuity • Segment Prepare",
+        "DaSiWaH3ContinuitySegmentDecode": "MiniMaxH3 Continuity • Segment Decode",
+        "DaSiWaH3ClipAssemble": "MiniMaxH3 • Join Clips",
         "MiniMaxH3Cache": "MiniMaxH3 Cache",
         "DaSiWaH3TiledUpscale": "MiniMaxH3 Enhanced Upscale",
 
