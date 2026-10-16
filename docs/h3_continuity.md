@@ -43,6 +43,17 @@ flowchart LR
     A --> E["Decode + export; publish checkpoint"]
 ```
 
+## Which option to use
+
+| Goal | Use | Cost per run |
+| --- | --- | --- |
+| One growing video, the simplest setup (default) | **Output: Full timeline** with Append & Stage | Decode/upscale/export reprocess the whole timeline, which grows with every continuation |
+| Long chains on limited VRAM/RAM, choosing takes later | **Output: New segment only** with Segment Prepare/Decode, then **Join clips → Continuity segments** | Only the new section plus a small context is decoded and exported; the join loads no model |
+| Combine separate videos with plain cuts | **Join clips → Video files** | No model; re-encode only |
+| Combine separate videos with generated bridges | **Join clips → Video files → H3 transitions** | One short H3 sampling run per cut, then a model-free join |
+
+Sampling cost is the same in both output modes; the saving of segment mode is in decode, upscale and export. Wiring for each option: [Wiring](#wiring), [Continuity output](#continuity-output-full-timeline-or-new-segment), [Join exported clips](#join-exported-clips).
+
 ## Two sources, one continuation path
 
 | Source | Preparation | Conditioning |
@@ -152,7 +163,7 @@ Checkpoints live under `output/df_h3_continuity/<session>/<clip_id>`. `latent.sa
 
 Lists/preflight read safetensors headers without materializing video/audio tensors. Missing, malformed or shape-inconsistent checkpoints are excluded; counts remain visible in Advanced. The latest 200 clips are shown plus any older pinned checkpoint. Header checks are not payload checksums.
 
-Video import uses temporary disk-backed RGB and public VAE calls of at most 124 frames. Preflight estimates temporary RGB/PCM disk and reports available space; the importer repeats the check in its actual temporary directory before decoding. The estimate includes 10% plus 64 MiB reserve; each write checks the remaining reserve again. This is not a RAM/VRAM or cumulative-export budget. Queued hash scanning checks cancellation every 4 MiB. PyAV checks cancellation between packets, frames, filter pulls and writes. Its deadlines are cooperative: they cannot interrupt an individual native decoder call. The chunk plan follows native H3's independent 17-frame encoder chunks with the three-token drop applied only at the final boundary. Audio encoding and cumulative latent/decode still scale with total length. Importing arbitrary input does not make hour-long material inexpensive.
+Video import uses temporary disk-backed RGB and public VAE calls of at most 124 frames. Preflight estimates temporary RGB/PCM disk and reports available space; the importer repeats the check in its actual temporary directory before decoding. The estimate includes 10% plus 64 MiB reserve; each write checks the remaining reserve again. This is not a RAM/VRAM or cumulative-export budget. Queued hash scanning checks cancellation every 4 MiB. PyAV checks cancellation between packets, frames, filter pulls and writes. Its deadlines are cooperative: they cannot interrupt an individual native decoder call. The chunk plan follows native H3's independent 17-frame encoder chunks with the three-token drop applied only at the final boundary. Audio encoding and, in **Full timeline** mode, cumulative latent/decode still scale with total length (New segment only bounds decode/export to the new section). Importing arbitrary input does not make hour-long material inexpensive.
 
 Local media is bounded to 3,600 seconds and 33,554,432 pixels per source/canvas frame (maximum edge 32,768). Probe/tail work has a 45-second deadline; queued conversion has a shared 30-minute deadline. Common local video containers and elementary streams are accepted through a demuxer allowlist; nested file/network references and playlists are disabled. Standard right-angle rotation and reflection matrices are supported. Normalize arbitrary-angle sources or audio without presentation timestamps before importing. See [PyAV migration notes](h3_pyav_migration.md) for the tested media contract and remaining validation limits.
 

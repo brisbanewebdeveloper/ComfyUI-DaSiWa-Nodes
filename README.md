@@ -75,7 +75,7 @@ One node that upscales a completed MiniMax H3 video/audio latent and refines it 
 - **H3 transitions:** optional per-cut bridge rendered with the Director's own Guide, model and sampler; clip ends act as H3 guides, only the new middle is inserted.
 - **Limits:** matching 8-bit SDR, 24-fps canvases; transitions need Director → Guide → one sampler wiring.
 
-[Segment wiring, clip selection, storage and media limits →](docs/h3_continuity.md#continuity-output-full-timeline-or-new-segment)
+[Which option to use →](docs/h3_continuity.md#which-option-to-use) · [Segment wiring, clip selection, storage and media limits →](docs/h3_continuity.md#continuity-output-full-timeline-or-new-segment)
 
 ---
 

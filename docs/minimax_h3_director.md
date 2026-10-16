@@ -152,6 +152,8 @@ Capture of new takes is **off by default**; enable **∞ Save new takes** before
 
 Choose a completed checkpoint or ordinary video using **Choose start video…**. **Continuity Active** appears automatically; Duration now means *new* seconds, not total length. The source stays pinned until you change or clear it. **∞ Save new takes** saves fresh generations as checkpoints; continuations are saved regardless. Add **H3 Continuity • Append & Stage** after sampling and **H3 Continuity • Publish Export** after your actual exporter to publish only successful exports.
 
+To save VRAM on long chains, choose **Advanced → Output → New segment only** instead: Segment Prepare/Decode then export only the newly added section, and **Join clips…** later assembles the chain without loading a model. The same dialog also joins ordinary videos, optionally with H3-generated transitions between them. [Options overview →](h3_continuity.md#which-option-to-use)
+
 ```mermaid
 flowchart LR
     G["Director Guide"] -->|positive + latent| S["Sampler"]
