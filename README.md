@@ -72,7 +72,8 @@ One node that upscales a completed MiniMax H3 video/audio latent and refines it 
 
 - **Selection:** Director **Join clips…** dialog for ordered Continuity exports or independent uploaded videos; separate from reference media.
 - **Execution:** isolated model-free queue job; H.264/AAC re-encode at 24 fps, with explicit preflight confirmation.
-- **Limits:** matching 8-bit SDR canvases; H3 transition repair remains unavailable pending real quality validation.
+- **H3 transitions:** optional per-cut bridge rendered with the Director's own Guide, model and sampler; clip ends act as H3 guides, only the new middle is inserted.
+- **Limits:** matching 8-bit SDR, 24-fps canvases; transitions need Director → Guide → one sampler wiring.
 
 [Segment wiring, clip selection, storage and media limits →](docs/h3_continuity.md#continuity-output-full-timeline-or-new-segment)
 

@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the 
 
 ## News
 
+- **H3 transitions in Join Clips (0.5.23):** The Join clips dialog can render a short H3 bridge for every cut between uploaded videos. It reuses the Director's Guide, model and sampler: the clip edges become native H3 video+audio guides, only the generated middle is inserted, then the usual model-free join runs. New nodes MiniMaxH3 • Transition Guide/Render work in API mode too. Overlay fields now have labels, source/selected durations and Remove. [Usage →](h3_continuity.md#join-exported-clips)
+
 - **H3 segments and Join Clips (0.5.22, Gitea testing):** Opt-in segment-only Continuity uses immutable AV deltas and bounded source-tail rendering, with separate Segment Prepare/Decode nodes. The Director adds one contextual Join clips dialog for Continuity chains or uploaded videos; assembly is a model-free H.264/AAC re-encode with explicit preflight confirmation. Full-timeline workflows remain the default. CPU Core/codec contracts and real isolated classic/Nodes 2.0 queue tests are covered; pretrained seam quality and peak-VRAM savings remain live-test gates. AI repair of independent clip transitions is not released. [Usage and limits →](h3_continuity.md#continuity-output-full-timeline-or-new-segment)
 
 - **RefMod export fix (10-15, 0.5.21):** RefMod bundle saving fsyncs the temporary file with a read-write descriptor (`'rb+'`), fixing the Windows `OSError: [Errno 9] Bad file descriptor` that prevented exports from being saved.
@@ -168,6 +170,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.23 | 10-16 | H3 transition bridges in Join Clips; labelled overlay fields, durations, Remove; PyAV 19 H.264 metadata fix |
 | 0.5.22 | 10-15 | Gitea testing: opt-in H3 delta segments, bounded decode and model-free Join Clips; AI transition repair gated |
 | 0.5.21 | 10-15 | RefMod export fix: read-write fsync descriptor so bundle saving works on Windows |
 | 0.5.20 | 10-15 | Director RefMod creation and editing: automatic saved-member loading, editable descriptions, media-line reset and no-overwrite Save Changes copies |
