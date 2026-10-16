@@ -37,11 +37,24 @@ with sync_playwright() as playwright:
         dialog = page.get_by_role('dialog', name='Join clips', exact=True)
         expect(dialog).to_be_visible()
         assert len(queued) == len(results), 'Opening a dialog must not queue work.'
-        repair = dialog.locator('input[type=checkbox]').first
-        expect(repair).to_be_disabled()
         dialog.get_by_role('tab', name='Video files', exact=True).click()
         dialog.locator('input[type=file]').set_input_files([str(p.resolve()) for p in args.input])
         expect(dialog.locator('.clip-row')).to_have_count(2, timeout=15000)
+        expect(dialog.locator('.clip-time').first).to_contain_text('Source duration: 1.000 s', timeout=15000)
+        expect(dialog.locator('.clip-time').last).to_contain_text('Source duration: 1.000 s', timeout=15000)
+        expect(dialog.locator('label.clip-trim').filter(has_text='Start (s)').first).to_be_visible()
+        expect(dialog.locator('label.clip-trim').filter(has_text='End (s)').first).to_be_visible()
+        end_input=dialog.get_by_role('spinbutton', name='End (s)', exact=False).first
+        assert end_input.input_value()==''
+        start_input=dialog.get_by_role('spinbutton', name='Start (s)', exact=False).first
+        start_input.fill('0.25');end_input.focus()
+        expect(dialog.locator('.clip-time').first).to_contain_text('Selected: 0.750 s')
+        start_input.fill('0');end_input.focus()
+        dialog.get_by_role('button', name='Remove ', exact=False).last.click()
+        expect(dialog.locator('.clip-row')).to_have_count(1)
+        dialog.locator('input[type=file]').set_input_files(str(args.input[1].resolve()))
+        expect(dialog.locator('.clip-row')).to_have_count(2, timeout=15000)
+        expect(dialog.locator('.clip-time').last).to_contain_text('Source duration: 1.000 s', timeout=15000)
         saved = page.evaluate("()=>{const w=n.widgets.find(w=>w.name==='timeline_data');return {state:JSON.parse(w.value),graph:testApp.graph.serialize()}}")
         assert len(saved['state']['clip_assembly']['rows']) == 2
         assert saved['state']['continuity']['output_mode'] == 'full'

@@ -11,6 +11,12 @@ def register_routes(server=None):
         server = PromptServer.instance
     routes = server.routes
 
+    @routes.get("/df_h3_continuity/assembly/media-info")
+    async def assembly_media_info(request):
+        from .assembly import media_info
+        result = await asyncio.to_thread(media_info, request.query.get("filename"))
+        return web.json_response(result, status=200 if result.get("ok") else 400)
+
     @routes.post("/df_h3_continuity/assembly/preflight")
     async def assembly_preflight(request):
         import json

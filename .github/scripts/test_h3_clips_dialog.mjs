@@ -11,6 +11,56 @@ class Element extends EventTarget {
 function setup(){globalThis.document={activeElement:new Element('button'),createElement:t=>new Element(t),head:new Element('head'),body:new Element('body')};return document;}
 const all=e=>[e,...e.children.filter(c=>typeof c==='object').flatMap(all)];
 const click=async e=>{e.dispatchEvent(new Event('click'));await new Promise(r=>setTimeout(r,0));};
+test('clip fields have visible labels and H3 transitions need the Director graph',async()=>{
+ setup();const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{fetchApi:async()=>({ok:true,json:async()=>({seconds:3,sessions:[]})})},timeline:{clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'}]}},onChange:()=>{},viewUrl:p=>p});
+ const dialog=document.body.children.at(-1);
+ assert.ok(all(dialog).some(e=>e.tagName==='LABEL'&&e.children.some(c=>c.textContent==='Start (s)')));
+ assert.ok(all(dialog).some(e=>e.tagName==='LABEL'&&e.children.some(c=>c.textContent==='End (s)')));
+ const toggle=all(dialog).find(e=>e.type==='checkbox'&&e.title?.includes('bridge'));
+ assert.equal(toggle.disabled,true);
+ assert.ok(all(dialog).some(e=>e.textContent?.includes('wired to a Director Guide and sampler')));close();
+});
+test('enabling H3 transitions saves settings and relabels the join action',async()=>{
+ setup();let saved;const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{fetchApi:async()=>({ok:true,json:async()=>({seconds:3,sessions:[]})})},timeline:{clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'},{kind:'media',filename:'b.mp4'}]}},onChange:s=>{saved=s;},viewUrl:p=>p,graphPrompt:async()=>({output:{}}),directorId:'d'});
+ const dialog=document.body.children.at(-1);
+ let toggle=all(dialog).find(e=>e.type==='checkbox'&&e.title?.includes('bridge'));
+ assert.equal(toggle.disabled,false);toggle.checked=true;toggle.dispatchEvent(new Event('change'));
+ assert.equal(saved.repair_transitions,true);
+ assert.ok(all(dialog).some(e=>e.textContent==='Join with H3 transitions'));
+ const selects=all(dialog).filter(e=>e.tagName==='SELECT');assert.equal(selects.length,2);assert.ok(selects.every(e=>!e.disabled));
+ selects[0].value='46';selects[0].dispatchEvent(new Event('change'));assert.equal(saved.transition_frames,46);
+ selects[1].value='39';selects[1].dispatchEvent(new Event('change'));assert.equal(saved.context_frames,39);
+ const text=all(dialog).find(e=>e['aria-label']==='Transition description');text.value='She opens the door.';text.dispatchEvent(new Event('change'));
+ assert.equal(saved.transition_prompt,'She opens the door.');close();
+});
+test('Remove deletes only the chosen montage row, not files or reference media',async()=>{
+ setup();const calls=[],timeline={items:[{type:'video',value:'a.mp4'}],continuity:{source_id:'p'},clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'},{kind:'media',filename:'a.mp4'}]}};
+ const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{fetchApi:async url=>{calls.push(url);return {ok:true,json:async()=>({seconds:3,sessions:[]})};}},timeline,onChange:s=>{timeline.clip_assembly=s;},viewUrl:p=>p});
+ const dialog=document.body.children.at(-1);await click(all(dialog).find(e=>e.textContent==='Remove'));
+ assert.equal(timeline.clip_assembly.rows.length,1);assert.deepEqual(timeline.items,[{type:'video',value:'a.mp4'}]);assert.equal(timeline.continuity.source_id,'p');
+ assert.ok(calls.every(url=>!url.includes('delete')&&!url.includes('/prompt')));close();
+});
+test('source duration and selected duration are detected without changing blank end; failures are explicit',async()=>{
+ setup();const timeline={clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mkv',trim_start:1,trim_end:null},{kind:'media',filename:'bad.mp4'}]}};
+ const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{fetchApi:async url=>({ok:!url.includes('bad.mp4'),status:url.includes('bad.mp4')?400:200,json:async()=>url.includes('bad.mp4')?{error:'Cannot read metadata'}:{seconds:3,sessions:[]}})},timeline,onChange:s=>{timeline.clip_assembly=s;},viewUrl:p=>p});
+ await new Promise(r=>setTimeout(r,0));const dialog=document.body.children.at(-1);
+ assert.ok(all(dialog).some(e=>e.textContent?.includes('Source duration: 3.000 s')&&e.textContent?.includes('Selected: 2.000 s')));
+ assert.ok(all(dialog).some(e=>e.textContent?.includes('Duration unavailable')));
+ assert.equal(timeline.clip_assembly.rows[0].trim_end,null);close();
+});
+test('late duration metadata preserves the focused trim edit and removed rows stay removed',async()=>{
+ setup();let resolve;const response=new Promise(r=>{resolve=r;});let saved;
+ const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{fetchApi:async url=>url.includes('media-info')?response:{ok:true,json:async()=>({sessions:[]})}},timeline:{clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'}]}},onChange:s=>{saved=s;},viewUrl:p=>p});
+ const dialog=document.body.children.at(-1),input=all(dialog).find(e=>e.type==='number');input.value='1.25';input.focus();
+ resolve({ok:true,json:async()=>({seconds:3})});await new Promise(r=>setTimeout(r,0));
+ assert.equal(document.activeElement,input);assert.ok(all(dialog).includes(input));assert.equal(input.value,'1.25');
+ await click(all(dialog).find(e=>e.textContent==='Remove'));assert.equal(saved.rows.length,0);close();
+});
 test('a later upload error keeps earlier uploaded selections and reports the error',async()=>{
  setup();let saved,count=0;const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
  const close=openClipAssembly({api:{fetchApi:async()=>({ok:true,json:async()=>({sessions:[]})})},timeline:{clip_assembly:{tab:'files'}},onChange:s=>{saved=s;},upload:async()=>{if(++count===2)throw new Error('upload failed');return 'first.mp4';}});
@@ -86,6 +136,6 @@ test('dialog opens without queue/model calls, copies videos separately, closes a
  assert.equal(timeline.clip_assembly.rows[0].filename,'a.mp4');
  const {clip_assembly,...rest}=timeline;assert.deepEqual(rest,before);
  assert.ok(calls.every(url=>!url.includes('prompt')&&!url.includes('preflight')));
- assert.ok(all(dialog).find(e=>e.type==='checkbox'&&e.disabled));
+ assert.ok(all(dialog).some(e=>e.tagName==='LEGEND'&&e.textContent==='H3 transitions'));
  cleanup();assert.equal(dialog.isConnected,false);assert.equal(document.activeElement,prior);
 });

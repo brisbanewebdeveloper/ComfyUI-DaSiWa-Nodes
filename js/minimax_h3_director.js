@@ -806,6 +806,7 @@ function install(node) {
         onChange: assembly => { state.clip_assembly = assembly; emit(); },
         viewUrl: (path, type = "input") => api.apiURL(`/view?filename=${encodeURIComponent(path)}&type=${type}`),
         upload: file => uploadFile(file, status), allowNativeEditing: allowNativeTextEditing,
+        graphPrompt: () => app.graphToPrompt(), directorId: node.id,
         isRemoved: () => nodeRemoved,
       });
     });

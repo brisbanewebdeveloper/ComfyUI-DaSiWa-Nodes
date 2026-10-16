@@ -83,7 +83,7 @@ def _request(data):
     if type(data.get("repair_transitions", False)) is not bool:
         raise ValueError("repair_transitions must be boolean.")
     if data.get("repair_transitions", False):
-        raise ValueError("H3 transition repair is not available; use Join only — no AI.")
+        raise ValueError("Join Clips does not render transitions; use the Transition Guide/Render nodes (Join clips dialog → H3 transitions).")
     if data.get("audio_policy", "preserve") != "preserve":
         raise ValueError("Only the preserve audio policy is supported.")
     prefix = data.get("filename_prefix", "H3_Joined")
@@ -237,6 +237,8 @@ def _plan(data, store=None, input_root=None, output_root=None, check=None, temp_
                 raise ValueError("Source canvases differ; normalize explicitly before joining.")
             dimensions = size
             current_colors = {k: getattr(ctx, k) for k in ("color_primaries", "color_trc", "colorspace", "color_range")}
+            # Untagged YUV range decodes as limited (MPEG); compare it as such.
+            current_colors["color_range"] = current_colors["color_range"] or 1
             if colors is not None and colors != current_colors:
                 raise ValueError("Source color properties differ; normalize explicitly first.")
             colors = current_colors
@@ -545,3 +547,21 @@ def assemble(data, filename_prefix="H3_Joined", store=None, *, input_root=None, 
                                  width=size[0], height=size[1], fps=24))
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def media_info(filename, *, input_root=None):
+    """Inspect input media without importing, normalizing or publishing it."""
+    from pathlib import Path
+    from .pyav_media import probe
+    try:
+        if input_root is None:
+            import folder_paths
+            input_root = folder_paths.get_input_directory()
+        root = Path(input_root).resolve()
+        path = _local(filename, root)
+        if path != root / filename.replace("\\", "/"):
+            raise ValueError("Media symlinks are not supported.")
+        info = probe(path)
+        return dict(ok=True, **{key: info[key] for key in ("seconds", "width", "height", "fps", "has_audio")})
+    except (ValueError, TypeError, KeyError, OSError, OverflowError, RuntimeError):
+        return dict(ok=False, issues=["Could not determine local video duration. Select a valid input video."])

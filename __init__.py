@@ -21,6 +21,7 @@ if __package__:
     from .nodes.h3_continuity.nodes import DaSiWaH3ContinuityAppend, DaSiWaH3ContinuityPublish
     from .nodes.h3_continuity.segment_nodes import DaSiWaH3ContinuitySegmentPrepare, DaSiWaH3ContinuitySegmentDecode
     from .nodes.h3_continuity.assembly_node import DaSiWaH3ClipAssemble
+    from .nodes.h3_continuity.transition import DaSiWaH3TransitionGuide, DaSiWaH3TransitionRender
     from .nodes.h3_continuity import routes as continuity_routes
     continuity_routes.register_routes(PromptServer.instance)
     from .nodes.nodes_minimax_h3_cache import MiniMaxH3Cache
@@ -65,6 +66,8 @@ if __package__:
         "DaSiWaH3ContinuitySegmentPrepare": DaSiWaH3ContinuitySegmentPrepare,
         "DaSiWaH3ContinuitySegmentDecode": DaSiWaH3ContinuitySegmentDecode,
         "DaSiWaH3ClipAssemble": DaSiWaH3ClipAssemble,
+        "DaSiWaH3TransitionGuide": DaSiWaH3TransitionGuide,
+        "DaSiWaH3TransitionRender": DaSiWaH3TransitionRender,
         "MiniMaxH3Cache": MiniMaxH3Cache,
         "DaSiWaH3TiledUpscale": DaSiWaH3TiledUpscale,
 
@@ -100,6 +103,8 @@ if __package__:
         "DaSiWaH3ContinuitySegmentPrepare": "MiniMaxH3 Continuity • Segment Prepare",
         "DaSiWaH3ContinuitySegmentDecode": "MiniMaxH3 Continuity • Segment Decode",
         "DaSiWaH3ClipAssemble": "MiniMaxH3 • Join Clips",
+        "DaSiWaH3TransitionGuide": "MiniMaxH3 • Transition Guide",
+        "DaSiWaH3TransitionRender": "MiniMaxH3 • Transition Render",
         "MiniMaxH3Cache": "MiniMaxH3 Cache",
         "DaSiWaH3TiledUpscale": "MiniMaxH3 Enhanced Upscale",
 
