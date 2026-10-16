@@ -97,3 +97,36 @@ def test_audio_window_matches_global_decode_crop():
             local = model.decode(z[...,p['audio_start']:])
             start = round(source*32000/24)
             assert torch.allclose(full[...,start:],local[...,start-p['audio_start']*800:],atol=1e-7,rtol=1e-5)
+
+def test_full_mode_prepare_is_append_and_stage(tmp_path,monkeypatch):
+    from test_h3_segment_backend import root, context, latent
+    mod = importlib.import_module('h3_segment_test.nodes.h3_continuity.segment_nodes')
+    legacy = importlib.import_module('h3_segment_test.nodes.h3_continuity.nodes')
+    store = core.ClipStore(tmp_path)
+    root(store)
+    monkeypatch.setattr(mod,'ClipStore',lambda:store)
+    monkeypatch.setattr(legacy,'ClipStore',lambda:store)
+    ctx = {**context(),'output_mode':'full','operation':'continue','overlap_frames':22,'extension_frames':119}
+    _,sampled,layout = core.prepare_continuation(latent(124),store.inspect('s','root'),dict(mode='REF2VA',width=64,height=64),core.parse_settings({**ctx,'version':2,'continuation_prompt':'new'}))
+    ctx['layout'] = layout
+    for tensor in sampled['samples'].tensors: tensor.fill_(5.)
+    expected,_ = legacy.DaSiWaH3ContinuityAppend().commit(sampled,ctx)
+    render,out_ctx,ticket = mod.DaSiWaH3ContinuitySegmentPrepare().prepare(sampled,ctx)
+    assert out_ctx is ctx and 'render_kind' not in out_ctx
+    for a,b in zip(render['samples'].tensors,expected['samples'].tensors): assert torch.equal(a,b)
+    assert store.inspect('s',ticket['clip_id'],ready=False).get('schema') != 2
+
+def test_full_mode_decode_matches_core_decoders(monkeypatch):
+    import nodes as comfy_nodes
+    from test_h3_segment_backend import latent
+    from comfy_extras.nodes_audio import vae_decode_audio
+    mod = importlib.import_module('h3_segment_test.nodes.h3_continuity.segment_nodes')
+    monkeypatch.setattr(mod,'validate_segment_vaes',lambda *a: pytest.fail('Full mode must not require segment VAE checks'))
+    take = latent(39)
+    torch.manual_seed(0)
+    vae = SimpleNamespace(decode=lambda z: torch.rand(1,39,8,8,3,generator=torch.Generator().manual_seed(1)))
+    avae = SimpleNamespace(decode=lambda z: torch.rand(1,z.shape[-1]*800,2,generator=torch.Generator().manual_seed(2))*4,audio_sample_rate=32000)
+    images,audio = mod.DaSiWaH3ContinuitySegmentDecode().decode(take,vae,avae,{'output_mode':'full','operation':'new'})
+    assert torch.equal(images,comfy_nodes.VAEDecode().decode(vae,take)[0])
+    core_audio = vae_decode_audio(avae,take)
+    assert torch.equal(audio['waveform'],core_audio['waveform']) and audio['sample_rate'] == core_audio['sample_rate']

@@ -47,8 +47,8 @@ flowchart LR
 
 | Goal | Use | Cost per run |
 | --- | --- | --- |
-| One growing video, the simplest setup (default) | **Output: Full timeline** with Append & Stage | Decode/upscale/export reprocess the whole timeline, which grows with every continuation |
-| Long chains on limited VRAM/RAM, choosing takes later | **Output: New segment only** with Segment Prepare/Decode, then **Join clips → Continuity segments** | Only the new section plus a small context is decoded and exported; the join loads no model |
+| One growing video, the simplest setup (default) | **Output: Full timeline** with Append & Stage, or with the Segment Prepare/Decode wiring | Decode/upscale/export reprocess the whole timeline, which grows with every continuation |
+| Long chains on limited VRAM/RAM, choosing takes later | **Output: New segment only** with Segment Prepare/Decode (the same wiring also runs Full timeline), then **Join clips → Continuity segments** | Only the new section plus a small context is decoded and exported; the join loads no model |
 | Combine separate videos with plain cuts | **Join clips → Video files** | No model; re-encode only |
 | Combine separate videos with generated bridges | **Join clips → Video files → H3 transitions** | One short H3 sampling run per cut, then a model-free join |
 
@@ -171,7 +171,7 @@ No model monkeypatch is installed. Native tail/window/append code remains the MI
 
 ### Continuity output: full timeline or new segment
 
-**Full timeline** remains the default. Existing workflows and schema-1 checkpoints keep their original behavior. For segment exports, choose **Advanced → Output → New segment only** and use this separate post-sampler path:
+**Full timeline** remains the default. Existing workflows and schema-1 checkpoints keep their original behavior. For segment exports, choose **Advanced → Output → New segment only** and use this post-sampler path. The same wiring also runs **Full timeline**: there Segment Prepare behaves exactly like Append & Stage and Segment Decode like the core VAE Decode + VAE Decode Audio, so one workflow supports both modes and you only switch the Director setting:
 
 ```mermaid
 flowchart LR

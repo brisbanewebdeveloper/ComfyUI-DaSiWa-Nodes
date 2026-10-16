@@ -14,7 +14,7 @@ class DaSiWaH3ContinuitySegmentPrepare:
     @classmethod
     def INPUT_TYPES(cls):
         return {'required':{'sampled':('LATENT',{'tooltip':'Source-resolution H3 sampler output; hidden sampled overlap is discarded, not rendered.'}),
-                            'context':('DF_H3_CONTINUITY_CONTEXT',{'tooltip':'This sampler’s Director Guide continuity_context, with New segment only enabled.'})}}
+                            'context':('DF_H3_CONTINUITY_CONTEXT',{'tooltip':'This sampler’s Director Guide continuity_context. Works in both Director output modes: Full timeline behaves like Append & Stage, New segment only renders the bounded segment.'})}}
 
     RETURN_TYPES = ('LATENT','DF_H3_CONTINUITY_CONTEXT','DF_H3_CONTINUITY_TICKET')
     RETURN_NAMES = ('render_latent','segment_context','ticket')
@@ -25,7 +25,10 @@ class DaSiWaH3ContinuitySegmentPrepare:
         if context.get('disabled'):
             return sampled,context,{'disabled':True}
         if context.get('output_mode') != 'segment':
-            raise ValueError('Segment Prepare requires Director Continuity Advanced → New segment only. Use Append & Stage for full timelines.')
+            # Full timeline through the same wiring: identical to Append & Stage.
+            from .nodes import DaSiWaH3ContinuityAppend
+            cumulative, ticket = DaSiWaH3ContinuityAppend().commit(sampled, context)
+            return cumulative, context, ticket
         comfy.model_management.throw_exception_if_processing_interrupted()
         store = ClipStore()
         if context['operation'] != 'continue':
@@ -107,7 +110,7 @@ class DaSiWaH3ContinuitySegmentDecode:
         return {'required':{
             'latent':('LATENT',{'tooltip':'Segment Prepare.render_latent, optionally spatially upscaled; do not connect the raw sampler or stored delta.'}),
             'vae':('VAE',{'tooltip':'Native MiniMax H3 video VAE. Other temporal layouts are rejected.'}),
-            'audio_vae':('VAE',{'tooltip':'Native MiniMax H3 32 kHz audio VAE. Audio is cropped at cumulative sample boundaries without whole-clip loudness normalization.'}),
+            'audio_vae':('VAE',{'tooltip':'Native MiniMax H3 32 kHz audio VAE. In New segment only, audio is cropped at cumulative sample boundaries without whole-clip loudness normalization; Full timeline decodes exactly like VAE Decode Audio.'}),
             'context':('DF_H3_CONTINUITY_CONTEXT',{'tooltip':'The matching Segment Prepare.segment_context; retain it unchanged through optional Upscale.'})}}
 
     RETURN_TYPES = ('IMAGE','AUDIO')
@@ -116,6 +119,11 @@ class DaSiWaH3ContinuitySegmentDecode:
     CATEGORY = 'DaSiWa/MiniMax H3'
 
     def decode(self, latent, vae, audio_vae, context):
+        if not context.get('disabled') and context.get('render_kind') != 'segment':
+            # Full timeline: exactly the core VAE Decode / VAE Decode Audio results.
+            import nodes as comfy_nodes
+            from comfy_extras.nodes_audio import vae_decode_audio
+            return comfy_nodes.VAEDecode().decode(vae, latent)[0], vae_decode_audio(audio_vae, latent)
         video,audio = latent['samples'].tensors
         if context.get('disabled'):
             _,_,frames = validate_h3_av_latent(latent,name='uncaptured first take')

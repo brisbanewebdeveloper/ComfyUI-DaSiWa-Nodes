@@ -166,6 +166,16 @@ def test_segment_graph_requires_prepare_decode_context():
         else: bad['decode']['inputs'][change] = ['guide',2 if change == 'context' else 1]
         with pytest.raises(ValueError): validation.validate_capture_graph(bad,'guide','segment')
     with pytest.raises(ValueError,match='Segment Prepare'): validation.validate_capture_graph(graph(),'guide','segment')
+    post = copy.deepcopy(p)  # spatial post-processing between decode and exporter keeps 24 fps segments
+    post['wm'] = {'class_type':'DaSiWa_Watermark','inputs':{'images':['decode',0]}}
+    post['export']['inputs']['images'] = ['wm',0]
+    validation.validate_capture_graph(post,'guide','segment')
+    post['wm']['inputs']['images'] = ['other',0]
+    with pytest.raises(ValueError): validation.validate_capture_graph(post,'guide','segment')
+    full = copy.deepcopy(p)
+    validation.validate_capture_graph(full,'guide','full')  # one wiring serves both output modes
+    full['publish']['inputs']['ticket'] = ['append',1]
+    with pytest.raises(ValueError): validation.validate_capture_graph(full,'guide','full')
 
 def test_segment_upscale_plan_local_prefix_and_audio(tmp_path,monkeypatch):
     mod = importlib.import_module('h3_segment_test.nodes.h3_continuity.segment_nodes')

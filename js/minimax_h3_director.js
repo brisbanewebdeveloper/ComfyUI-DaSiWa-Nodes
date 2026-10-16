@@ -678,7 +678,8 @@ function install(node) {
     const types = new Set(), seen = new Set();
     const visit = graph => { if (!graph || seen.has(graph)) return; seen.add(graph); for (const item of graph._nodes || []) { types.add(item.type || item.comfyClass); visit(item.subgraph); } };
     visit(graph.rootGraph || graph);
-    return (continuityState().output_mode === "segment" ? types.has("DaSiWaH3ContinuitySegmentPrepare") && types.has("DaSiWaH3ContinuitySegmentDecode") : types.has("DaSiWaH3ContinuityAppend")) && types.has("DaSiWaH3ContinuityPublish");
+    const segmentNodes = types.has("DaSiWaH3ContinuitySegmentPrepare") && types.has("DaSiWaH3ContinuitySegmentDecode");
+    return (continuityState().output_mode === "segment" ? segmentNodes : segmentNodes || types.has("DaSiWaH3ContinuityAppend")) && types.has("DaSiWaH3ContinuityPublish");
   }
   function continuityGraphError() { setStatus(continuityState().output_mode === "segment" ? "Capture unavailable: wire Segment Prepare → optional Upscale → Segment Decode → Export → Publish." : "Capture unavailable: wire Append & Stage and Publish Export as shown in the continuity workflow.", true); }
   function selectRealMode(value) {

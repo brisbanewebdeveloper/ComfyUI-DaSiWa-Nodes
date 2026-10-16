@@ -10,13 +10,15 @@ def validate_capture_graph(prompt, guide_id, output_mode="full"):
         return isinstance(value, (list, tuple)) and len(value) == 2 and str(value[0]) == str(node_id) and value[1] == slot
 
     segment = output_mode == "segment"
-    writer = "DaSiWaH3ContinuitySegmentPrepare" if segment else "DaSiWaH3ContinuityAppend"
+    # Segment Prepare also runs full timelines, so either writer is valid in full mode.
+    writers = {"DaSiWaH3ContinuitySegmentPrepare"} if segment else {"DaSiWaH3ContinuityAppend", "DaSiWaH3ContinuitySegmentPrepare"}
     appends = [(key, node) for key, node in nodes.items()
-               if node.get("class_type") == writer
+               if node.get("class_type") in writers
                and linked(node.get("inputs", {}).get("context"), guide_id, 2)]
     if len(appends) != 1:
-        raise ValueError("Wire this Director Guide's continuity_context to one Segment Prepare → Segment Decode → Export → Publish chain." if segment else "Wire this Director Guide's continuity_context to one Append & Stage node.")
+        raise ValueError("Wire this Director Guide's continuity_context to one Segment Prepare → Segment Decode → Export → Publish chain." if segment else "Wire this Director Guide's continuity_context to one Append & Stage or Segment Prepare node.")
     append_id, append = appends[0]
+    ticket_slot = 2 if append.get("class_type") == "DaSiWaH3ContinuitySegmentPrepare" else 1
     sampled = append.get("inputs", {}).get("sampled")
     if not isinstance(sampled, (list, tuple)) or len(sampled) != 2:
         raise ValueError("Wire the H3 sampler output to Append & Stage.sampled.")
@@ -48,7 +50,7 @@ def validate_capture_graph(prompt, guide_id, output_mode="full"):
         raise ValueError("Append & Stage must use the sampler driven by this Director Guide.")
     publishes = [node for node in nodes.values()
                  if node.get("class_type") == "DaSiWaH3ContinuityPublish"
-                 and linked(node.get("inputs", {}).get("ticket"), append_id, 2 if segment else 1)]
+                 and linked(node.get("inputs", {}).get("ticket"), append_id, ticket_slot)]
     if len(publishes) != 1:
         raise ValueError("Wire Append & Stage.ticket to one Publish Export node.")
     filename = publishes[0].get("inputs", {}).get("filename")
@@ -91,8 +93,10 @@ def validate_capture_graph(prompt, guide_id, output_mode="full"):
         if len(decoders) != 1:
             raise ValueError("Wire Segment Prepare.render_latent and segment_context through optional Upscale to one Segment Decode.")
         decode_id = decoders[0][0]
-        if not linked(exporter.get("inputs",{}).get("images"),decode_id,0) or not linked(exporter.get("inputs",{}).get("audio"),decode_id,1):
-            raise ValueError("Export both images and audio from the same Segment Decode.")
+        images = exporter.get("inputs",{}).get("images")
+        # Spatial post-processing may sit between decode and exporter; Publish still checks 24 fps and frame count.
+        if not (isinstance(images,(list,tuple)) and len(images) == 2 and depends_on(str(images[0]),decode_id)) or not linked(exporter.get("inputs",{}).get("audio"),decode_id,1):
+            raise ValueError("Export images derived from, and audio directly from, the same Segment Decode.")
     if not depends_on(exporter_id, append_id):
         raise ValueError("The selected exporter does not receive this cumulative latent. Check the Publish filename wire.")
     if exporter.get("class_type") == "DaSiWa_EnhancedVideoCombine":
