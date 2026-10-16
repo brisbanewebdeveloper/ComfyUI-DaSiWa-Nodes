@@ -46,7 +46,7 @@ export function assemblyPayload(raw) {
   });
   if(!rows.length) throw new Error('Select at least one clip.');
   if(rows.length>100) throw new Error('Select at most 100 clips.');
-  return {version:1,rows,repair_transitions:false,audio_policy:'preserve',filename_prefix:state.filename_prefix};
+  return {version:1,rows,repair_transitions:false,audio_policy:'preserve',filename_prefix:state.filename_prefix,copy_video:state.copy_video};
 }
 export function normalizeClipAssembly(raw = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid clip assembly settings.');
@@ -54,13 +54,14 @@ export function normalizeClipAssembly(raw = {}) {
   if (raw.tab != null && !['continuity', 'files'].includes(raw.tab)) throw new Error('Invalid clip assembly tab.');
   if (raw.rows != null && !Array.isArray(raw.rows)) throw new Error('Clip rows must be an array.');
   if (raw.repair_transitions != null && typeof raw.repair_transitions !== 'boolean') throw new Error('Invalid transition setting.');
+  if (raw.copy_video != null && typeof raw.copy_video !== 'boolean') throw new Error('Invalid copy video setting.');
   if (raw.audio_policy != null && raw.audio_policy !== 'preserve') throw new Error('Only preserve audio is currently available.');
   if (raw.filename_prefix != null && (typeof raw.filename_prefix !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(raw.filename_prefix))) throw new Error('Invalid output name.');
   if (raw.context_frames != null && (!Number.isInteger(raw.context_frames) || raw.context_frames < 5 || raw.context_frames % 17 !== 5)) throw new Error('Context per side must be 5, 22, 39 … frames.');
   if (raw.transition_frames != null && (!Number.isInteger(raw.transition_frames) || raw.transition_frames < 12 || raw.transition_frames % 17 !== 12)) throw new Error('Transition length must be 12, 29, 46 … frames.');
   if (raw.transition_prompt != null && (typeof raw.transition_prompt !== 'string' || raw.transition_prompt.length > 4000)) throw new Error('Transition description must be text of at most 4000 characters.');
   return {version: 1, tab: raw.tab ?? 'continuity', rows: structuredClone(raw.rows ?? []), repair_transitions: raw.repair_transitions ?? false, audio_policy: 'preserve', filename_prefix: raw.filename_prefix ?? 'H3_Joined',
-    context_frames: raw.context_frames ?? 22, transition_frames: raw.transition_frames ?? 29, transition_prompt: raw.transition_prompt ?? ''};
+    context_frames: raw.context_frames ?? 22, transition_frames: raw.transition_frames ?? 29, transition_prompt: raw.transition_prompt ?? '', copy_video: raw.copy_video ?? false};
 }
 export function transitionRequests(raw) {
   const state=normalizeClipAssembly(raw), rows=assemblyPayload({...state,tab:'files'}).rows;

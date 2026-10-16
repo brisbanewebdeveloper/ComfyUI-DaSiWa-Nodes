@@ -153,3 +153,11 @@ test('dialog opens without queue/model calls, copies videos separately, closes a
  assert.ok(all(dialog).some(e=>e.tagName==='LEGEND'&&e.textContent==='H3 transitions'));
  cleanup();assert.equal(dialog.isConnected,false);assert.equal(document.activeElement,prior);
 });
+test('copy video checkbox sits by the output name and is saved',async()=>{
+ setup();let saved;const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{fetchApi:async()=>({ok:true,json:async()=>({seconds:3,sessions:[]})})},timeline:{clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'}]}},onChange:s=>{saved=s;},viewUrl:p=>p});
+ const dialog=document.body.children.at(-1);
+ const box=all(dialog).find(e=>e.type==='checkbox'&&e['aria-label']==='Copy video without re-encoding when possible');
+ assert.ok(box);assert.equal(box.checked,false);assert.match(box.title,/falls back/);
+ box.checked=true;box.dispatchEvent(new Event('change'));assert.equal(saved.copy_video,true);close();
+});

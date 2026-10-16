@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the 
 
 ## News
 
+- **Lossless video copy in Join Clips (0.5.26):** new opt-in checkbox *Copy video without re-encoding when possible*. When all clips share codec, encoder settings and keyframe cuts (e.g. a continuity chain from one workflow), the video is copied bit-for-bit and only the audio is re-encoded; otherwise the join re-encodes as before and says why. [Details →](h3_continuity.md#join-exported-clips)
+
 - **Transparent WebP and WebM (0.5.25):** Enhanced Video Combine keeps the alpha channel of RGBA batches in Animated WebP and VP9 WebM/MKV (CPU encoders, 8-bit). Animated WebP files now loop forever as intended, and the `quality` slider now applies to WebP (it was silently ignored). [Details →](enhanced_video_combine.md#transparency)
 
 - **One wiring for both Continuity modes (0.5.24):** Segment Prepare and Segment Decode now also run **Full timeline** (identical to Append & Stage + core VAE decoding), so a workflow wired once can switch between Full timeline and New segment only in the Director. Segment exports may now pass through spatial post-processing (upscale, resize, watermark) before the exporter. [Usage →](h3_continuity.md#which-option-to-use)
@@ -174,6 +176,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.26 | 10-16 | Join Clips: opt-in lossless video copy with automatic re-encode fallback |
 | 0.5.25 | 10-16 | Enhanced Video Combine: RGBA alpha in Animated WebP and VP9 WebM/MKV; WebP loops forever and honours `quality` |
 | 0.5.24 | 10-16 | Segment Prepare/Decode run both output modes; segment exports allow spatial post-processing |
 | 0.5.23 | 10-16 | H3 transition bridges in Join Clips; labelled overlay fields, durations, Remove; PyAV 19 H.264 metadata fix |

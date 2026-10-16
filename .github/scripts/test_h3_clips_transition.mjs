@@ -85,3 +85,11 @@ test('transition join needs two selected clips and stops before rendering when d
  await assert.rejects(queueTransitionJoin({api,state:{tab:'files',repair_transitions:true,rows:[{kind:'media',filename:'a.mp4'},{kind:'media',filename:'b.mp4'}]},graphPrompt:async()=>({output:graph()}),directorId:'d',confirmPlan:async()=>false}),/cancelled/);
  assert.ok(!calls.includes('/prompt'));
 });
+test('copy video is an opt-in boolean sent with the join request',async()=>{
+ const {normalizeClipAssembly,assemblyPayload}=await load();
+ assert.equal(normalizeClipAssembly({}).copy_video,false);
+ assert.throws(()=>normalizeClipAssembly({copy_video:'yes'}));
+ const rows=[{kind:'media',filename:'a.mp4'}];
+ assert.equal(assemblyPayload({tab:'files',rows}).copy_video,false);
+ assert.equal(assemblyPayload({tab:'files',rows,copy_video:true}).copy_video,true);
+});

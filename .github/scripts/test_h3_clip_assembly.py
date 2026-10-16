@@ -646,3 +646,68 @@ def test_later_full_snapshot_supersedes_incomplete_selected_prefix():
             "c": checkpoint("c", "b", 362)}
     result = backend().resolve_checkpoints([dict(session="s", clip_id=c) for c in ("b", "c")], Store(rows))
     assert [(r["clip_id"], r["frames"]) for r in result] == [("c", 362)]
+
+
+def video_packets(path):
+    with av.open(str(path)) as container:
+        return [bytes(p) for p in container.demux(video=0) if p.size]
+
+
+def test_copy_video_is_lossless_and_reencodes_only_audio(tmp_path):
+    make_video(tmp_path / "a.mov")
+    make_video(tmp_path / "b.mov", values=[180] * 12, audio=False)
+    data = {**request([dict(kind="media", filename="a.mov"), dict(kind="media", filename="b.mov")]), "copy_video": True}
+    info = backend().preflight(data, input_root=tmp_path, output_root=tmp_path)
+    assert info["ok"] and info["mode"] == "copy" and info["video_codec"] == "h264", info
+    result = backend().assemble(data, "joined", input_root=tmp_path, output_root=tmp_path, check=lambda: None)
+    assert result["mode"] == "copy"
+    output = Path(result["filename"])
+    assert video_packets(output) == video_packets(tmp_path / "a.mov") + video_packets(tmp_path / "b.mov")
+    with av.open(str(output)) as container:
+        frames = list(container.decode(video=0))
+        assert [round(float(f.pts * f.time_base * 24)) for f in frames] == list(range(24))
+    with av.open(str(output)) as container:
+        sound = container.streams.audio[0]
+        assert sound.codec_context.name == "aac" and round(sound.duration * sound.time_base * 48000) == 48000
+    assert not list(tmp_path.glob("*.partial*"))
+
+
+def test_copy_video_falls_back_with_a_reason(tmp_path):
+    make_video(tmp_path / "a.mov")
+    make_video(tmp_path / "b.mov")
+    with av.open(str(tmp_path / "c.mkv"), "w") as container:  # same canvas, different codec
+        video = container.add_stream("ffv1", rate=24)
+        video.width, video.height, video.pix_fmt = 64, 64, "yuv420p"
+        for i in range(12):
+            frame = av.VideoFrame.from_ndarray(np.full((64, 64, 3), 90, dtype=np.uint8), format="rgb24")
+            frame.pts, frame.time_base = i, Fraction(1, 24)
+            for packet in video.encode(frame):
+                container.mux(packet)
+        for packet in video.encode(None):
+            container.mux(packet)
+    cases = {"different video codec": ["a.mov", "c.mkv"], "keyframe": ["a.mov", "b.mov"]}
+    for reason, files in cases.items():
+        rows = [dict(kind="media", filename=name) for name in files]
+        if reason == "keyframe":
+            rows[1]["trim_start"] = 0.25  # frame 6 is not a keyframe
+        data = {**request(rows), "copy_video": True}
+        info = backend().preflight(data, input_root=tmp_path, output_root=tmp_path)
+        assert info["ok"] and info["mode"] == "reencode", info
+        assert any(reason in note and "clip 2" in note for note in info["notes"]), info["notes"]
+    plain = backend().preflight(request([dict(kind="media", filename="a.mov")] * 2), input_root=tmp_path, output_root=tmp_path)
+    assert plain["mode"] == "reencode" and not any("copy" in n.lower() for n in plain["notes"])
+    bad = backend().preflight({**request([dict(kind="media", filename="a.mov")]), "copy_video": "yes"}, input_root=tmp_path, output_root=tmp_path)
+    assert bad["ok"] is False
+
+
+def test_copy_failure_during_join_falls_back_to_reencode(tmp_path, monkeypatch):
+    make_video(tmp_path / "a.mov")
+    def broken(*args):
+        raise ValueError("muxer refused packet")
+    monkeypatch.setattr(backend(), "_write_copy", broken)
+    data = {**request([dict(kind="media", filename="a.mov")] * 2), "copy_video": True}
+    result = backend().assemble(data, "joined", input_root=tmp_path, output_root=tmp_path, check=lambda: None)
+    assert result["mode"] == "reencode" and "muxer refused packet" in result["notes"][0]
+    with av.open(result["filename"]) as container:
+        assert container.streams.video[0].codec_context.name == "h264"
+        assert sum(1 for _ in container.decode(video=0)) == 24

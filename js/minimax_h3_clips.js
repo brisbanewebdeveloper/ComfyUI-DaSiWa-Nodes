@@ -83,7 +83,11 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
   const previewPanel=el('div');dialog.append(previewPanel);
   const name=el('input');name.value=state.filename_prefix;name.setAttribute('aria-label','Output filename prefix');allowNativeEditing(name);
   listen(name,'change',()=>{state.filename_prefix=name.value;save();});
-  const nameLabel=el('label');nameLabel.append(el('span','Output filename prefix'),name);name.title='Prefix for the new joined file. A unique suffix is added automatically; source files are never overwritten.';dialog.append(nameLabel,status);
+  const nameLabel=el('label');nameLabel.append(el('span','Output filename prefix'),name);name.title='Prefix for the new joined file. A unique suffix is added automatically; source files are never overwritten.';
+  const copy=el('input');copy.type='checkbox';copy.checked=state.copy_video;copy.setAttribute('aria-label','Copy video without re-encoding when possible');
+  copy.title='Copies the video losslessly when all clips share codec, settings and keyframe cuts; audio is still re-encoded once. Otherwise it falls back to re-encoding and says why before you confirm.';
+  listen(copy,'change',()=>{state.copy_video=copy.checked;save();});
+  const copyLabel=el('label');copyLabel.append(copy,el('span','Copy video without re-encoding when possible'));dialog.append(nameLabel,copyLabel,status);
   const actions=el('footer');dialog.append(actions);
   const report=message=>{if(!closed&&!isRemoved()){status.textContent=message;onStatus(message);}};
   const save=()=>{onChange(normalizeClipAssembly(state));};
@@ -131,9 +135,9 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
       const confirmPlan=async plan=>{
         if(closed)return false;
         const total=Number(plan.seconds)+(plan.transitions??0)*snapshot.transition_frames/24;
-        report(`Duration: ${total.toFixed(3)}s · ${plan.transitions ? (plan.frames ?? 0)+plan.transitions*snapshot.transition_frames : plan.frames ?? '?'} frames · ${plan.mode}${plan.width && plan.height ? ` · ${plan.width}×${plan.height} · ${plan.fps} fps` : ''}. ${plan.transitions ? `Then ${plan.transitions} H3 transition render${plan.transitions>1?'s':''} through this Director's sampler (${(snapshot.transition_frames/24).toFixed(2)}s each, added between clips) before a model-free join.` : 'Audio may be decoded/encoded once for accurate joining. No AI rendering.'}${Array.isArray(plan.notes) ? '\n'+plan.notes.join('\n') : ''}`);
+        report(`Duration: ${total.toFixed(3)}s · ${plan.transitions ? (plan.frames ?? 0)+plan.transitions*snapshot.transition_frames : plan.frames ?? '?'} frames · ${plan.mode}${plan.width && plan.height ? ` · ${plan.width}×${plan.height} · ${plan.fps} fps` : ''}. ${plan.transitions ? `Then ${plan.transitions} H3 transition render${plan.transitions>1?'s':''} through this Director's sampler (${(snapshot.transition_frames/24).toFixed(2)}s each, added between clips) before a model-free join.` : (plan.mode==='copy'?'Video is copied losslessly; audio is re-encoded once. No AI rendering.':'Audio may be decoded/encoded once for accurate joining. No AI rendering.')}${Array.isArray(plan.notes) ? '\n'+plan.notes.join('\n') : ''}`);
         return await new Promise(resolve=>{
-          const confirm=button(plan.transitions?'Render transitions and join':/normal/i.test(plan.mode)?'Normalize and join':/encod/i.test(plan.mode)?'Re-encode and join':'Confirm join',()=>{confirm.remove();cancel.remove();resolve(true);},actions);
+          const confirm=button(plan.transitions?'Render transitions and join':plan.mode==='copy'?'Copy and join':/normal/i.test(plan.mode)?'Normalize and join':/encod/i.test(plan.mode)?'Re-encode and join':'Confirm join',()=>{confirm.remove();cancel.remove();resolve(true);},actions);
           const cancel=button('Cancel join',()=>{confirm.remove();cancel.remove();resolve(false);},actions);
           controller.signal.addEventListener('abort',()=>resolve(false),{once:true});confirm.focus();
         });

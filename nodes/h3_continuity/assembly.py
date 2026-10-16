@@ -1,7 +1,11 @@
 """Read-only checkpoint resolution and bounded, model-free clip assembly."""
 from __future__ import annotations
 
+import logging
 import re
+from fractions import Fraction
+
+log = logging.getLogger(__name__)
 
 
 def _id(value):
@@ -66,6 +70,7 @@ def resolve_checkpoints(rows, store):
 MAX_JSON = 65536
 MAX_ROWS = 100
 MODE = "reencode"
+COPY_CODECS = {"h264", "hevc", "av1", "vp9"}  # codecs MP4 can carry as copied packets
 
 
 def _request(data):
@@ -84,6 +89,8 @@ def _request(data):
         raise ValueError("repair_transitions must be boolean.")
     if data.get("repair_transitions", False):
         raise ValueError("Join Clips does not render transitions; use the Transition Guide/Render nodes (Join clips dialog → H3 transitions).")
+    if type(data.get("copy_video", False)) is not bool:
+        raise ValueError("copy_video must be boolean.")
     if data.get("audio_policy", "preserve") != "preserve":
         raise ValueError("Only the preserve audio policy is supported.")
     prefix = data.get("filename_prefix", "H3_Joined")
@@ -266,7 +273,9 @@ def _plan(data, store=None, input_root=None, output_root=None, check=None, temp_
             stat = path.stat()
             plan.append(dict(path=path, start=start, end=end, source_frames=count, colors=colors,
                              identity=(stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns),
-                             has_audio=bool(container.streams.audio)))
+                             has_audio=bool(container.streams.audio),
+                             codec=(getattr(ctx.codec, "canonical_name", None) or ctx.codec.name,
+                                    ctx.profile, bytes(ctx.extradata or b""))))
             if imported:
                 from copy import deepcopy
                 metadata = deepcopy(row)
@@ -279,14 +288,78 @@ def _plan(data, store=None, input_root=None, output_root=None, check=None, temp_
     return plan, dimensions, total
 
 
+def _copy_reason(plan, check):
+    """Why packet copy is impossible (None if possible). Demux only; records each row's video origin."""
+    from .pyav_media import open_media, video_stream
+    first = plan[0]["codec"]
+    for number, row in enumerate(plan, 1):
+        codec = row["codec"]
+        if row.get("imported"):
+            return f"clip {number} is an imported start video that needs normalization"
+        if codec[0] != first[0]:
+            return f"clip {number} uses a different video codec ({codec[0]} instead of {first[0]})"
+        if codec[0] not in COPY_CODECS:
+            return f"clip {number} uses {codec[0]} video, which cannot be copied into MP4"
+        if codec != first:
+            return f"clip {number} uses different encoder settings than clip 1"
+        with open_media(row["path"]) as source:
+            stream = video_stream(source)
+            stamps, keys = [], set()
+            tolerance = max(Fraction(1, 1000), stream.time_base)
+            for packet in source.demux(stream):
+                check()
+                if not packet.size:
+                    continue
+                if packet.pts is None:
+                    return f"clip {number} has video packets without timestamps"
+                stamps.append((packet.pts * stream.time_base, packet.is_keyframe))
+        if not stamps:
+            return f"clip {number} has no video packets"
+        origin = min(stamp for stamp, _ in stamps)
+        indices = []
+        for stamp, key in stamps:
+            index = round((stamp - origin) * 24)
+            if abs(stamp - origin - Fraction(index, 24)) > tolerance:
+                return f"clip {number} is not constant 24 fps"
+            indices.append(index)
+            if key:
+                keys.add(index)
+        if sorted(indices) != list(range(row["source_frames"])):
+            return f"clip {number} has missing or duplicate video frames"
+        if row["start"] not in keys:
+            return f"clip {number} does not start on a keyframe (trim Start to a keyframe or use the file start)"
+        if row["end"] != row["source_frames"] and row["end"] not in keys:
+            return f"clip {number} does not end on a keyframe (trim End to a keyframe or use the file end)"
+        row["origin"] = origin
+    return None
+
+
+def _mode(data, plan, check):
+    """('copy', None), ('reencode', reason) or ('reencode', None) when copy was not requested."""
+    if not _request(data).get("copy_video", False):
+        return MODE, None
+    reason = _copy_reason(plan, check)
+    return ("copy", None) if reason is None else (MODE, reason)
+
+
+def _notes(mode, reason):
+    if mode == "copy":
+        return ["Video packets are copied without re-encoding (lossless); audio is re-encoded once to AAC so seams stay gap-free. No models are used."]
+    return ([f"Copy video not possible: {reason}. Video is re-encoded instead."] if reason else []) + [
+        "Video and audio are conventionally re-encoded; no models are used."]
+
+
 def preflight(data, store=None, *, input_root=None, output_root=None, temp_root=None):
     """Bounded headers/metadata; imported roots also get streaming normalization readback."""
     try:
+        from .pyav_media import guard
         plan, size, count = _plan(data, store, input_root, output_root, temp_root=temp_root)
-        return dict(ok=True, issues=[], seconds=count / 24, frames=count, mode=MODE,
+        mode, reason = _mode(data, plan, guard(45))
+        return dict(ok=True, issues=[], seconds=count / 24, frames=count, mode=mode,
                     width=size[0], height=size[1], fps=24,
-                    video_codec="h264", audio_codec="aac", audio_rate=48000, audio_channels=2,
-                    notes=["Video and audio are conventionally re-encoded; no models are used.",
+                    video_codec=plan[0]["codec"][0] if mode == "copy" else "h264",
+                    audio_codec="aac", audio_rate=48000, audio_channels=2,
+                    notes=_notes(mode, reason) + [
                            "Trims snap to the nearest 24-fps frame; returned row trims show the effective cuts.",
                            "CFR timestamps and decode integrity are verified during the queue job."],
                     rows=[dict(frames=r["end"] - r["start"], seconds=(r["end"] - r["start"]) / 24,
@@ -477,14 +550,10 @@ def _verify(path, count, check):
 def assemble(data, filename_prefix="H3_Joined", store=None, *, input_root=None, output_root=None, temp_root=None, check=None):
     """Execute in ComfyUI's queue, then publish only after full bounded readback."""
     import os
-    import shutil
     import tempfile
     import uuid
-    from contextlib import closing
-    from fractions import Fraction
     from pathlib import Path
     import av
-    from ..helper_pyav_video import _configure_video_stream, _configure_audio_stream
     from .pyav_media import guard
     if not isinstance(filename_prefix, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", filename_prefix):
         raise ValueError("Output prefix must use 1–80 letters, numbers, underscores or hyphens.")
@@ -497,44 +566,19 @@ def assemble(data, filename_prefix="H3_Joined", store=None, *, input_root=None, 
     handle = tempfile.NamedTemporaryFile(prefix=".h3-assembly-", suffix=".partial.mp4", dir=output_root, delete=False)
     temporary = Path(handle.name)
     handle.close()
+    mode, reason = _mode(data, plan, check)
     try:
-        with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart"}) as output:
-            # Reuse the exporter configuration, but never its whole-waveform audio API.
-            video = _configure_video_stream(output, "libx264", *size, 24, 8, 18)
-            video.codec_context.thread_count = 2
-            for key, value in plan[0]["colors"].items():
-                setattr(video.codec_context, key, value)
-            sound, _ = _configure_audio_stream(output, "aac", 48000, 2, "192k")
-            index, sample_offset = 0, 0
-            for row in plan:
-                with closing(_video_frames(row, check)) as pictures, closing(_audio_frames(row, check)) as audio:
-                    for frame in pictures:
-                        check()
-                        if shutil.disk_usage(output_root).free < 64 * 1024**2:
-                            raise ValueError("Insufficient output disk space (64 MiB reserve).")
-                        frame.pts, frame.time_base = index, Fraction(1, 24)
-                        frame.pict_type = av.video.frame.PictureType.NONE
-                        for packet in video.encode(frame):
-                            output.mux(packet)
-                        block = next(audio, None)
-                        if block is None or block.shape != (2, 2000):
-                            raise ValueError("Source audio did not produce one block per video frame.")
-                        audio_frame = av.AudioFrame.from_ndarray(block, format="fltp", layout="stereo")
-                        audio_frame.sample_rate = 48000
-                        audio_frame.pts, audio_frame.time_base = sample_offset, Fraction(1, 48000)
-                        for packet in sound.encode(audio_frame):
-                            output.mux(packet)
-                        sample_offset += 2000
-                        index += 1
-                    if next(audio, None) is not None:
-                        raise ValueError("Source audio exceeds its selected video duration.")
-            for stream in (video, sound):
-                for packet in stream.encode(None):
-                    check()
-                    output.mux(packet)
-        if index != count:
-            raise ValueError("Assembly frame count differs from preflight.")
-        _verify(temporary, count, check)
+        if mode == "copy":
+            try:
+                _write_copy(temporary, plan, check, output_root)
+                _verify(temporary, count, check)
+            except (ValueError, av.FFmpegError) as error:
+                # Lossless copy is an optimization: fall back to the proven re-encode path.
+                log.warning("H3 Join: video copy failed (%s); re-encoding instead.", error)
+                mode, reason = MODE, f"copy failed during joining ({error})"
+        if mode != "copy":
+            _write_reencode(temporary, plan, size, count, check, output_root)
+            _verify(temporary, count, check)
         for row in plan:
             _unchanged(row)
         with temporary.open("rb+") as file:
@@ -542,11 +586,119 @@ def assemble(data, filename_prefix="H3_Joined", store=None, *, input_root=None, 
         check()
         # Hard-link publication is atomic and never replaces any existing file.
         os.link(temporary, final)
-        return dict(filename=str(final), seconds=count / 24, frames=count, mode=MODE,
+        return dict(filename=str(final), seconds=count / 24, frames=count, mode=mode,
+                    notes=_notes(mode, reason),
                     preview=dict(filename=final.name, subfolder="", type="output", format="video/mp4",
                                  width=size[0], height=size[1], fps=24))
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _write_copy(temporary, plan, check, output_root):
+    """Remux the selected video packets losslessly; audio still streams through one AAC encode."""
+    import shutil
+    from contextlib import closing
+    import av
+    from ..helper_pyav_video import _configure_audio_stream
+    from .pyav_media import open_media, video_stream
+    with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart"}) as output:
+        video = sound = None
+        offset, last_dts, sample_offset = 0, None, 0
+        for number, row in enumerate(plan, 1):
+            _unchanged(row)
+            frames = row["end"] - row["start"]
+            with open_media(row["path"]) as source, closing(_audio_frames(row, check)) as audio:
+                stream = video_stream(source)
+                if video is None:
+                    video = output.add_stream_from_template(stream, opaque=True)  # remux: no encoder needed (AV1 decodes via libdav1d)
+                    video.time_base = Fraction(1, 24)
+                    sound, _ = _configure_audio_stream(output, "aac", 48000, 2, "192k")
+                copied = emitted = ahead = 0
+                def emit(limit):
+                    nonlocal emitted, sample_offset
+                    while emitted < limit:
+                        block = next(audio, None)
+                        if block is None or block.shape != (2, 2000):
+                            raise ValueError("Source audio did not produce one block per video frame.")
+                        frame = av.AudioFrame.from_ndarray(block, format="fltp", layout="stereo")
+                        frame.sample_rate = 48000
+                        frame.pts, frame.time_base = sample_offset, Fraction(1, 48000)
+                        for packet in sound.encode(frame):
+                            output.mux(packet)
+                        sample_offset += 2000
+                        emitted += 1
+                for packet in source.demux(stream):
+                    check()
+                    if not packet.size:
+                        continue
+                    index = round((packet.pts * stream.time_base - row["origin"]) * 24)
+                    if not row["start"] <= index < row["end"]:
+                        continue
+                    if shutil.disk_usage(output_root).free < 64 * 1024**2:
+                        raise ValueError("Insufficient output disk space (64 MiB reserve).")
+                    dts = packet.dts if packet.dts is not None else packet.pts
+                    packet.pts = offset + index - row["start"]
+                    packet.dts = offset + round((dts * stream.time_base - row["origin"]) * 24) - row["start"]
+                    if last_dts is not None and packet.dts <= last_dts:
+                        raise ValueError(f"copied video timestamps would run backwards at clip {number}")
+                    last_dts = packet.dts
+                    packet.time_base, packet.stream = Fraction(1, 24), video
+                    output.mux(packet)
+                    copied += 1
+                    ahead = max(ahead, index - row["start"] + 1)
+                    emit(ahead)  # keep audio interleaved with the video already written
+                if copied != frames:
+                    raise ValueError(f"clip {number} video packet count differs from preflight")
+                emit(frames)
+                if next(audio, None) is not None:
+                    raise ValueError("Source audio exceeds its selected video duration.")
+            offset += frames
+        for packet in sound.encode(None):
+            check()
+            output.mux(packet)
+
+
+def _write_reencode(temporary, plan, size, count, check, output_root):
+    import shutil
+    from contextlib import closing
+    import av
+    from ..helper_pyav_video import _configure_video_stream, _configure_audio_stream
+    with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart"}) as output:
+        # Reuse the exporter configuration, but never its whole-waveform audio API.
+        video = _configure_video_stream(output, "libx264", *size, 24, 8, 18)
+        video.codec_context.thread_count = 2
+        for key, value in plan[0]["colors"].items():
+            setattr(video.codec_context, key, value)
+        sound, _ = _configure_audio_stream(output, "aac", 48000, 2, "192k")
+        index, sample_offset = 0, 0
+        for row in plan:
+            with closing(_video_frames(row, check)) as pictures, closing(_audio_frames(row, check)) as audio:
+                for frame in pictures:
+                    check()
+                    if shutil.disk_usage(output_root).free < 64 * 1024**2:
+                        raise ValueError("Insufficient output disk space (64 MiB reserve).")
+                    frame.pts, frame.time_base = index, Fraction(1, 24)
+                    frame.pict_type = av.video.frame.PictureType.NONE
+                    for packet in video.encode(frame):
+                        output.mux(packet)
+                    block = next(audio, None)
+                    if block is None or block.shape != (2, 2000):
+                        raise ValueError("Source audio did not produce one block per video frame.")
+                    audio_frame = av.AudioFrame.from_ndarray(block, format="fltp", layout="stereo")
+                    audio_frame.sample_rate = 48000
+                    audio_frame.pts, audio_frame.time_base = sample_offset, Fraction(1, 48000)
+                    for packet in sound.encode(audio_frame):
+                        output.mux(packet)
+                    sample_offset += 2000
+                    index += 1
+                if next(audio, None) is not None:
+                    raise ValueError("Source audio exceeds its selected video duration.")
+        for stream in (video, sound):
+            for packet in stream.encode(None):
+                check()
+                output.mux(packet)
+    if index != count:
+        raise ValueError("Assembly frame count differs from preflight.")
 
 
 def media_info(filename, *, input_root=None):
