@@ -197,7 +197,7 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
       button('Refresh',()=>void loadSession(),tools).disabled=busy;
     }
     content.append(el('h3','Clips in playback order'));
-    content.append(el('p',state.tab==='files'?'Start and End are positions in each source file, in seconds; End starts at the full length. Uncheck to skip a clip; Remove only clears it from this list.':'Each row is a saved take. Checked takes are joined top to bottom. Select chain to here checks a take together with every earlier take it continues from, in order. Rerolls of the same step are alternatives: pick one. Unchecking or Remove selection never deletes a checkpoint.'));
+    content.append(el('p',state.tab==='files'?'Start and End are positions in each source file, in seconds; End starts at the full length. Uncheck to skip a clip; Remove only clears it from this list.':'Each row is one saved take. Tick the ones you want; they play from top to bottom. “Select chain to here” ticks a take plus all the takes that led up to it. Several takes of the same step are alternatives, so pick just one. Nothing here deletes a take.'));
     const list=el('div');list.className='clip-list';content.append(list);
     if(state.tab==='files'){const head=el('div');head.className='clip-file clip-head';head.setAttribute('aria-hidden','true');for(const text of ['','','','Start (s)','End (s)','','',''])head.append(el('span',text));list.append(head);}
     const selected=state.rows.filter(row=>row.kind===(state.tab==='files'?'media':'checkpoint'));
