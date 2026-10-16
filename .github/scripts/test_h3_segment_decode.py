@@ -48,6 +48,7 @@ def test_segment_decode_crops_owned_frame_and_sample_outputs(source,added):
     assert out.shape[0] == added and out[0,0,0,0] == source-p['frame_offset']
     assert audio['waveform'].shape == (1,2,p['crop_samples']) and audio['sample_rate'] == 32000
     assert audio['waveform'][0,0,0] == p['crop_start_sample']
+    assert audio['h3_segment_interval'] == {'start':(source,24),'end':(source+added,24)}
     assert out.untyped_storage().nbytes() == out.numel()*out.element_size()
     assert audio['waveform'].untyped_storage().nbytes() == audio['waveform'].numel()*audio['waveform'].element_size()
 

@@ -338,6 +338,12 @@ def _audio_file(audio):
         raise ValueError("audio must have a positive sample rate and at least one sample.")
     channels = waveform.shape[1]
     planar = waveform.permute(1, 0, 2).reshape(channels, -1).contiguous().clamp_(-1, 1).numpy()
+    if "h3_segment_interval" in audio:
+        interval = audio["h3_segment_interval"]
+        expected = helper_pyav_video.segment_sample_interval(interval, sample_rate)
+        if waveform.shape[0] != 1 or planar.shape[1] != expected:
+            raise ValueError("H3 segment audio length differs from its source sample interval.")
+        return (planar, sample_rate, interval), planar.shape[1] / sample_rate
     return (planar, sample_rate), planar.shape[1] / sample_rate
 
 

@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-16**. Older history lives in the 
 
 ## News
 
+- **Sample-exact Opus segment export (0.5.28):** Segment Decode carries the exact segment interval into Enhanced Video Combine. Opus resamples H3 audio directly to 48 kHz, and the exporter corrects only the bounded sample-grid rounding remainder before encoding. Publish keeps its strict duration checks; ordinary audio without a segment interval is not stretched to video length. No workflow rewiring is needed.
+
 - **Continuity subgraph validation fix (0.5.27):** New segment only checks ComfyUI's compiled prompt, so valid Segment Prepare/Decode chains inside subgraphs and bypassed upscalers are accepted without a full-timeline fallback. Saving a workflow no longer runs execution validation. Advanced output hints explain full-timeline versus new-section export with the same wiring.
 
 - **Join Clips review fixes (Git update within 0.5.26):** Restore H.264 side-data compatibility and sample-exact joined audio duration with PyAV 18 and 19, keep inactive Continuity from blocking ordinary takes, preserve Core decoding and audio normalization for uncaptured Full timeline takes, reject oversized transition joins before rendering, and avoid leftover partial files after copy preflight errors. Transition guides resize edge frames before retaining batches and check host RAM before allocation. No new controls or version bump.
@@ -180,6 +182,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.28 | 10-16 | Exact H3 segment boundaries through Opus export; native 48-kHz Opus input and strict Publish checks |
 | 0.5.27 | 10-16 | Continuity validates compiled subgraphs and bypasses; clearer Advanced output hints |
 | 0.5.26 | 10-16 | Join Clips: opt-in lossless video copy with automatic re-encode fallback |
 | 0.5.25 | 10-16 | Enhanced Video Combine: RGBA alpha in Animated WebP and VP9 WebM/MKV; WebP loops forever and honours `quality` |

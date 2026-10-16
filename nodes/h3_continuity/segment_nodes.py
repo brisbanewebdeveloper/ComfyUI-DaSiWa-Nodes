@@ -148,7 +148,9 @@ class DaSiWaH3ContinuitySegmentDecode:
                 raise ValueError('Audio decoder ended before the global segment boundary.')
             waveform = torch.nn.functional.pad(waveform,(0,end-waveform.shape[-1]))
         result = waveform[...,start:end].clone()
-        return images,{'waveform':result,'sample_rate':32000}
+        global_start = plan['frame_offset'] + plan['crop_start_frame']
+        return images,{'waveform':result,'sample_rate':32000,
+                       'h3_segment_interval':{'start':(global_start,24),'end':(global_start+plan['crop_frames'],24)}}
 
 
 NODE_CLASS_MAPPINGS = {cls.__name__:cls for cls in (DaSiWaH3ContinuitySegmentPrepare,DaSiWaH3ContinuitySegmentDecode)}
