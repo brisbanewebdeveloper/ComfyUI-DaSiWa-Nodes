@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the 
 
 ## News
 
+- **Join Clips review fixes (Git update within 0.5.26):** Restore H.264 side-data compatibility and sample-exact joined audio duration with PyAV 18 and 19, keep inactive Continuity from blocking ordinary takes, preserve Core decoding and audio normalization for uncaptured Full timeline takes, reject oversized transition joins before rendering, and avoid leftover partial files after copy preflight errors. Transition guides resize edge frames before retaining batches and check host RAM before allocation. No new controls or version bump.
+
 - **Lossless video copy in Join Clips (0.5.26):** new opt-in checkbox *Copy video without re-encoding when possible*. When all clips share codec, encoder settings and keyframe cuts (e.g. a continuity chain from one workflow), the video is copied bit-for-bit and only the audio is re-encoded; otherwise the join re-encodes as before and says why. [Details →](h3_continuity.md#join-exported-clips)
 
 - **Transparent WebP and WebM (0.5.25):** Enhanced Video Combine keeps the alpha channel of RGBA batches in Animated WebP and VP9 WebM/MKV (CPU encoders, 8-bit). Animated WebP files now loop forever as intended, and the `quality` slider now applies to WebP (it was silently ignored). [Details →](enhanced_video_combine.md#transparency)

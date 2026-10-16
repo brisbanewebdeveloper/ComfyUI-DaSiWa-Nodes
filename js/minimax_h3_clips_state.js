@@ -65,6 +65,8 @@ export function normalizeClipAssembly(raw = {}) {
 }
 export function transitionRequests(raw) {
   const state=normalizeClipAssembly(raw), rows=assemblyPayload({...state,tab:'files'}).rows;
+  // Every boundary adds a bridge to the final join's 100-row limit.
+  if(rows.length>50) throw new Error('Select at most 50 clips for H3 transitions.');
   return rows.slice(1).map((row,index)=>({version:1,rows:[rows[index],row],context_frames:state.context_frames,transition_frames:state.transition_frames,prompt:state.transition_prompt.trim(),filename_prefix:'H3_Transition'}));
 }
 export function interleaveBridges(raw, bridges) {

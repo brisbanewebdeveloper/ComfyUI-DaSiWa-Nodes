@@ -326,7 +326,8 @@ function install(node) {
   };
   const originalSerializeTimeline = dataWidget.serializeValue;
   dataWidget.serializeValue = function (...args) {
-    if (continuityState().output_mode === "segment") checkSegmentTopology();
+    const c = continuityState();
+    if (c.output_mode === "segment" && (isContinuing() || (c.capture && mode() !== "Image Inpaint"))) checkSegmentTopology();
     return originalSerializeTimeline ? originalSerializeTimeline.apply(this, args) : this.value;
   };
   function openRefModExport() {

@@ -85,6 +85,31 @@ test('transition join needs two selected clips and stops before rendering when d
  await assert.rejects(queueTransitionJoin({api,state:{tab:'files',repair_transitions:true,rows:[{kind:'media',filename:'a.mp4'},{kind:'media',filename:'b.mp4'}]},graphPrompt:async()=>({output:graph()}),directorId:'d',confirmPlan:async()=>false}),/cancelled/);
  assert.ok(!calls.includes('/prompt'));
 });
+test('50 selected transition inputs fit the final join; 51 reject before any submission',async()=>{
+ const {queueTransitionJoin}=await import('../../js/minimax_h3_clips.js');
+ const {transitionRequests,interleaveBridges,assemblyPayload}=await load();
+ const rows=Array.from({length:51},(_,index)=>({kind:'media',filename:`clip${index}.mp4`}));
+ const state={tab:'files',repair_transitions:true,rows:rows.map((row,index)=>({...row,selected:index<50}))};
+ assert.equal(transitionRequests(state).length,49);
+ assert.equal(assemblyPayload(interleaveBridges(state,Array.from({length:49},(_,i)=>`h3_transitions/t${i}.mp4`))).rows.length,99);
+ const posts=[];
+ const api={fetchApi:async(url,options)=>{
+  if(url==='/prompt'){posts.push(JSON.parse(options.body));return {ok:true,json:async()=>({prompt_id:`p${posts.length}`})};}
+  if(url.includes('preflight'))return {ok:true,json:async()=>({ok:true,seconds:100,mode:'reencode'})};
+  const id=url.split('/').at(-1),body=posts[Number(id.slice(1))-1];
+  const [outputId,node]=Object.entries(body.prompt).find(([,node])=>['DaSiWaH3TransitionRender','DaSiWaH3ClipAssemble'].includes(node.class_type));
+  const result=node.class_type==='DaSiWaH3TransitionRender'?{h3_transition:[{filename:`h3_transitions/${id}.mp4`}]}:{h3_clip_assembly:[{filename:'joined.mp4',seconds:100,mode:'reencode'}]};
+  return {ok:true,json:async()=>({[id]:{outputs:{[outputId]:result}}})};
+ }};
+ assert.equal((await queueTransitionJoin({api,state,graphPrompt:async()=>({output:graph()}),directorId:'d',pollMs:0})).filename,'joined.mp4');
+ assert.equal(posts.length,50);
+ assert.equal(JSON.parse(Object.values(posts.at(-1).prompt)[0].inputs.assembly_data).rows.length,99);
+ const calls=[];
+ await assert.rejects(queueTransitionJoin({api:{fetchApi:async url=>{calls.push(url);throw new Error('Unexpected request');}},state:{...state,rows},graphPrompt:async()=>{throw new Error('Unexpected graph serialization');},directorId:'d'}),/at most 50 clips/);
+ assert.deepEqual(calls,[]);
+ assert.throws(()=>transitionRequests({...state,rows}),/at most 50 clips/);
+ assert.equal(assemblyPayload({...state,repair_transitions:false,rows}).rows.length,51);
+});
 test('copy video is an opt-in boolean sent with the join request',async()=>{
  const {normalizeClipAssembly,assemblyPayload}=await load();
  assert.equal(normalizeClipAssembly({}).copy_video,false);

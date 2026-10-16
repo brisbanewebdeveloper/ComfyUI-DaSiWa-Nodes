@@ -55,6 +55,78 @@ def test_edges_use_trimmed_tail_and_head_with_frame_audio(tmp_path):
     assert edges['canvas'] == (64, 64)
 
 
+@pytest.fixture(autouse=True)
+def deterministic_ram(monkeypatch):
+    monkeypatch.setattr(transition.helper_batch_output, 'available_ram_bytes', lambda: 16 * 1024**3)
+    monkeypatch.setattr(transition.helper_batch_output, 'total_ram_bytes', lambda: 32 * 1024**3)
+
+
+@pytest.mark.parametrize('source', [(3840, 2160), (1280, 720), (20, 1000)])
+def test_edges_resize_before_stack_with_native_cover_framing(monkeypatch, source):
+    from comfy.utils import common_upscale
+    # Large metadata, tiny pixel fixture: no source-resolution allocation.
+    canvas = (64, 32)
+    image_height, image_width = (100, 20) if source[0] < source[1] else (70, 110)
+    image = np.arange(image_height * image_width * 3, dtype=np.uint8).reshape(image_height, image_width, 3)
+    frame = av.VideoFrame.from_ndarray(image, format='rgb24')
+    plan = [dict(start=0, end=7, colors={'color_range': 1})] * 2
+    monkeypatch.setattr(transition.assembly, '_plan', lambda *a, **k: (plan, source, 14))
+    monkeypatch.setattr(transition, 'generation_canvas', lambda size: canvas)
+    monkeypatch.setattr(transition.assembly, '_video_frames', lambda *a: (f for f in [frame] * 7))
+    monkeypatch.setattr(transition.assembly, '_audio_frames', lambda *a: (
+        np.full((2, 2000), i, dtype=np.float32) for i in range(7)))
+    expected = common_upscale(torch.from_numpy(image).float().div(255).movedim(-1, 0)[None],
+                              *canvas, 'lanczos', 'center').movedim(1, -1)[0]
+    stack = np.stack
+    shapes = []
+    def checked_stack(images, *args, **kwargs):
+        shapes.append([im.shape for im in images])
+        assert all(im.shape == (32, 64, 3) and im.dtype == np.uint8 for im in images)
+        return stack(images, *args, **kwargs)
+    monkeypatch.setattr(np, 'stack', checked_stack)
+    edges = transition.clip_edges(dict(rows=[], context_frames=5))
+    assert len(shapes) == 2
+    assert edges['canvas'] == source and edges['colors'] == plan[0]['colors']
+    for side, values in [('tail', range(2, 7)), ('head', range(5))]:
+        assert edges[side].shape == (5, 32, 64, 3)
+        assert torch.equal(edges[side][0], expected)
+        audio = edges[side + '_audio']
+        assert audio['sample_rate'] == 48000
+        assert audio['waveform'][0, 0, ::2000].tolist() == list(values)
+
+
+@pytest.mark.parametrize('available', [0, 8 * 1024**3 + 1,
+    8 * 1024**3 + 22 * 1344 * 768 * 3 * 8 + 22 * 2 * 2000 * 4 * 2])
+def test_edges_low_ram_rejects_before_decode_or_batch_allocation(monkeypatch, available):
+    plan = [dict(start=0, end=22)] * 2
+    monkeypatch.setattr(transition.assembly, '_plan', lambda *a, **k: (plan, (3840, 2160), 44))
+    monkeypatch.setattr(transition.helper_batch_output, 'available_ram_bytes', lambda: available)
+    def forbidden(*a, **k):
+        pytest.fail('Low RAM must fail before decoding or allocating a batch')
+    monkeypatch.setattr(transition.assembly, '_video_frames', forbidden)
+    monkeypatch.setattr(np, 'stack', forbidden)
+    monkeypatch.setattr(torch, 'from_numpy', forbidden)
+    with pytest.raises(ValueError, match='RAM'):
+        transition.clip_edges(dict(rows=[], context_frames=22))
+
+
+def test_edges_rechecks_ram_before_second_clip(tmp_path, monkeypatch):
+    clips(tmp_path)
+    available = iter([16 * 1024**3, 8 * 1024**3 + 1])
+    monkeypatch.setattr(transition.helper_batch_output, 'available_ram_bytes', lambda: next(available))
+    calls = []
+    video_frames = transition.assembly._video_frames
+    def recorded_frames(row, check):
+        calls.append(row)
+        return video_frames(row, check)
+    monkeypatch.setattr(transition.assembly, '_video_frames', recorded_frames)
+    monkeypatch.setattr(transition.helper_batch_output, 'unload_all_comfy_models',
+                        lambda: pytest.fail('Transition must not reclaim models'))
+    with pytest.raises(ValueError, match='RAM'):
+        transition.clip_edges(transition.transition_spec(spec()), input_root=tmp_path, output_root=tmp_path)
+    assert len(calls) == 1
+
+
 def test_edges_reject_clip_shorter_than_context(tmp_path):
     clips(tmp_path)
     data = transition.transition_spec(spec(rows=[dict(kind='media', filename='a.mov', trim_start=0, trim_end=0.5),

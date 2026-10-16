@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .. import helper_batch_output
 from ..nodes_minimax_h3_director_guide import MiniMaxH3DirectorGuide, _native_node
 from . import assembly
 from .vendor.continuation_nodes import validate_h3_av_window
@@ -59,6 +60,18 @@ def transition_prompt(data):
     return text + ("\n\n" + data["prompt"] if data["prompt"] else "")
 
 
+def _guide_frame(frame, width, height):
+    """Match Core's center-crop + PIL Lanczos without source-resolution FP32 clips."""
+    from PIL import Image
+    image = frame.to_image()
+    old_width, old_height = image.size
+    old_aspect, new_aspect = old_width / old_height, width / height
+    x = round((old_width - old_width * (new_aspect / old_aspect)) / 2) if old_aspect > new_aspect else 0
+    y = round((old_height - old_height * (old_aspect / new_aspect)) / 2) if old_aspect < new_aspect else 0
+    return np.array(image.crop((x, y, old_width - x, old_height - y)).resize(
+        (width, height), resample=Image.Resampling.LANCZOS))
+
+
 def clip_edges(data, input_root=None, output_root=None):
     """Bounded decode: keep only the trimmed tail of A and head of B, frame-locked audio."""
     from .pyav_media import guard
@@ -68,16 +81,24 @@ def clip_edges(data, input_root=None, output_root=None):
     count = data["context_frames"]
     if any(row["end"] - row["start"] < count for row in plan):
         raise ValueError(f"A selected clip is shorter than the {count}-frame transition context; trim less or reduce context.")
+    width, height = generation_canvas(size)
+    # Peak: both FP32 edges, retained uint8 frames + stack, audio blocks + concat, RGB decode/resize workspace.
+    required = count * width * height * 3 * 10 + count * 2 * 2000 * 4 * 3 + size[0] * size[1] * 12 + width * height * 16
     edges = []
     for row, tail in zip(plan, (True, False)):
+        retained = sum(p.numel() * p.element_size() + a["waveform"].numel() * a["waveform"].element_size()
+                       for p, a in edges)
+        if not helper_batch_output.can_allocate_in_ram(required - retained):
+            raise ValueError("Transition context exceeds available host RAM (including safety reserve). Reduce context frames or free RAM.")
         with closing(assembly._video_frames(row, check)) as frames:
-            images = deque((f.to_ndarray(format="rgb24") for f in frames), maxlen=count) if tail else [
-                f.to_ndarray(format="rgb24") for _, f in zip(range(count), frames)]
+            images = deque((_guide_frame(f, width, height) for f in frames), maxlen=count) if tail else [
+                _guide_frame(f, width, height) for _, f in zip(range(count), frames)]
         with closing(assembly._audio_frames(row, check)) as blocks:
             audio = deque(blocks, maxlen=count) if tail else [b for _, b in zip(range(count), blocks)]
         pixels = torch.from_numpy(np.stack(images)).float().div_(255)
         waveform = torch.from_numpy(np.concatenate(list(audio), axis=1))[None]
         edges.append((pixels, {"waveform": waveform, "sample_rate": 48000}))
+        del images, audio
     (tail, tail_audio), (head, head_audio) = edges
     return dict(tail=tail, tail_audio=tail_audio, head=head, head_audio=head_audio, canvas=size, colors=plan[0]["colors"])
 

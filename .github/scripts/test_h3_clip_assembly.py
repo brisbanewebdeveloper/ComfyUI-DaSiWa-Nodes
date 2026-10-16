@@ -100,7 +100,9 @@ from fractions import Fraction
 def make_video(path, values=None, audio=True, audio_delay=0, fps=24, width=64,
                codec="pcm_s16le", video_offset=0, gap=0, colors=None, tail_impulse=False):
     values = values or [30 + i * 10 for i in range(12)]
-    with av.open(str(path), "w", format="matroska" if gap or codec == "libopus" else "mov") as container:
+    # MOV edit lists otherwise quantize delayed AAC timestamps to milliseconds on PyAV 18.
+    options = {} if gap or codec == "libopus" else {"movie_timescale": "48000"}
+    with av.open(str(path), "w", format="matroska" if gap or codec == "libopus" else "mov", options=options) as container:
         video = container.add_stream("libx264", rate=fps)
         video.width, video.height = width, 64
         video.pix_fmt = "yuv420p"
@@ -135,6 +137,16 @@ def make_video(path, values=None, audio=True, audio_delay=0, fps=24, width=64,
                     container.mux(packet)
             for packet in sound.encode(None):
                 container.mux(packet)
+
+
+def test_real_h264_sei_frames_decode_for_assembly(tmp_path):
+    make_video(tmp_path / "sei.mov", values=[40, 80, 120], audio=False)
+    data = request([dict(kind="media", filename="sei.mov")])
+    plan, _, _ = backend()._plan(data, input_root=tmp_path, output_root=tmp_path)
+    frames = list(backend()._video_frames(plan[0], lambda: None))
+    assert frames[0].side_data["SEI_UNREGISTERED"].type.name == "SEI_UNREGISTERED"
+    assert len(frames) == 3
+    assert np.allclose([f.to_ndarray(format="rgb24").mean() for f in frames], [40, 80, 120], atol=3)
 
 
 def test_real_assembly_streams_frames_and_audio_without_models(tmp_path, monkeypatch):
@@ -231,7 +243,7 @@ def test_export_coverage_types_are_authoritative(export):
         backend().resolve_checkpoints([dict(session="s", clip_id="a")], Store(rows))
 
 
-@pytest.mark.parametrize("failure", ["cancel", "disk", "encoder", "verify"])
+@pytest.mark.parametrize("failure", ["cancel", "disk", "encoder", "verify", "copy_preflight", "copy_cancel"])
 def test_failure_removes_only_own_temporary_file(tmp_path, monkeypatch, failure):
     import hashlib
     import shutil
@@ -252,6 +264,11 @@ def test_failure_removes_only_own_temporary_file(tmp_path, monkeypatch, failure)
         monkeypatch.setattr(helper, "_configure_video_stream", lambda *a, **k: (_ for _ in ()).throw(OSError("ENOSPC")))
     if failure == "verify":
         monkeypatch.setattr(backend(), "_verify", lambda *a: (_ for _ in ()).throw(ValueError("invalid readback")))
+    if failure in ("copy_preflight", "copy_cancel"):
+        data["copy_video"] = True
+        def fail_copy_check(*args):
+            raise ValueError("copy scan failed") if failure == "copy_preflight" else RuntimeError("cancelled")
+        monkeypatch.setattr(backend(), "_copy_reason", fail_copy_check)
     with pytest.raises((RuntimeError, ValueError, OSError)):
         backend().assemble(data, "joined", input_root=tmp_path, output_root=tmp_path, check=check)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a.mov", "existing.mp4"]
@@ -670,6 +687,18 @@ def test_copy_video_is_lossless_and_reencodes_only_audio(tmp_path):
         sound = container.streams.audio[0]
         assert sound.codec_context.name == "aac" and round(sound.duration * sound.time_base * 48000) == 48000
     assert not list(tmp_path.glob("*.partial*"))
+
+
+@pytest.mark.parametrize("copy_video", [False, True])
+@pytest.mark.parametrize("frames", [17, 22, 56])
+def test_assembly_preserves_sample_exact_audio_presentation_duration(tmp_path, copy_video, frames):
+    make_video(tmp_path / "source.mov", values=[70] * frames, audio=False)
+    data = {**request([dict(kind="media", filename="source.mov")]), "copy_video": copy_video}
+    result = backend().assemble(data, "exact", input_root=tmp_path, output_root=tmp_path, check=lambda: None)
+    assert result["mode"] == ("copy" if copy_video else "reencode")
+    with av.open(result["filename"]) as output:
+        sound = output.streams.audio[0]
+        assert sound.duration * sound.time_base * 48000 == frames * 2000
 
 
 def test_copy_video_falls_back_with_a_reason(tmp_path):

@@ -69,7 +69,7 @@ def decoded(container, stream, check):
 
 def rotation_filters(frame):
     angle = float(frame.rotation)
-    matrix = next((s for s in frame.side_data.values() if s.type.name == "DISPLAYMATRIX"), None)
+    matrix = frame.side_data.get("DISPLAYMATRIX")
     if matrix is not None:
         values = np.frombuffer(matrix, dtype=np.int32)
         if len(values) != 9:

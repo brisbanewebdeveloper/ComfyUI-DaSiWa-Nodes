@@ -51,10 +51,14 @@ def test_real_h264_sei_duration(tmp_path):
     make_video(path, codec='libx264')
     with av.open(str(path)) as container:
         first=next(container.decode(video=0))
-        assert len(first.side_data)>0
+        assert first.side_data['SEI_UNREGISTERED'].type.name == 'SEI_UNREGISTERED'
     result=assembly.media_info(path.name, input_root=tmp_path)
     assert result['ok'] is True
     assert result['seconds']==pytest.approx(.5, abs=.001)
+    media = importlib.import_module(PACKAGE + '.pyav_media')
+    destination = tmp_path / 'video.rgb'
+    assert media.write_video(path, media.probe(path), 64, 32, destination, lambda: None) == 12
+    assert destination.stat().st_size == 12 * 64 * 32 * 3
 
 
 def test_real_mkv_duration_is_read_only(tmp_path):

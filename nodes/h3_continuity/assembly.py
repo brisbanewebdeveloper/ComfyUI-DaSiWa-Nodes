@@ -427,7 +427,7 @@ def _video_frames(row, check):
             tolerance = max(Fraction(1, 1000), frame.time_base)
             if abs(stamp - origin - Fraction(index, 24)) > tolerance:
                 raise ValueError("VFR or discontinuous video timestamps; normalize explicitly first.")
-            if frame.rotation != 0 or any(key.name == "DISPLAYMATRIX" for key in frame.side_data.keys()) or frame.format.name != "yuv420p":
+            if frame.rotation != 0 or frame.side_data.get("DISPLAYMATRIX") is not None or frame.format.name != "yuv420p":
                 raise ValueError("Source rotation/pixel format requires unsupported normalization.")
             if (frame.width, frame.height) != (stream.width, stream.height):
                 raise ValueError("Source changes canvas during decoding.")
@@ -560,13 +560,13 @@ def assemble(data, filename_prefix="H3_Joined", store=None, *, input_root=None, 
     check = check or guard(interrupt=True)
     check()
     plan, size, count = _plan(data, store, input_root, output_root, check, temp_root)
+    mode, reason = _mode(data, plan, check)
     _, output_root = _roots(input_root, output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     final = output_root / (filename_prefix + "_" + uuid.uuid4().hex + ".mp4")
     handle = tempfile.NamedTemporaryFile(prefix=".h3-assembly-", suffix=".partial.mp4", dir=output_root, delete=False)
     temporary = Path(handle.name)
     handle.close()
-    mode, reason = _mode(data, plan, check)
     try:
         if mode == "copy":
             try:
@@ -601,7 +601,7 @@ def _write_copy(temporary, plan, check, output_root):
     import av
     from ..helper_pyav_video import _configure_audio_stream
     from .pyav_media import open_media, video_stream
-    with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart"}) as output:
+    with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart", "movie_timescale": "48000"}) as output:
         video = sound = None
         offset, last_dts, sample_offset = 0, None, 0
         for number, row in enumerate(plan, 1):
@@ -663,7 +663,7 @@ def _write_reencode(temporary, plan, size, count, check, output_root):
     from contextlib import closing
     import av
     from ..helper_pyav_video import _configure_video_stream, _configure_audio_stream
-    with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart"}) as output:
+    with av.open(str(temporary), "w", format="mp4", options={"movflags": "+faststart", "movie_timescale": "48000"}) as output:
         # Reuse the exporter configuration, but never its whole-waveform audio API.
         video = _configure_video_stream(output, "libx264", *size, 24, 8, 18)
         video.codec_context.thread_count = 2

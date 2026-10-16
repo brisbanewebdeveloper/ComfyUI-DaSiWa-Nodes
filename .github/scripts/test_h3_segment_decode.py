@@ -64,18 +64,26 @@ def test_segment_decode_rejects_unvalidated_audio_topology():
     am.decoder.resblocks[0].convs1[0] = torch.nn.Conv1d(64,64,101,padding=50)
     with pytest.raises(ValueError,match='topology'): mod.validate_segment_vaes(vae,avae)
 
-def test_disabled_capture_decodes_first_take_without_staging(monkeypatch):
+@pytest.mark.parametrize('frames',[22,39])
+def test_disabled_capture_decodes_first_take_without_staging(monkeypatch,frames):
+    import nodes as comfy_nodes
+    from comfy_extras.nodes_audio import vae_decode_audio
     from test_h3_segment_backend import latent
     mod = importlib.import_module('h3_segment_test.nodes.h3_continuity.segment_nodes')
     monkeypatch.setattr(mod,'ClipStore',lambda: pytest.fail('Disabled capture must not stage'))
-    monkeypatch.setattr(mod,'validate_segment_vaes',lambda *a:None)
-    take = latent(22)
-    render,context,ticket = mod.DaSiWaH3ContinuitySegmentPrepare().prepare(take,{'disabled':True})
-    vae = SimpleNamespace(decode=lambda z:torch.zeros(22,1,1,3))
-    avae = SimpleNamespace(decode=lambda z:torch.zeros(1,z.shape[-1]*800,2))
+    monkeypatch.setattr(mod,'validate_segment_vaes',lambda *a: pytest.fail('Disabled capture must use Core decode'))
+    take = latent(frames)
+    ctx = {'disabled':True}  # Guide's uncaptured context has no output_mode.
+    render,context,ticket = mod.DaSiWaH3ContinuitySegmentPrepare().prepare(take,ctx)
+    vae = SimpleNamespace(decode=lambda z:torch.rand(1,frames,2,2,3,generator=torch.Generator().manual_seed(1)))
+    avae = SimpleNamespace(decode=lambda z:torch.rand(1,z.shape[-1]*800,2,generator=torch.Generator().manual_seed(2))*4,audio_sample_rate=32000)
     images,audio = mod.DaSiWaH3ContinuitySegmentDecode().decode(render,vae,avae,context)
-    assert images.shape[0] == 22 and audio['waveform'].shape == (1,2,round(22*32000/24))
-    assert ticket == {'disabled':True}
+    assert render is take and context is ctx and ticket == {'disabled':True}
+    assert torch.equal(images,comfy_nodes.VAEDecode().decode(vae,take)[0])
+    core_audio = vae_decode_audio(avae,take)
+    assert audio['waveform'].shape == (1,2,take['samples'].tensors[1].shape[-1]*800)
+    assert torch.equal(audio['waveform'],core_audio['waveform'])
+    assert audio['sample_rate'] == core_audio['sample_rate'] == 32000
 
 def test_audio_window_matches_global_decode_crop():
     from comfy.ldm.minimax.audio_vae import MiniMaxH3AudioVAE, BigVGAN

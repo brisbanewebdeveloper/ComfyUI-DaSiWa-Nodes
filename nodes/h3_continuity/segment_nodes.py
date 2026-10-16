@@ -119,18 +119,13 @@ class DaSiWaH3ContinuitySegmentDecode:
     CATEGORY = 'DaSiWa/MiniMax H3'
 
     def decode(self, latent, vae, audio_vae, context):
-        if not context.get('disabled') and context.get('render_kind') != 'segment':
+        if context.get('render_kind') != 'segment':
             # Full timeline: exactly the core VAE Decode / VAE Decode Audio results.
             import nodes as comfy_nodes
             from comfy_extras.nodes_audio import vae_decode_audio
             return comfy_nodes.VAEDecode().decode(vae, latent)[0], vae_decode_audio(audio_vae, latent)
         video,audio = latent['samples'].tensors
-        if context.get('disabled'):
-            _,_,frames = validate_h3_av_latent(latent,name='uncaptured first take')
-            plan = dict(render_frames=frames,crop_start_frame=0,crop_frames=frames,
-                        crop_start_sample=0,crop_samples=round(frames*32000/24))
-        else:
-            plan = segment_render_plan(video,audio,context)
+        plan = segment_render_plan(video,audio,context)
         validate_segment_vaes(vae,audio_vae)
         comfy.model_management.throw_exception_if_processing_interrupted()
         pixels = vae.decode(video)
