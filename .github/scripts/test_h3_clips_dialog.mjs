@@ -13,10 +13,10 @@ const all=e=>[e,...e.children.filter(c=>typeof c==='object').flatMap(all)];
 const click=async e=>{e.dispatchEvent(new Event('click'));await new Promise(r=>setTimeout(r,0));};
 test('clip fields have visible labels and H3 transitions need the Director graph',async()=>{
  setup();const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
- const close=openClipAssembly({api:{fetchApi:async()=>({ok:true,json:async()=>({seconds:3,sessions:[]})})},timeline:{clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'}]}},onChange:()=>{},viewUrl:p=>p});
+ const close=openClipAssembly({api:{fetchApi:async()=>({ok:true,json:async()=>({seconds:3,sessions:[]})})},timeline:{clip_assembly:{tab:'files',rows:[{kind:'media',filename:'a.mp4'},{kind:'media',filename:'b.mp4'}]}},onChange:()=>{},viewUrl:p=>p});
  const dialog=document.body.children.at(-1);
- assert.ok(all(dialog).some(e=>e.tagName==='LABEL'&&e.children.some(c=>c.textContent==='Start (s)')));
- assert.ok(all(dialog).some(e=>e.tagName==='LABEL'&&e.children.some(c=>c.textContent==='End (s)')));
+ assert.equal(all(dialog).filter(e=>e.textContent==='Start (s)').length,1);
+ assert.equal(all(dialog).filter(e=>e.textContent==='End (s)').length,1);
  const toggle=all(dialog).find(e=>e.type==='checkbox'&&e.title?.includes('bridge'));
  assert.equal(toggle.disabled,true);
  assert.ok(all(dialog).some(e=>e.textContent?.includes('wired to a Director Guide and sampler')));close();
@@ -50,7 +50,21 @@ test('source duration and selected duration are detected without changing blank 
  await new Promise(r=>setTimeout(r,0));const dialog=document.body.children.at(-1);
  assert.ok(all(dialog).some(e=>e.textContent?.includes('Source duration: 3.000 s')&&e.textContent?.includes('Selected: 2.000 s')));
  assert.ok(all(dialog).some(e=>e.textContent?.includes('Duration unavailable')));
+ const ends=all(dialog).filter(e=>e.type==='number'&&e['aria-label']?.endsWith('End (s)'));
+ assert.equal(ends[0].value,'3.000');assert.equal(ends[1].value,'');
  assert.equal(timeline.clip_assembly.rows[0].trim_end,null);close();
+});
+test('checkpoint rows explain takes and the chain selector',async()=>{
+ setup();const clips=[{clip_id:'root1',parent_id:'',status:'ready',frames:124,seconds:124/24,export_available:true,export:{kind:'full',filename:'a.mp4'}},
+   {clip_id:'next2',parent_id:'root1',status:'ready',frames:243,seconds:243/24,segment_frames:119,export_available:true,export:{kind:'segment',filename:'b.mp4'}}];
+ const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
+ const close=openClipAssembly({api:{apiURL:p=>p,fetchApi:async url=>({ok:true,json:async()=>url.endsWith('sessions')?{sessions:[]}:{clips}})},timeline:{continuity:{session:'s'}},onChange:()=>{},viewUrl:p=>p});
+ await new Promise(r=>setTimeout(r,0));const dialog=document.body.children.at(-1);
+ assert.ok(all(dialog).some(e=>e.textContent?.includes('next2 · adds 4.96 s · ends at 10.13 s · continues root1 · segment export')));
+ assert.ok(all(dialog).some(e=>e.textContent?.includes('root1 · adds 5.17 s · ends at 5.17 s · first take · full-timeline export')));
+ const chain=all(dialog).filter(e=>e.textContent==='Select chain to here');
+ assert.equal(chain.length,2);assert.match(chain[0].title,/every earlier take it continues/);
+ assert.ok(!all(dialog).some(e=>e.textContent==='Chain to here'));close();
 });
 test('late duration metadata preserves the focused trim edit and removed rows stay removed',async()=>{
  setup();let resolve;const response=new Promise(r=>{resolve=r;});let saved;
@@ -78,12 +92,12 @@ test('continuity list shows added duration, disables unavailable exports and pre
  const {openClipAssembly}=await import('../../js/minimax_h3_clips.js');
  const close=openClipAssembly({api:{apiURL:p=>p,fetchApi:async url=>({ok:true,json:async()=>url.endsWith('sessions')?{sessions:[]}:{clips}})},timeline,onChange:s=>{timeline.clip_assembly=s;},viewUrl:p=>p});
  await new Promise(r=>setTimeout(r,0));const dialog=document.body.children.at(-1);
- assert.ok(all(dialog).some(e=>e.textContent?.startsWith('b · +5.00s')));
+ assert.ok(all(dialog).some(e=>e.textContent?.startsWith('b · adds 5.00 s')));
  assert.equal(all(dialog).find(e=>e['aria-label']==='Select bad').disabled,true);
  const bRow=all(dialog).find(e=>e.children.some?.(c=>c.textContent?.startsWith('b ·')));
  await click(bRow.children.find(e=>e.textContent==='Preview'));
  assert.ok(all(dialog).some(e=>e.tagName==='IMG'&&e.src==='/df_h3_continuity/tail/s/b/0'));
- await click(bRow.children.find(e=>e.textContent==='Chain to here'));
+ await click(bRow.children.find(e=>e.textContent==='Select chain to here'));
  assert.deepEqual(timeline.clip_assembly.rows.map(r=>r.clip_id),['a','b']);close();
 });
 test('checkpoint preview preserves the verified subfolder and temp type',async()=>{

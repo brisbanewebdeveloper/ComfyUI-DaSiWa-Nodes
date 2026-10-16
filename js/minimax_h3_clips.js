@@ -74,7 +74,7 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
   const el=(tag,text)=>{const item=document.createElement(tag);if(text!=null)item.textContent=text;return item;};
   const listen=(target,type,action)=>{target.addEventListener(type,action);listeners.push(()=>target.removeEventListener(type,action));};
   const dialog=el('dialog');dialog.className='ds-h3-clips';dialog.setAttribute('aria-label','Join clips');dialog.setAttribute('aria-modal','true');
-  const style=el('style',`.ds-h3-clips{box-sizing:border-box;width:min(960px,94vw);max-height:90vh;overflow:auto;padding:20px;border:1px solid #775032;border-radius:12px;background:var(--comfy-menu-bg,#17120f);color:var(--input-text,#e7c4a2);font:13px/1.5 system-ui}.ds-h3-clips::backdrop{background:#05090dc9}.ds-h3-clips header,.ds-h3-clips nav,.ds-h3-clips footer,.ds-h3-clips .clip-row{display:flex;align-items:center;gap:9px;margin:8px 0}.ds-h3-clips header{justify-content:space-between}.ds-h3-clips h2{margin:0}.ds-h3-clips button{padding:6px 10px;border:1px solid #775032;border-radius:7px;background:#251a12;color:inherit;cursor:pointer}.ds-h3-clips button:hover:not(:disabled){background:#493020;border-color:#ac6834}.ds-h3-clips button:disabled{opacity:.5;cursor:default}.ds-h3-clips :focus-visible{outline:2px solid #e9a262;outline-offset:2px}.ds-h3-clips input,.ds-h3-clips select{background:var(--comfy-input-bg,#211913);color:inherit;border:1px solid #775032;border-radius:4px;padding:5px}.ds-h3-clips .clip-row{border-bottom:1px solid #624027;padding:7px 0}.ds-h3-clips .clip-name{flex:1;overflow-wrap:anywhere;min-width:100px}.ds-h3-clips .clip-row input[type=number]{width:75px}.ds-h3-clips video{display:block;max-width:100%;max-height:260px;margin:10px auto}.ds-h3-clips .clip-status{white-space:pre-wrap;overflow-wrap:anywhere}.ds-h3-clips label{display:inline-flex;align-items:center;gap:7px;margin:6px 0}.ds-h3-clips>label{display:flex;width:100%;box-sizing:border-box}.ds-h3-clips nav button[aria-selected=true]{background:#493020}.ds-h3-clips .clip-list{overflow-x:auto}.ds-h3-clips .clip-trim{flex-direction:column;align-items:flex-start;gap:2px;margin:0}.ds-h3-clips .clip-row .clip-trim input{width:110px;box-sizing:border-box}.ds-h3-clips .clip-time{font-size:11px;opacity:.8;margin-top:4px}.ds-h3-clips .clip-settings{display:flex;align-items:flex-end;gap:12px;margin:8px 0}.ds-h3-clips fieldset{border:1px solid #624027;border-radius:8px;margin:12px 0;padding:6px 12px}.ds-h3-clips textarea{box-sizing:border-box;background:var(--comfy-input-bg,#211913);color:inherit;border:1px solid #775032;border-radius:4px;padding:5px;font:inherit}.ds-h3-clips h3{margin-bottom:4px}`);
+  const style=el('style',`.ds-h3-clips{box-sizing:border-box;width:min(960px,94vw);max-height:90vh;overflow:auto;padding:20px;border:1px solid #775032;border-radius:12px;background:var(--comfy-menu-bg,#17120f);color:var(--input-text,#e7c4a2);font:13px/1.5 system-ui}.ds-h3-clips::backdrop{background:#05090dc9}.ds-h3-clips header,.ds-h3-clips nav,.ds-h3-clips footer,.ds-h3-clips .clip-row{display:flex;align-items:center;gap:9px;margin:8px 0}.ds-h3-clips header{justify-content:space-between}.ds-h3-clips h2{margin:0}.ds-h3-clips button{padding:6px 10px;border:1px solid #775032;border-radius:7px;background:#251a12;color:inherit;cursor:pointer}.ds-h3-clips button:hover:not(:disabled){background:#493020;border-color:#ac6834}.ds-h3-clips button:disabled{opacity:.5;cursor:default}.ds-h3-clips :focus-visible{outline:2px solid #e9a262;outline-offset:2px}.ds-h3-clips input,.ds-h3-clips select{background:var(--comfy-input-bg,#211913);color:inherit;border:1px solid #775032;border-radius:4px;padding:5px}.ds-h3-clips .clip-row{border-bottom:1px solid #624027;padding:7px 0}.ds-h3-clips .clip-name{flex:1;overflow-wrap:anywhere;min-width:100px}.ds-h3-clips .clip-row input[type=number]{width:75px}.ds-h3-clips video{display:block;max-width:100%;max-height:260px;margin:10px auto}.ds-h3-clips .clip-status{white-space:pre-wrap;overflow-wrap:anywhere}.ds-h3-clips label{display:inline-flex;align-items:center;gap:7px;margin:6px 0}.ds-h3-clips>label{display:flex;width:100%;box-sizing:border-box}.ds-h3-clips nav button[aria-selected=true]{background:#493020}.ds-h3-clips .clip-list{overflow-x:auto}.ds-h3-clips .clip-trim{flex-direction:column;align-items:flex-start;gap:2px;margin:0}.ds-h3-clips .clip-row .clip-trim input{width:110px;box-sizing:border-box}.ds-h3-clips .clip-time{font-size:11px;opacity:.8;margin-top:4px}.ds-h3-clips .clip-file{display:grid;align-items:center;grid-template-columns:24px minmax(140px,1fr) 78px 110px 110px 78px 34px 34px;gap:8px}.ds-h3-clips .clip-row.clip-file input[type=number]{width:100%;box-sizing:border-box}.ds-h3-clips .clip-head{margin:8px 0 -4px;font-size:12px;opacity:.85}.ds-h3-clips .clip-settings{display:flex;align-items:flex-end;gap:12px;margin:8px 0}.ds-h3-clips fieldset{border:1px solid #624027;border-radius:8px;margin:12px 0;padding:6px 12px}.ds-h3-clips textarea{box-sizing:border-box;background:var(--comfy-input-bg,#211913);color:inherit;border:1px solid #775032;border-radius:4px;padding:5px;font:inherit}.ds-h3-clips h3{margin-bottom:4px}`);
   const button=(text,action,parent)=>{const item=el('button',text);item.type='button';listen(item,'click',action);parent.append(item);return item;};
   const header=el('header');header.append(el('h2','Join clips'));button('Close',()=>cleanup(),header);dialog.append(header);
   const nav=el('nav');nav.setAttribute('role','tablist');dialog.append(nav);
@@ -197,29 +197,31 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
       button('Refresh',()=>void loadSession(),tools).disabled=busy;
     }
     content.append(el('h3','Clips in playback order'));
-    content.append(el('p',state.tab==='files'?'Start and End are source positions in seconds. A blank End uses the file end. Uncheck to skip; Remove only clears this list entry.':'Select saved takes in parent order. Remove selection does not delete checkpoints; the saved take remains available below.'));
+    content.append(el('p',state.tab==='files'?'Start and End are positions in each source file, in seconds; End starts at the full length. Uncheck to skip a clip; Remove only clears it from this list.':'Each row is a saved take. Checked takes are joined top to bottom. Select chain to here checks a take together with every earlier take it continues from, in order. Rerolls of the same step are alternatives: pick one. Unchecking or Remove selection never deletes a checkpoint.'));
     const list=el('div');list.className='clip-list';content.append(list);
+    if(state.tab==='files'){const head=el('div');head.className='clip-file clip-head';head.setAttribute('aria-hidden','true');for(const text of ['','','','Start (s)','End (s)','','',''])head.append(el('span',text));list.append(head);}
     const selected=state.rows.filter(row=>row.kind===(state.tab==='files'?'media':'checkpoint'));
     const candidates=state.tab==='files'?selected:[...selected.map(row=>({...clips.find(clip=>clip.clip_id===row.clip_id),...row})),...clips.filter(clip=>!selected.some(row=>row.clip_id===clip.clip_id)).map(clip=>({...clip,kind:'checkpoint',session,selected:false}))];
     for(const [index,row] of candidates.entries()) {
-      const line=el('div');line.className='clip-row';list.append(line);
+      const line=el('div');line.className=state.tab==='files'?'clip-row clip-file':'clip-row';list.append(line);
       const reason=state.tab==='continuity'?clipUnavailable(row):'';
       const check=el('input');check.type='checkbox';check.checked=row.selected!==false;check.disabled=busy||!!reason;check.setAttribute('aria-label',`Select ${row.clip_id ?? row.filename}`);line.append(check);
       listen(check,'change',()=>{let saved=state.rows.find(item=>item===row || row.kind==='checkpoint'&&item.kind==='checkpoint'&&item.clip_id===row.clip_id&&item.session===session);if(!saved){saved={kind:'checkpoint',session,clip_id:row.clip_id};state.rows.push(saved);}saved.selected=check.checked;save();render();});
-      const label=el('span',state.tab==='files'?row.filename:`${row.clip_id} · +${Number((row.segment_frames ?? row.extension_frames ?? (row.parent_id ? Math.max(0,(row.frames ?? 0)-(clips.find(clip=>clip.clip_id===row.parent_id)?.frames ?? row.frames ?? 0)) : row.frames ?? 0))/(row.fps || 24)).toFixed(2)}s · timeline ${Number(row.seconds ?? 0).toFixed(2)}s · parent ${row.parent_id || 'root'} · ${reason || (row.export?.source_prefix?'Imported source prefix':row.export?.kind==='segment'?'Segment':'Full timeline')}`);label.className='clip-name';line.append(label);
-      let paintDuration=()=>{};
+      const label=el('span',state.tab==='files'?row.filename:`${row.clip_id} · adds ${Number((row.segment_frames ?? row.extension_frames ?? (row.parent_id ? Math.max(0,(row.frames ?? 0)-(clips.find(clip=>clip.clip_id===row.parent_id)?.frames ?? row.frames ?? 0)) : row.frames ?? 0))/(row.fps || 24)).toFixed(2)} s · ends at ${Number(row.seconds ?? 0).toFixed(2)} s · ${row.parent_id ? `continues ${row.parent_id}` : 'first take'} · ${reason || (row.export?.source_prefix?'imported start video':row.export?.kind==='segment'?'segment export':'full-timeline export')}`);label.className='clip-name';line.append(label);
+      let paintDuration=()=>{},endInput=null;
       if(state.tab==='files'){
         const timing=el('div');timing.className='clip-time';label.append(timing);
         const info=durationFor(row.filename);
         paintDuration=()=>{
           if(Number.isFinite(info.seconds)){
+            if(endInput&&row.trim_end==null&&endInput.value===''&&document.activeElement!==endInput)endInput.value=info.seconds.toFixed(3);
             const start=row.trim_start??0,end=row.trim_end??info.seconds;
             const selected=Number.isFinite(start)&&Number.isFinite(end)&&start>=0&&end>start&&end<=info.seconds?`${(end-start).toFixed(3)} s`:'Invalid trim';
             timing.textContent=`Source duration: ${info.seconds.toFixed(3)} s · Selected: ${selected}`;
           }else timing.textContent=info.loading?'Reading source duration…':'Duration unavailable — Join preflight will check this file.';
           timing.title=info.error ?? 'Source duration is read from the file; selected duration uses Start and End. Joining snaps cuts to the output frame grid.';
         };
-        info.updates.add(paintDuration);paintDuration();
+        info.updates.add(paintDuration);
       }
       button('Preview',()=>{
         if(state.tab==='continuity' && row.thumbnails?.length && !row.export?.filename){
@@ -228,15 +230,17 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
           image.src=api.apiURL?.(path) ?? path;image.style.maxWidth='100%';image.style.maxHeight='260px';previewPanel.append(image);
         }else preview(state.tab==='files'?viewUrl(row.filename):row.export?.filename?exportUrl(row.export):null,row.trim_start??0,row.trim_end);
       },line).disabled=busy||!!reason;
-      if(state.tab==='continuity')button('Chain to here',()=>{
+      if(state.tab==='continuity'){
+        const chain=button('Select chain to here',()=>{
         try{const chain=ancestorChain(clips,row.clip_id);if(chain.some(clip=>clipUnavailable(clip)))throw new Error('Ancestor chain contains an unavailable checkpoint.');state.rows=state.rows.filter(item=>item.kind!=='checkpoint').concat(chain.map(clip=>({kind:'checkpoint',session,clip_id:clip.clip_id})));save();render();}catch(error){report(error.message);}
-      },line).disabled=busy||!!reason;
+        },line);
+        chain.disabled=busy||!!reason;chain.title='Check this take and every earlier take it continues from, in playback order. Replaces the current selection.';
+      }
       else for(const [field,title]of [['trim_start','Start (s)'],['trim_end','End (s)']]){
-        const fieldLabel=el('label');fieldLabel.className='clip-trim';fieldLabel.append(el('span',title));
         const trim=el('input');trim.type='number';trim.min='0';trim.step='0.001';trim.value=row[field]??'';trim.disabled=busy;trim.setAttribute('aria-label',`${row.filename} ${title}`);
         trim.title=field==='trim_start'?'Source position where this clip starts, in seconds.':'Source position where this clip ends, in seconds. Leave blank to use the file end.';
-        if(field==='trim_end')trim.placeholder='File end';
-        allowNativeEditing(trim);fieldLabel.append(trim);line.append(fieldLabel);
+        if(field==='trim_end'){trim.placeholder='File end';endInput=trim;}
+        allowNativeEditing(trim);line.append(trim);
         listen(trim,'change',()=>{row[field]=trim.value===''&&field==='trim_end'?null:Number(trim.value);save();paintDuration();});
       }
       if(index<selected.length){
@@ -247,6 +251,7 @@ export function openClipAssembly({api,timeline,onChange,viewUrl,upload,graphProm
         remove.disabled=busy;remove.title='Remove from this montage selection only. The source file, checkpoint and Director references are not deleted.';
         remove.setAttribute('aria-label',`Remove ${row.clip_id ?? row.filename} from montage`);
       }
+      paintDuration();
       for(const [delta,text]of [[-1,'↑'],[1,'↓']]) {
         const move=button(text,()=>{
           const current=state.rows.indexOf(row.kind==='checkpoint'?state.rows.find(item=>item.kind==='checkpoint'&&item.clip_id===row.clip_id&&item.session===session):row);

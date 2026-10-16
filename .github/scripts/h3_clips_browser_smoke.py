@@ -42,10 +42,13 @@ with sync_playwright() as playwright:
         expect(dialog.locator('.clip-row')).to_have_count(2, timeout=15000)
         expect(dialog.locator('.clip-time').first).to_contain_text('Source duration: 1.000 s', timeout=15000)
         expect(dialog.locator('.clip-time').last).to_contain_text('Source duration: 1.000 s', timeout=15000)
-        expect(dialog.locator('label.clip-trim').filter(has_text='Start (s)').first).to_be_visible()
-        expect(dialog.locator('label.clip-trim').filter(has_text='End (s)').first).to_be_visible()
+        expect(dialog.locator('.clip-head')).to_contain_text('Start (s)')
+        expect(dialog.locator('.clip-head')).to_contain_text('End (s)')
+        expect(dialog.get_by_text('Start (s)', exact=True)).to_have_count(1)
         end_input=dialog.get_by_role('spinbutton', name='End (s)', exact=False).first
-        assert end_input.input_value()==''
+        expect(end_input).to_have_value('1.000')  # prefilled full length; saved value stays "file end"
+        box=[dialog.get_by_role('spinbutton', name='Start (s)', exact=False).nth(i).bounding_box()['x'] for i in range(2)]
+        assert abs(box[0]-box[1])<1, box
         start_input=dialog.get_by_role('spinbutton', name='Start (s)', exact=False).first
         start_input.fill('0.25');end_input.focus()
         expect(dialog.locator('.clip-time').first).to_contain_text('Selected: 0.750 s')
