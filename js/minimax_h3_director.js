@@ -3,7 +3,7 @@ import { api } from "../../scripts/api.js";
 import { openDaSiWaRefModExport } from "./refmod_export.js";
 import { openClipAssembly } from "./minimax_h3_clips.js";
 import { forgeReferences, refPromptFields, refTemplate, inheritedDefinitions, referenceSnapshot } from "./minimax_h3_forge_state.js";
-import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, normalizeContinuity, validateSegmentGraph, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
+import { CONTINUITY_DEFAULTS as DEFAULT_CONTINUITY, continuityTiming, normalizeContinuity, installSegmentGraphValidation, newContinuitySession, sourceId as continuitySourceId } from "./minimax_h3_continuity.js";
 
 let h3VaeErrorPopupInstalled = false;
 
@@ -310,26 +310,6 @@ function install(node) {
   let activeRefModLibraryRefresh = null;
   let activeRefModExportCleanup = null;
   let closeClipAssembly = null;
-  const checkSegmentTopology = () => {
-    const output = {};
-    for (const item of node.graph?._nodes || []) {
-      const inputs = {};
-      for (const input of item.inputs || []) {
-        const link = node.graph.getLink?.(input.link) ?? node.graph.links?.[input.link];
-        if (link) inputs[input.name] = [String(link.origin_id), link.origin_slot];
-      }
-      const type = item.comfyClass || item.type;
-      // Core routes a bypassed upscaler's LATENT through; retain it for this pre-queue check.
-      if (item.mode !== 2 && (item.mode !== 4 || type === "DaSiWaH3TiledUpscale")) output[String(item.id)] = { class_type: type, inputs };
-    }
-    validateSegmentGraph(output, node.id);
-  };
-  const originalSerializeTimeline = dataWidget.serializeValue;
-  dataWidget.serializeValue = function (...args) {
-    const c = continuityState();
-    if (c.output_mode === "segment" && (isContinuing() || (c.capture && mode() !== "Image Inpaint"))) checkSegmentTopology();
-    return originalSerializeTimeline ? originalSerializeTimeline.apply(this, args) : this.value;
-  };
   function openRefModExport() {
     if (nodeRemoved) return;
     activeRefModExportCleanup?.();
@@ -749,12 +729,11 @@ function install(node) {
       const checked = currentCheck();
       if (checked?.estimated_scratch_bytes) { const budget = document.createElement("div"); budget.className = "ds-h3-continuity-info"; budget.textContent = `Import temporary disk estimate: ${formatBytes(checked.estimated_scratch_bytes)} · free ${formatBytes(checked.scratch_free_bytes)}. Excludes models and cumulative export.`; content.append(budget); }
       const output = document.createElement("select"); output.setAttribute("aria-label", "Continuity output mode");
-      output.append(new Option("Full timeline (existing workflow)", "full"), new Option("New segment only", "segment")); output.value = c.output_mode;
+      output.append(new Option("Full timeline", "full"), new Option("New segment only", "segment")); output.value = c.output_mode;
       const outputNote = document.createElement("div"); outputNote.className = "ds-h3-continuity-info";
-      const paintOutput = () => { outputNote.textContent = c.output_mode === "segment" ? "Requires Segment Prepare → optional Upscale → Segment Decode → Export → Publish" : ""; };
+      const paintOutput = () => { outputNote.textContent = c.output_mode === "segment" ? "Exports only the new section, without repeating the source. Uses the same Segment Prepare/Decode workflow as Full timeline." : "Exports the source and the new section together as one video."; };
       output.onchange = () => {
         c.output_mode = output.value; emit(); paintOutput();
-        if (c.output_mode === "segment") { try { checkSegmentTopology(); } catch (error) { outputNote.textContent = error.message; setStatus(error.message, true); } }
       };
       const outputLabel = document.createElement("label"); outputLabel.append(document.createTextNode("Output "), output); content.append(outputLabel, outputNote); paintOutput();
       const overlap = document.createElement("select"); overlap.setAttribute("aria-label", "Preferred context frames");
@@ -2250,6 +2229,7 @@ function install(node) {
 }
 
 installH3VaeErrorPopup();
+installSegmentGraphValidation(app);
 
 app.registerExtension({
   name: "DaSiWa.MiniMaxH3Director",

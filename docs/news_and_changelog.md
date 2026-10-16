@@ -2,9 +2,11 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-16**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **Continuity subgraph validation fix (0.5.27):** New segment only checks ComfyUI's compiled prompt, so valid Segment Prepare/Decode chains inside subgraphs and bypassed upscalers are accepted without a full-timeline fallback. Saving a workflow no longer runs execution validation. Advanced output hints explain full-timeline versus new-section export with the same wiring.
 
 - **Join Clips review fixes (Git update within 0.5.26):** Restore H.264 side-data compatibility and sample-exact joined audio duration with PyAV 18 and 19, keep inactive Continuity from blocking ordinary takes, preserve Core decoding and audio normalization for uncaptured Full timeline takes, reject oversized transition joins before rendering, and avoid leftover partial files after copy preflight errors. Transition guides resize edge frames before retaining batches and check host RAM before allocation. No new controls or version bump.
 
@@ -178,6 +180,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.27 | 10-16 | Continuity validates compiled subgraphs and bypasses; clearer Advanced output hints |
 | 0.5.26 | 10-16 | Join Clips: opt-in lossless video copy with automatic re-encode fallback |
 | 0.5.25 | 10-16 | Enhanced Video Combine: RGBA alpha in Animated WebP and VP9 WebM/MKV; WebP loops forever and honours `quality` |
 | 0.5.24 | 10-16 | Segment Prepare/Decode run both output modes; segment exports allow spatial post-processing |

@@ -66,6 +66,25 @@ export function validateSegmentGraph(output, directorId) {
   throw new Error('New segment only requires Segment Prepare → optional Upscale → Segment Decode → Export → Publish, connected to this Director Guide. No full-timeline fallback.');
 }
 
+export function installSegmentGraphValidation(app) {
+  if (app.__dasiwaH3SegmentGraphValidation) return;
+  const graphToPrompt = app.graphToPrompt;
+  app.graphToPrompt = async function (...args) {
+    const prompt = await graphToPrompt.apply(this, args);
+    // Core resolves subgraphs, reroutes and bypasses before this check.
+    for (const [id, node] of Object.entries(prompt.output)) {
+      if (node.class_type !== "MiniMaxH3Director") continue;
+      const state = JSON.parse(node.inputs.timeline_data);
+      const c = state.continuity;
+      if (c?.output_mode !== "segment") continue;
+      const continuing = Number(c.version ?? 2) >= 3 ? !!sourceId(c) : c.operation === "continue";
+      if (continuing || (c.capture === true && node.inputs.mode !== "Image Inpaint")) validateSegmentGraph(prompt.output, id);
+    }
+    return prompt;
+  };
+  app.__dasiwaH3SegmentGraphValidation = true;
+}
+
 export function newContinuitySession() {
   // getRandomValues also works on plain-HTTP LAN ComfyUI; randomUUID does not.
   return "h3_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
