@@ -71,7 +71,7 @@ def test_bit_depth_quantization(video, depth):
 @pytest.mark.parametrize("pingpong", [False, True])
 def test_disabled_pass_frames_owns_no_source_storage(video, monkeypatch, pingpong, device):
     images = torch.zeros((5, 16, 16, 3), device=device)
-    monkeypatch.setattr(video, "_encode_with_available_encoder", lambda *args: "test")
+    monkeypatch.setattr(video, "_encode_with_available_encoder", lambda *args, **kwargs: "test")
     result = video.DaSiWa_EnhancedVideoCombine().combine(
         images, 24, "H.264", "MP4", "8-bit", 20, pingpong,
         False, "test", True, False,
@@ -85,7 +85,7 @@ def test_disabled_pass_frames_owns_no_source_storage(video, monkeypatch, pingpon
 @pytest.mark.parametrize("pingpong", [False, True])
 def test_enabled_pass_frames_preserves_sequence(video, monkeypatch, pingpong):
     images = torch.rand((5, 16, 16, 3))
-    monkeypatch.setattr(video, "_encode_with_available_encoder", lambda *args: "test")
+    monkeypatch.setattr(video, "_encode_with_available_encoder", lambda *args, **kwargs: "test")
     result = video.DaSiWa_EnhancedVideoCombine().combine(
         images, 24, "H.264", "MP4", "8-bit", 20, pingpong,
         False, "test", True, True,
@@ -106,3 +106,39 @@ def test_real_pyav_pingpong_encode(video, tmp_path):
     assert len(decoded) == 8
     means = [frame.to_ndarray(format="rgb24").mean() for frame in decoded]
     assert np.allclose(means, [0, 64, 128, 191, 255, 191, 128, 64], atol=5)
+
+
+
+def _rgba_clip():
+    images = torch.ones((2, 32, 32, 4))
+    images[1, ..., :3] = 0.5  # distinct frames, or libwebp merges them
+    images[:, :, :16, 3] = 0  # left half transparent
+    return images
+
+
+def _assert_left_transparent(alphas):
+    assert len(alphas) == 2
+    for alpha in alphas:
+        assert alpha[:, :12].max() < 20 and alpha[:, 20:].min() > 235
+
+
+def test_animated_webp_keeps_rgba_alpha_and_loops(video, tmp_path):
+    from PIL import Image, ImageSequence
+    video.DaSiWa_EnhancedVideoCombine().combine(
+        _rgba_clip(), 12, "Auto", "Animated WebP", "Auto", 90, False, False, "test", True, False,
+    )
+    [path] = tmp_path.glob("*.webp")
+    with Image.open(path) as webp:
+        assert webp.info["loop"] == 0
+        _assert_left_transparent([np.array(frame.convert("RGBA"))[..., 3] for frame in ImageSequence.Iterator(webp)])
+
+
+def test_vp9_webm_keeps_rgba_alpha(video, tmp_path):
+    video.DaSiWa_EnhancedVideoCombine().combine(
+        _rgba_clip(), 12, "VP9", "WebM", "10-bit", 20, False, False, "test", True, False,
+    )
+    [path] = tmp_path.glob("*.webm")
+    decoder = av.CodecContext.create("libvpx-vp9", "r")  # FFmpeg's native vp9 decoder ignores alpha
+    with av.open(str(path)) as container:
+        frames = [frame for packet in container.demux(video=0) for frame in decoder.decode(packet)]
+    _assert_left_transparent([frame.to_ndarray(format="rgba")[..., 3] for frame in frames])

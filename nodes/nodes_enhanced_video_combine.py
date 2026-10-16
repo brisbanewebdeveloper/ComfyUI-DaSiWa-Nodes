@@ -205,7 +205,9 @@ def _animated_image_settings(container):
     return settings[:2] if settings else None
 
 
-def _animated_image_encoder_candidates(container):
+def _animated_image_encoder_candidates(container, alpha=False):
+    if alpha:
+        return ("libwebp",)  # libwebp_anim drops the alpha plane; libwebp + webp muxer keeps it
     if container == "Animated AVIF":
         return _ANIMATED_AVIF_ENCODERS
     settings = _animated_image_settings(container)
@@ -216,11 +218,11 @@ def _available_encoders(_backend=None):
     return helper_pyav_video.available_encoders()
 
 
-def _frame_arrays(images, bit_depth, pingpong):
+def _frame_arrays(images, bit_depth, pingpong, alpha=False):
     count = len(images)
     for index in range(_encoded_frame_count(images, pingpong)):
         source_index = index if index < count else 2 * count - 2 - index
-        pixels = images[source_index, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp(0, 1)
+        pixels = images[source_index, ..., :4 if alpha else 3].detach().to(device="cpu", dtype=torch.float32).clamp(0, 1)
         if bit_depth == 10:
             yield torch.round(pixels * 1023).to(torch.int32).mul_(64).to(torch.uint16).numpy()
         else:
@@ -360,11 +362,12 @@ def _audio_encoder_candidates(audio_codec, container):
 def _encode_with_available_encoder(
     _backend, codec, bit_depth, width, height, frame_rate, frames, output_path,
     container, cq, crf, metadata, audio=None, audio_duration=None, crop_to_audio=False,
-    audio_codec="Auto", audio_bitrate="192k", progress_callback=None,
+    audio_codec="Auto", audio_bitrate="192k", progress_callback=None, alpha=False,
 ):
     available = _available_encoders()
     attempts = []
-    for encoder in _ENCODER_NAMES[codec]:
+    # Only libvpx writes the VP9 alpha plane; hardware VP9 encoders are colour-only.
+    for encoder in ("libvpx-vp9",) if alpha else _ENCODER_NAMES[codec]:
         if encoder not in available:
             continue
         audio_encoders = _audio_encoder_candidates(audio_codec, container) if audio else (None,)
@@ -375,7 +378,7 @@ def _encode_with_available_encoder(
                 helper_pyav_video.encode_attempt(
                     output_path, container, encoder, width, height, frame_rate, bit_depth, cq,
                     frames, metadata, audio, selected_audio_encoder, audio_bitrate,
-                    crop_to_audio, progress_callback,
+                    crop_to_audio, progress_callback, alpha,
                 )
                 if selected_audio_encoder and selected_audio_encoder != _audio_encoder(audio_codec, container):
                     _log(f"Audio fallback: {selected_audio_encoder}.")
@@ -387,17 +390,17 @@ def _encode_with_available_encoder(
     raise RuntimeError("No usable encoder was found. " + " | ".join(attempts))
 
 
-def _encode_animated_image(_backend, container, bit_depth, width, height, frame_rate, frames, output_path, quality, progress_callback=None):
+def _encode_animated_image(_backend, container, bit_depth, width, height, frame_rate, frames, output_path, quality, progress_callback=None, alpha=False):
     available = _available_encoders()
     attempts = []
-    for encoder in _animated_image_encoder_candidates(container):
+    for encoder in _animated_image_encoder_candidates(container, alpha):
         if encoder not in available:
             continue
         try:
             helper_pyav_video.encode_attempt(
                 output_path, container, encoder, width, height, frame_rate,
                 8 if container == "Animated WebP" else bit_depth, quality,
-                frames, progress_callback=progress_callback,
+                frames, progress_callback=progress_callback, alpha=alpha,
             )
             _log(f"Encoded {container} via {encoder} -> {os.path.basename(output_path)}.")
             return encoder
@@ -513,11 +516,13 @@ class DaSiWa_EnhancedVideoCombine:
                 if audio_data:
                     _log(f"{container} does not support audio; connected audio is omitted.")
                 output_path = os.path.join(output_folder, _output_filename(filename, counter, animated_settings[0], False))
+                # RGBA batches (e.g. Qwen Image 2.1 VAE) keep transparency; libwebp encodes yuva420p.
+                alpha = container == "Animated WebP" and images.shape[-1] == 4
                 encoder = _encode_animated_image(
                     None, container, selected_bit_depth, width, height, frame_rate,
-                    lambda: _frame_arrays(images, 8 if container == "Animated WebP" else selected_bit_depth, pingpong),
+                    lambda: _frame_arrays(images, 8 if container == "Animated WebP" else selected_bit_depth, pingpong, alpha),
                     output_path, quality,
-                    report_encode_progress,
+                    report_encode_progress, alpha=alpha,
                 )
                 selected_container = container
                 selected_codec = container
@@ -533,11 +538,15 @@ class DaSiWa_EnhancedVideoCombine:
                             output_folder,
                             _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container], audio_data is not None),
                         )
+                        alpha = images.shape[-1] == 4 and selected_codec == "VP9" and selected_container != "MP4"
+                        if alpha:
+                            selected_bit_depth = 8  # libvpx alpha is yuva420p only
                         try:
                             encoder = _encode_with_available_encoder(
-                                None, selected_codec, selected_bit_depth, width, height, frame_rate, frames,
+                                None, selected_codec, selected_bit_depth, width, height, frame_rate,
+                                lambda: _frame_arrays(images, selected_bit_depth, pingpong, alpha),
                                 output_path, selected_container, quality, quality, metadata, audio_data, audio_duration, crop_to_audio,
-                                audio_codec, audio_bitrate, report_encode_progress,
+                                audio_codec, audio_bitrate, report_encode_progress, alpha=alpha,
                             )
                             break
                         except RuntimeError as error:

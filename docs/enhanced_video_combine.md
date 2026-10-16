@@ -61,6 +61,15 @@ If every requested combination fails, the node attempts its mandatory H.264/MP4 
 
 Select **Animated WebP** or **Animated AVIF** explicitly from `container` to write an animated image rather than a video container. Both choices are deliberately excluded from `codec=Auto` and `container=Auto` and ignore the `codec` dropdown. Animated AVIF runtime-tests AV1 encoders in GPU-first order (`av1_nvenc`, Intel QSV, AMD AMF, VAAPI), then falls back to `libsvtav1` or `libaom-av1`. Animated WebP requires the CPU `libwebp_anim` encoder; FFmpeg has no NVENC WebP encoder. Animated image formats cannot mux the connected `AUDIO` value, so the node logs that audio is omitted.
 
+### Transparency
+
+An `IMAGE` batch with four channels (RGBA, for example from the Qwen Image 2.1 VAE) keeps its alpha channel in two cases:
+
+- **Animated WebP:** encoded with the CPU `libwebp` encoder, because FFmpeg's `libwebp_anim` discards alpha.
+- **VP9 in WebM or MKV:** encoded with the CPU `libvpx-vp9` encoder in 8-bit `yuva420p`, even when 10-bit is selected. NVENC has no VP9 encoder, and the QSV/VAAPI VP9 encoders cannot write alpha. Chromium-based browsers play VP9 alpha transparently; the in-node preview is an H.264 transcode and shows the clip opaque.
+
+All other codecs and containers ignore the alpha channel. RGB batches encode exactly as before.
+
 ### Bit depth and quality
 
 - `bit_depth=Auto` detects whether the frame values represent 8-bit or 10-bit precision.

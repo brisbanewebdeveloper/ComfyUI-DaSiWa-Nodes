@@ -70,7 +70,7 @@ def test_permission_and_throttled_progress(video, monkeypatch, enabled):
     calls = []
     monkeypatch.setattr(video.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(video, "_reclaim_encode_ram", lambda target: calls.append(clock[0]))
-    def encode(*args):
+    def encode(*args, **kwargs):
         progress = args[-1]
         for t in [1, 4, 5, 6, 9, 10]:
             clock[0] = t

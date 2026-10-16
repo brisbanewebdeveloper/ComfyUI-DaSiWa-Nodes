@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-15**. Older history lives in the 
 
 ## News
 
+- **Transparent WebP and WebM (0.5.25):** Enhanced Video Combine keeps the alpha channel of RGBA batches in Animated WebP and VP9 WebM/MKV (CPU encoders, 8-bit). Animated WebP files now loop forever as intended, and the `quality` slider now applies to WebP (it was silently ignored). [Details →](enhanced_video_combine.md#transparency)
+
 - **One wiring for both Continuity modes (0.5.24):** Segment Prepare and Segment Decode now also run **Full timeline** (identical to Append & Stage + core VAE decoding), so a workflow wired once can switch between Full timeline and New segment only in the Director. Segment exports may now pass through spatial post-processing (upscale, resize, watermark) before the exporter. [Usage →](h3_continuity.md#which-option-to-use)
 
 - **H3 transitions in Join Clips (0.5.23):** The Join clips dialog can render a short H3 bridge for every cut between uploaded videos. It reuses the Director's Guide, model and sampler: the clip edges become native H3 video+audio guides, only the generated middle is inserted, then the usual model-free join runs. New nodes MiniMaxH3 • Transition Guide/Render work in API mode too. Overlay fields now have labels, source/selected durations and Remove. [Usage →](h3_continuity.md#join-exported-clips)
@@ -172,6 +174,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.25 | 10-16 | Enhanced Video Combine: RGBA alpha in Animated WebP and VP9 WebM/MKV; WebP loops forever and honours `quality` |
 | 0.5.24 | 10-16 | Segment Prepare/Decode run both output modes; segment exports allow spatial post-processing |
 | 0.5.23 | 10-16 | H3 transition bridges in Join Clips; labelled overlay fields, durations, Remove; PyAV 19 H.264 metadata fix |
 | 0.5.22 | 10-15 | Gitea testing: opt-in H3 delta segments, bounded decode and model-free Join Clips; AI transition repair gated |

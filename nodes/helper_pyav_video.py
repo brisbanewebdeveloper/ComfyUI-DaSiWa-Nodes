@@ -48,8 +48,9 @@ def video_options(codec, encoder, quality):
         return {"crf": q, "b": "0", "cpu-used": "6"}
     if encoder == "libvpx-vp9":
         return {"crf": q, "b": "0", "deadline": "good"}
-    if encoder == "libwebp_anim":
-        return {"loop": "0", "q": q}
+    if encoder in {"libwebp_anim", "libwebp"}:
+        # libwebp quality runs 100 (best) -> 0; map the shared 0 (best) -> 51 CRF-style slider onto it.
+        return {"quality": str(round(100 - min(int(quality), 51) * 100 / 51))}
     return {}
 
 
@@ -64,7 +65,7 @@ def _is_second_boundary(index, rate):
 
 
 def _video_frame(array, index, rate, bit_depth, force_keyframe=True):
-    frame = av.VideoFrame.from_ndarray(array, format="rgb48le" if bit_depth == 10 else "rgb24")
+    frame = av.VideoFrame.from_ndarray(array, format="rgb48le" if bit_depth == 10 else "rgba" if array.shape[-1] == 4 else "rgb24")
     frame.pts = index
     frame.time_base = Fraction(rate.denominator, rate.numerator)
     if force_keyframe and _is_second_boundary(index, rate):
@@ -82,7 +83,7 @@ def _hardware_accel(encoder):
     return av.codec.hwaccel.HWAccel(**kwargs)
 
 
-def _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality):
+def _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality, alpha=False):
     kwargs = {"rate": _rate(frame_rate), "options": video_options("", encoder, quality)}
     hwaccel = _hardware_accel(encoder)
     if hwaccel is not None:
@@ -92,7 +93,7 @@ def _configure_video_stream(container, encoder, width, height, frame_rate, bit_d
     stream.height = height
     stream.codec_context.gop_size = max(1, math.ceil(float(_rate(frame_rate))))
     if hwaccel is None:
-        stream.pix_fmt = "yuv420p10le" if bit_depth == 10 else "yuv420p"
+        stream.pix_fmt = "yuva420p" if alpha else "yuv420p10le" if bit_depth == 10 else "yuv420p"
     else:
         device_type = device_type_for_encoder(encoder)
         codec = av.Codec(encoder, "w")
@@ -162,14 +163,14 @@ def _metadata(container, metadata):
         container.metadata[str(key)] = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
-def encode_attempt(output_path, container_name, encoder, width, height, frame_rate, bit_depth, quality, frames, metadata=None, audio=None, audio_encoder=None, audio_bitrate="192k", crop_to_audio=False, progress_callback=None):
+def encode_attempt(output_path, container_name, encoder, width, height, frame_rate, bit_depth, quality, frames, metadata=None, audio=None, audio_encoder=None, audio_bitrate="192k", crop_to_audio=False, progress_callback=None, alpha=False):
     attempt = f"{output_path}.attempt-{uuid.uuid4().hex}"
     container = None
     try:
-        options = {"movflags": "+faststart+use_metadata_tags"} if container_name == "MP4" else {}
+        options = {"MP4": {"movflags": "+faststart+use_metadata_tags"}, "Animated WebP": {"loop": "0"}}.get(container_name, {})
         container = av.open(attempt, "w", format=FORMAT_NAMES[container_name], options=options)
         _metadata(container, metadata)
-        video = _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality)
+        video = _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality, alpha)
         audio_stream = None
         target_audio_rate = None
         if audio is not None and audio_encoder:
