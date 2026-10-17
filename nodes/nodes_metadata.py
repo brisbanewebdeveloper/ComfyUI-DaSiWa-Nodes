@@ -265,6 +265,7 @@ class DaSiWa_MetadataImageSaver:
         
         # Automatically detect LoRAs used in the workflow
         lora_strings = []
+        lora_hashes = {}
         current_node_id = None
         detected_vae_name = ""
         detected_clip_skip = 0
@@ -322,6 +323,11 @@ class DaSiWa_MetadataImageSaver:
                                     entry = f"<lora:{clean_name}:{l_strength}>"
                                     if entry not in lora_strings:
                                         lora_strings.append(entry)
+                                    # Civitai links LoRAs only by hash (A1111 "Lora hashes"), never by name.
+                                    lora_path = folder_paths.get_full_path("loras", l_name)
+                                    digest = self.get_sha256(lora_path) if lora_path else None
+                                    if digest and clean_name not in lora_hashes:
+                                        lora_hashes[clean_name] = digest[:10]
 
         results = list()
         saved_paths = []
@@ -461,7 +467,7 @@ class DaSiWa_MetadataImageSaver:
                 val = metadata_config.get(input_name)
             
             # 2. Fallback to the value passed to the function (manual override widgets)
-            # Filter out booleans and empty strings for text-based fields
+            # Filter out booleans and empty strings for text-based fields; 0 is the documented "prefer auto-detect" for numbers.
             if val in [None, ""] or isinstance(val, (list, dict, torch.Tensor, bool)):
                 if manual is not None and not isinstance(manual, (list, dict, torch.Tensor)):
                     # Boolean check: prevent 'False' strings in prompts
@@ -470,7 +476,7 @@ class DaSiWa_MetadataImageSaver:
                             val = None
                         else:
                             val = manual
-                    elif manual != "" or (cast_type is int and manual is not None):
+                    elif manual not in ("", 0):
                         val = manual
             
             # 3. Last fallback to detected or default if still invalid
@@ -529,6 +535,9 @@ class DaSiWa_MetadataImageSaver:
         
         if model_hash:
             base_params += f"Model hash: {model_hash}, "
+
+        if lora_hashes:
+            base_params += 'Lora hashes: "' + ", ".join(f"{name}: {digest}" for name, digest in lora_hashes.items()) + '", '
         
         for index, image in enumerate(images):
             # Convert tensor to PIL

@@ -233,7 +233,7 @@ The **Advanced LoRA Loader** is a 10-slot stacker for ordinary image/video LoRAs
 The **DaSiWa Metadata Image Saver** ensures your images are fully compatible with Civitai, Hugging Face, and other galleries by embedding A1111-style metadata. It automatically detects LoRAs used in the workflow and supports dynamic filenames.
 
 - **Civitai Compatibility:** Writes the standard `parameters` block for auto-parsing of prompts and resources.
-- **LoRA Detection:** Scans your workflow and appends `<lora:name:weight>` triggers automatically.
+- **LoRA Detection:** Scans your workflow and appends `<lora:name:weight>` triggers plus `Lora hashes` (v0.5.29) — Civitai links LoRAs and checkpoints only by hash.
 - **WebP Support:** Full "Drag-and-Drop" workflow reconstruction support for both PNG and WebP formats.
 - **Dynamic Filenames:** Use placeholders like `%seed%`, `%date%`, `%model%`, `%width%`, and `%height%`.
 - **Privacy:** Toggle workflow JSON embedding to share images without exposing your full graph.

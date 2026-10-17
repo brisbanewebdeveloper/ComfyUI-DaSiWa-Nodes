@@ -42,7 +42,7 @@ Pair this node with the **DaSiWa Create Extra Metadata** node to add custom fiel
 | **node_noise** | **Connect a `NOISE` output (e.g., RandomNoise) to detect seeds.** |
 | **node_sigmas** | **Connect a `SIGMAS` output (e.g., BasicScheduler) to detect steps/scheduler.** |
 | **node_sampler** | **Connect a `SAMPLER` output (e.g., KSamplerSelect) to detect sampler names.** |
-| **model_hash** | Optional. Providing this helps Civitai link your image to the correct model page. |
+| **model_hash** | Optional. Providing this helps Civitai link your image to the correct model page. Left empty, the checkpoint's AutoV2 hash is computed (cached per file); detected LoRAs always get `Lora hashes` the same way. |
 | **text_positive** | Optional. Override for positive prompt. |
 | **text_negative** | Optional. Override for negative prompt. |
 | **text_steps** | Optional. Override for steps. |
