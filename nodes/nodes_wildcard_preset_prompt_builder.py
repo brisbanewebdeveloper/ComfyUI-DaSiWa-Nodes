@@ -197,3 +197,16 @@ if PromptServer is not None:
             })
         except (OSError, ValueError, json.JSONDecodeError) as error:
             return web.json_response({"error": str(error)}, status=500)
+
+    @PromptServer.instance.routes.post("/dasiwa/wildcard-preset-prompt-builder/build")
+    async def wildcard_preset_build(request):
+        """Resolve the node's inputs outside the graph, e.g. to seed an LLM prompt writer."""
+        try:
+            rules = await request.json()
+            positive, negative, _, _ = build_prompts(
+                _load_library(), str(rules.get("style", "Booru")), int(rules.get("seed", 0)),
+                int(rules.get("reroll", 0)), int(rules.get("token_budget", 200)), rules.get("selection_state"),
+            )
+            return web.json_response({"positive": positive, "negative": negative})
+        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError) as error:
+            return web.json_response({"error": str(error)}, status=400)

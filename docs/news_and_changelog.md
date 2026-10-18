@@ -6,6 +6,9 @@ This changelog covers **2026-07-05 → 2026-10-18**. Older history lives in the 
 
 ## News
 
+- **Wildcard build over HTTP (0.5.31):** `POST /dasiwa/wildcard-preset-prompt-builder/build` takes the node's rules (`style`, `seed`, `reroll`, `token_budget`, `selection_state`) and returns the resolved positive/negative strings, so apps outside the graph such as DEAS can hand the picked wildcards to the Prompt Writer.
+- **Metadata Image Saver: model hash cache survives restarts (0.5.31):** the auto-detected model/LoRA SHA256 is stored in `user/dasiwa_model_hashes.json` (keyed by path, size and mtime), so a 26 GB model is hashed once (~18 s) instead of after the last sampling step of the first image of every backend start.
+
 - **Prompt Writer over HTTP (0.5.30):** `POST /dasiwa/llm/write` runs the LLM Prompt Writer's dialects (Anima, Illustrious, Krea2, Wan 2.2, LTX 2.3, YuE2) with the H3 Forge's model picker and backends, including vision on input- or output-folder pictures (`name [output]`, as LoadImage), so apps outside the graph such as DEAS reuse the same guides and clean-up. The Forge model list now also returns the H3 durations.
 
 - **Metadata Image Saver: LoRA hashes and detected sampler values (0.5.29):** the `parameters` block now carries A1111 `Lora hashes: "name: autov2"` for every detected LoRA, because civitai.com links resources only by hash, never by name. Fix: auto-detected Steps, CFG and Seed from the linked sampler were overwritten by the manual defaults (`0`) and saved as `Steps: 0, CFG scale: 0.0, Seed: 0`; `0` now means "prefer auto-detect" as documented.
@@ -186,6 +189,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.31 | 10-18 | `POST /dasiwa/wildcard-preset-prompt-builder/build`: resolved wildcard prompts for apps outside the graph; Metadata Image Saver model hash cache survives restarts |
 | 0.5.30 | 10-18 | `POST /dasiwa/llm/write`: Prompt Writer dialects on the Forge backends for apps outside the graph |
 | 0.5.29 | 10-17 | Metadata Image Saver: `Lora hashes` for Civitai resource linking; detected Steps/CFG/Seed no longer overwritten by `0` defaults |
 | 0.5.28 | 10-16 | Exact H3 segment boundaries through Opus export; native 48-kHz Opus input and strict Publish checks |

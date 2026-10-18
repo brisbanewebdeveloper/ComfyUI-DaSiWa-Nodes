@@ -18,6 +18,7 @@ def saver(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "folder_paths", types.SimpleNamespace(
         get_output_directory=lambda: str(tmp_path),
         get_temp_directory=lambda: str(tmp_path),
+        get_user_directory=lambda: str(tmp_path),
         get_save_image_path=lambda *args: (str(tmp_path), "test", 1, "", "test"),
         get_full_path=lambda kind, name: str(lora) if kind == "loras" and name == "style.safetensors" else None,
     ))
@@ -48,3 +49,21 @@ def test_detected_steps_cfg_seed_win_over_zero_defaults(saver):
     assert params.startswith("a cat, <lora:style:0.8>\nNegative prompt: blur\nSteps: 20, Sampler: euler karras, CFG scale: 7.0, Seed: 123, ")
     assert f'Lora hashes: "style: {digest}", ' in params
     assert "Model: m.safetensors" in params and result["result"][1] == params
+
+
+def test_model_hash_survives_restart(saver):
+    module, out = saver
+    model = out / "big.safetensors"
+    model.write_bytes(b"model bytes")
+    digest = hashlib.sha256(b"model bytes").hexdigest()
+    assert module.DaSiWa_MetadataImageSaver().get_sha256(str(model)) == digest
+    module._MODEL_HASH_CACHE = None  # a fresh backend process
+    real_open = open
+    def no_model_reads(path, *args, **kwargs):
+        assert str(path) != str(model), "model was re-hashed"
+        return real_open(path, *args, **kwargs)
+    module.open = no_model_reads
+    assert module.DaSiWa_MetadataImageSaver().get_sha256(str(model)) == digest
+    del module.open
+    model.write_bytes(b"retrained model")  # new size/mtime must invalidate
+    assert module.DaSiWa_MetadataImageSaver().get_sha256(str(model)) == hashlib.sha256(b"retrained model").hexdigest()

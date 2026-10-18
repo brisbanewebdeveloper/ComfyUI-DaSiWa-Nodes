@@ -12,8 +12,12 @@ try:
 except ImportError:
     from helper_logging import log_dasiwa
 
-# Global cache for model hashes to avoid re-calculating large files
-_MODEL_HASH_CACHE = {}
+# Model hashes keyed by path|size|mtime, persisted in the user directory: hashing a 20+ GB model takes ~20 s.
+_MODEL_HASH_CACHE = None
+
+
+def _hash_cache_file():
+    return os.path.join(folder_paths.get_user_directory(), "dasiwa_model_hashes.json")
 
 METADATA_INPUT_DESCRIPTIONS = {
     "save_workflow": "Include the ComfyUI workflow JSON so the saved image can be loaded back into ComfyUI.",
@@ -140,22 +144,36 @@ class DaSiWa_MetadataImageSaver:
         return prefix
 
     def get_sha256(self, file_path):
+        global _MODEL_HASH_CACHE
         if not file_path or not os.path.exists(file_path):
             return None
-        
+
         stat = os.stat(file_path)
-        cache_key = (file_path, stat.st_mtime, stat.st_size)
-        
+        cache_key = f"{os.path.realpath(file_path)}|{stat.st_size}|{stat.st_mtime_ns}"
+        if _MODEL_HASH_CACHE is None:
+            try:
+                with open(_hash_cache_file(), encoding="utf-8") as f:
+                    _MODEL_HASH_CACHE = json.load(f)
+            except (OSError, ValueError):
+                _MODEL_HASH_CACHE = {}
         if cache_key in _MODEL_HASH_CACHE:
             return _MODEL_HASH_CACHE[cache_key]
-            
+
         hash_sha256 = hashlib.sha256()
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
+            for chunk in iter(lambda: f.read(1 << 20), b""):
                 hash_sha256.update(chunk)
-        
+
         h = hash_sha256.hexdigest()
         _MODEL_HASH_CACHE[cache_key] = h
+        # shortcut: entries of replaced/deleted files are never pruned; prune if the file ever grows noticeably.
+        path = _hash_cache_file()
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(_MODEL_HASH_CACHE, f)
+            os.replace(path + ".tmp", path)
+        except OSError as e:
+            log_dasiwa("Metadata Image Saver", f"model hash cache not saved: {e}")
         return h
 
     def resolve_value(self, workflow_prompt, value, search_keys=None):
