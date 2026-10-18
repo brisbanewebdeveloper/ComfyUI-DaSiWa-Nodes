@@ -1002,6 +1002,79 @@ def generate_continuity_draft(metadata, idea, directory, model, settings,
             "unloaded": unloaded or not local_gpu}
 
 
+# ── Prompt Writer over HTTP ───────────────────────────────────────────────
+#
+# The LLM Prompt Writer node's dialects for apps outside the graph (DEAS):
+# same guides, request text and clean-up, on the Forge's backends and picker.
+
+@_one_draft
+def write(body, input_directory=None, release_memory=None):
+    """One Prompt Writer run. Blocking: call it off the event loop."""
+    from .nodes_llm_simple import CREATIVITY, MAX_IMAGES, STANDARD, WRITE_FOR, assemble, writer_text
+    from .llm_prompt_presets import preset_spec, prompt_response
+    from .helper_minimax_h3_director import resolve_input_path
+    write_for = body.get("write_for")
+    if write_for not in WRITE_FOR:
+        raise ForgeError("bad_mode", f"The Prompt Writer does not write for {write_for or 'this model'}.")
+    idea = str(body.get("idea") or "").strip()
+    paths = body.get("images") or []
+    if not isinstance(paths, list) or len(paths) > MAX_IMAGES or not all(isinstance(p, str) for p in paths):
+        raise ForgeError("bad_references", f"Images must be a list of at most {MAX_IMAGES} input-folder paths.")
+    if not idea and not paths:
+        raise ForgeError("no_brief", "Type an idea, or add a picture to write the prompt from.")
+    if len(idea) > 16384:
+        raise ForgeError("no_brief", "The idea must be at most 16,384 characters.")
+    detail, creativity = body.get("detail", STANDARD), body.get("creativity", STANDARD)
+    if not all(type(v) is int and 1 <= v <= 10 for v in (detail, creativity)):
+        raise ForgeError("bad_prompt", "Detail and creativity must be whole numbers from 1 to 10.")
+    kind, _, name = str(body.get("model") or "").partition(":")
+    backend = backends(body.get("settings")).get(kind)
+    if not backend or not name:
+        raise ForgeError("no_model", "Pick a model.")
+    # A blind model still writes from the idea; saw_images tells the caller the pictures went unread.
+    if paths and backend.can_see(name) is False:
+        if not idea:
+            raise ForgeError("no_vision", f"{name} cannot read pictures. Pick a vision model or type an idea.")
+        paths = []
+    try:
+        # LoadImage's naming: plain names are in the input folder, `name [output]` in the output folder.
+        import folder_paths
+        images = []
+        for p in paths:
+            relative, base = folder_paths.annotated_filepath(p)
+            images.append(_image_b64(resolve_input_path(relative, base or input_directory or "")))
+    except (ValueError, OSError) as exc:
+        raise ForgeError("bad_references", f"Invalid reference image: {exc}") from exc
+    _cancel_warm()
+    local_gpu = kind == "local" or _is_this_machine(getattr(backend, "base", "http://127.0.0.1"))
+    if release_memory and local_gpu:
+        release_memory()
+    preset = WRITE_FOR[write_for]
+    spec = preset_spec(preset)
+    sampling = {"temperature": CREATIVITY[creativity][0], "top_p": 0.9}
+    if kind != "local":
+        _FORGE_LOADED.add((backend, name))
+    try:
+        raw, _ = backend.chat(name, spec["system"], writer_text(spec, idea, detail, creativity), images,
+                              sampling, 8192, 600)
+    except ForgeError:
+        raise
+    except urlerror.HTTPError as exc:
+        if _key_refused(exc):
+            raise ForgeError("backend", KEY_REFUSED.format(where=backend.base, code=exc.code))
+        raise ForgeError("backend", f"{kind} returned {exc.code}: {exc.read().decode(errors='replace')[:400]}")
+    except (urlerror.URLError, TimeoutError, OSError) as exc:
+        raise ForgeError("backend", f"Could not reach {kind} at {getattr(backend, 'base', '')}: {exc}")
+    finally:
+        if kind == "local" or backend.unload(name):
+            _FORGE_LOADED.discard((backend, name))
+    try:
+        prompt = prompt_response(preset, raw)
+    except ValueError as exc:
+        raise ForgeError("bad_prompt", str(exc), raw) from exc
+    return {"prompt": assemble(prompt, spec, body.get("start_with") or ""), "model": f"{kind}:{name}", "saw_images": len(images)}
+
+
 # ── Routes ────────────────────────────────────────────────────────────────
 
 def register_routes():
@@ -1041,6 +1114,7 @@ def register_routes():
             # A bundle exported before the Shots control has none: Auto only.
             "shot_counts": bundle.get("shot_counts") or ["Auto"],
             "default_shots": bundle.get("default_shots") or "Auto",
+            "durations": bundle["durations"],
         })
 
     @server.routes.post("/dasiwa/h3/forge/cancel")
@@ -1096,6 +1170,20 @@ def register_routes():
             log_dasiwa("H3 Forge", f"failed: {exc}")
             return web.json_response({"error": "internal", "message": str(exc)}, status=500)
         log_dasiwa("H3 Forge", f"{result['model']} wrote a {result['mode']} prompt in {result['stats']['seconds']}s, unloaded={result['unloaded']}")
+        return web.json_response(result)
+
+    @server.routes.post("/dasiwa/llm/write")
+    async def llm_write(request):
+        if server.prompt_queue.get_tasks_remaining() > 0:
+            return web.json_response({"error": "busy", "message": "A workflow is running. Write the prompt before you queue, or wait for it to finish."}, status=409)
+        try:
+            body = await request.json()
+            result = await asyncio.to_thread(write, body, folder_paths.get_input_directory(), _release)
+        except ForgeError as exc:
+            return web.json_response({"error": exc.code, "message": exc.message, "raw": exc.raw}, status=422)
+        except Exception as exc:
+            log_dasiwa("Prompt Writer", f"failed: {exc}")
+            return web.json_response({"error": "internal", "message": str(exc)}, status=500)
         return web.json_response(result)
 
 

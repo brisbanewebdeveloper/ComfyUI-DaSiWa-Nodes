@@ -140,6 +140,10 @@ Video/image-sequence handling:
 - `use_kv_cache` is a per-generation toggle for Transformers. Turning it off may reduce peak memory for some models, but generation is slower. The implementation and quantization strategy belong to Model Selector because they are backend configuration.
 - `memory_cleanup` uses the same full cleanup path before and/or after the node: DaSiWa model cache, ComfyUI managed models, Python garbage, and the device allocator are cleared. This intentionally makes later image/video models reload rather than retain VRAM/RAM.
 
+## Prompt Writer over HTTP
+
+`POST /dasiwa/llm/write` writes one prompt without a graph, for apps such as DEAS. The body names `model` as listed by `POST /dasiwa/h3/forge/models` (`local:`, `ollama:` or `openai:` plus the name), `write_for` (a Prompt Writer target such as `Anima`), `idea`, optional `detail` and `creativity` (1–10), up to 8 `images` named as LoadImage names them (input-folder path, or `name [output]`; a model that cannot see writes from the idea alone and returns `saw_images: 0`), optional `start_with`, and the Forge's `settings`. It returns `{"prompt", "model", "saw_images"}`. It refuses while a workflow runs, like the Forge, and frees ComfyUI's models first when the LLM runs on this machine.
+
 ## External LLM servers
 
 The quickest way: pick an `Ollama: <name>` or `Server: <id>` entry from Model Selector's `model` list, which lists every model on the configured servers after the local ones (press R after adding one). That entry sets the backend itself; the `backend` widget is ignored for it.

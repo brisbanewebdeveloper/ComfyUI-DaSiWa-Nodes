@@ -114,6 +114,20 @@ def request_text(idea, detail, creativity, style_text=""):
     return "\n\n".join(lines)
 
 
+def writer_text(spec, idea, detail, creativity, style=NO_STYLE):
+    """What the writer is asked, for the node and the /dasiwa/llm/write route alike."""
+    if not spec["model"].startswith("yue2_"):
+        return request_text(idea, detail, creativity, style_line(style, spec))
+    lines = [idea or "Write the musical idea inspired by the attached pictures."]
+    if int(creativity) != STANDARD:
+        lines.append(f"Creativity {int(creativity)} of 10: 1 is literal with no invented musical details; "
+                     "5 is balanced; 10 expands freely within the musical brief. Preserve explicit constraints and supplied lyrics.")
+    if int(detail) != STANDARD:
+        lines.append(f"Detail {int(detail)} of 10: adjust musical specificity or lyrical development, "
+                     "from minimal at 1 to rich at 10, within this field's format.")
+    return "\n\n".join(lines)
+
+
 def assemble(prompt, spec, start_with):
     """The person's own text exactly as typed, then the written prompt. On a
     tag model, a tag already up front is dropped from the written part so
@@ -220,17 +234,7 @@ class DaSiWa_LLMPromptWriter:
         config = simple_config(model, keep_loaded)
         preset = WRITE_FOR[write_for]
         spec = preset_spec(preset)
-        if spec["model"].startswith("yue2_"):
-            lines = [idea or "Write the musical idea inspired by the attached pictures."]
-            if int(creativity) != STANDARD:
-                lines.append(f"Creativity {int(creativity)} of 10: 1 is literal with no invented musical details; "
-                             "5 is balanced; 10 expands freely within the musical brief. Preserve explicit constraints and supplied lyrics.")
-            if int(detail) != STANDARD:
-                lines.append(f"Detail {int(detail)} of 10: adjust musical specificity or lyrical development, "
-                             "from minimal at 1 to rich at 10, within this field's format.")
-            text = "\n\n".join(lines)
-        else:
-            text = request_text(idea, detail, creativity, style_line(style, spec))
+        text = writer_text(spec, idea, detail, creativity, style)
         try:
             prompt = self._analyze(config, preset, text,
                                    CREATIVITY[int(creativity)][0], max_tokens, seed, images)
