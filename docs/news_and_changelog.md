@@ -6,6 +6,7 @@ This changelog covers **2026-07-05 → 2026-10-18**. Older history lives in the 
 
 ## News
 
+- **Tiled Diffusion (Image) (0.5.32):** new MODEL patch node for ordinary image checkpoints. Every sampling step denoises overlapping tiles (default 1024 px, 128 px overlap) and blends the predictions with positive pyramid weights, so SD/SDXL/Flux-family models sample canvases far larger than their native size without seams. Written from the pack's own H3 tiled sampler; ControlNet is not supported. [Details →](tiled_diffusion.md)
 - **Wildcard build over HTTP (0.5.31):** `POST /dasiwa/wildcard-preset-prompt-builder/build` takes the node's rules (`style`, `seed`, `reroll`, `token_budget`, `selection_state`) and returns the resolved positive/negative strings, so apps outside the graph such as DEAS can hand the picked wildcards to the Prompt Writer.
 - **Metadata Image Saver: model hash cache survives restarts (0.5.31):** the auto-detected model/LoRA SHA256 is stored in `user/dasiwa_model_hashes.json` (keyed by path, size and mtime), so a 26 GB model is hashed once (~18 s) instead of after the last sampling step of the first image of every backend start.
 
@@ -189,6 +190,7 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.32 | 10-19 | New **Tiled Diffusion (Image)** MODEL patch: per-step overlapping-tile sampling for SD/SDXL/Flux-family image models |
 | 0.5.31 | 10-18 | `POST /dasiwa/wildcard-preset-prompt-builder/build`: resolved wildcard prompts for apps outside the graph; Metadata Image Saver model hash cache survives restarts |
 | 0.5.30 | 10-18 | `POST /dasiwa/llm/write`: Prompt Writer dialects on the Forge backends for apps outside the graph |
 | 0.5.29 | 10-17 | Metadata Image Saver: `Lora hashes` for Civitai resource linking; detected Steps/CFG/Seed no longer overwritten by `0` defaults |

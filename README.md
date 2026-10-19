@@ -54,6 +54,12 @@ One node that upscales a completed MiniMax H3 video/audio latent and refines it 
 
 ---
 
+### 🧩 Tiled Diffusion (Image)
+
+MODEL patch for SD/SDXL/Flux-family image checkpoints: every sampling step denoises overlapping tiles (default 1024 px, 128 px overlap) and blends them with positive pyramid weights, so a model samples canvases far larger than its native size without seams. Wire it between the loader and the sampler; ControlNet is not supported. [Details →](docs/tiled_diffusion.md)
+
+---
+
 ### MiniMaxH3 Continuity • Segment Prepare
 
 - **Inputs:** sampler `LATENT` and the matching Guide `continuity_context`; select **New segment only** in Director Advanced.

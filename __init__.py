@@ -26,6 +26,7 @@ if __package__:
     continuity_routes.register_routes(PromptServer.instance)
     from .nodes.nodes_minimax_h3_cache import MiniMaxH3Cache
     from .nodes.nodes_minimax_h3_tiled_upscale import DaSiWaH3TiledUpscale
+    from .nodes.nodes_tiled_diffusion import DaSiWaTiledDiffusion
 
     from .nodes import nodes_system_monitor
     from .nodes import about  # registers /dasiwa/version route
@@ -70,6 +71,7 @@ if __package__:
         "DaSiWaH3TransitionRender": DaSiWaH3TransitionRender,
         "MiniMaxH3Cache": MiniMaxH3Cache,
         "DaSiWaH3TiledUpscale": DaSiWaH3TiledUpscale,
+        "DaSiWaTiledDiffusion": DaSiWaTiledDiffusion,
 
     }
 
@@ -107,6 +109,7 @@ if __package__:
         "DaSiWaH3TransitionRender": "MiniMaxH3 • Transition Render",
         "MiniMaxH3Cache": "MiniMaxH3 Cache",
         "DaSiWaH3TiledUpscale": "MiniMaxH3 Enhanced Upscale",
+        "DaSiWaTiledDiffusion": "Tiled Diffusion (Image)",
 
     }
     log_startup_summary(len(NODE_CLASS_MAPPINGS))
