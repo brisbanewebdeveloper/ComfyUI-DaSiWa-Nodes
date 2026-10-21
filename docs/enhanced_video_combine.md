@@ -24,7 +24,7 @@ flowchart LR
 The node is deliberately designed to avoid fixed, host-specific video settings:
 
 - **Audio output uniqueness (fix):** Audio sidecar files were named `video_00001-audio.mp4` (dash), making the counter unparseable by `folder_paths.get_save_image_path`, which expected an underscore after the prefix. Every audio save therefore overwrote the previous one. The separator is now an underscore (`video_00001_audio.mp4`, `video_00002_audio.mp4`, …) so the counter increments correctly.
-- **Codec and encoder selection:** `Auto` tests browser-compatible 8-bit AV1/WebM first, then VP9, then H.264. H.265/HEVC is excluded from Auto and must be chosen explicitly. For each candidate the node prefers NVIDIA NVENC, then Intel QSV, AMD AMF, VAAPI, and finally a software encoder. An advertised FFmpeg encoder is not trusted until an actual encode attempt succeeds.
+- **Codec and encoder selection:** `Auto` tests browser-compatible 8-bit AV1/MP4 first, then VP9/WebM, then H.264/MP4. H.265/HEVC is excluded from Auto and must be chosen explicitly. For each candidate the node prefers NVIDIA NVENC, then Intel QSV, AMD AMF, VAAPI, and finally a software encoder. An advertised FFmpeg encoder is not trusted until an actual encode attempt succeeds.
 - **PyAV-native execution:** The node uses PyAV 18 and the FFmpeg libraries bundled in its wheel for video encoding, audio muxing, metadata, animated outputs, and preview transcoding. It never launches an `ffmpeg` executable. Hardware candidates are runtime-tested in the existing NVENC → QSV → AMF → VAAPI order; an unavailable device or failed session continues to the next candidate and ultimately to the codec's software encoder.
 - **Container safety:** Auto tries compatible container sequences for each codec and prevents an incompatible preference from being the only path. If all selected candidates fail, it attempts the mandatory H.264/MP4 fallback.
 - **Source precision:** with an explicit codec, `bit_depth=Auto` detects 8-bit versus 10-bit image-batch quantization. Browser-compatible codec `Auto` always emits 8-bit 4:2:0.
@@ -50,10 +50,15 @@ Selecting a specific codec keeps that codec preference, but still uses its hardw
 
 ### Container
 
-With `container=Auto`:
+With both `codec=Auto` and `container=Auto`, the codec candidates are AV1/MP4 → VP9/WebM → H.264/MP4.
 
-- AV1 and VP9: WebM, then MKV, then MP4.
+With an explicit codec and `container=Auto`:
+
+- AV1: MP4 (faststart), then WebM, then MKV.
+- VP9: WebM, then MKV, then MP4.
 - H.264 and H.265: MP4, then MKV.
+
+An explicitly selected container stays selected; this does not force saved WebM/MKV workflows to MP4.
 
 If every requested combination fails, the node attempts its mandatory H.264/MP4 fallback.
 
@@ -129,9 +134,9 @@ Example:
 
 ```text
 [DaSiWa Enhanced Video Combine] Encode 48f 1920x1080@24fps 8-bit; codec=Auto, container=Auto, audio=yes.
-[DaSiWa Enhanced Video Combine] Auto test: AV1/WebM.
-[DaSiWa Enhanced Video Combine] Encoded AV1/WebM via av1_nvenc; audio=libopus/192k -> video_00001-audio.webm.
-[DaSiWa Enhanced Video Combine] Output: .../video_00001-audio.webm (AV1, av1_nvenc, 8-bit).
+[DaSiWa Enhanced Video Combine] Auto test: AV1/MP4.
+[DaSiWa Enhanced Video Combine] Encoded AV1/MP4 via av1_nvenc; audio=aac/192k -> video_00001_audio.mp4.
+[DaSiWa Enhanced Video Combine] Output: .../video_00001_audio.mp4 (AV1, av1_nvenc, 8-bit).
 ```
 
 ## Troubleshooting

@@ -6,6 +6,8 @@ This changelog covers **2026-07-05 → 2026-10-21**. Older history lives in the 
 
 ## News
 
+- **Enhanced Video Combine: explicit AV1/Auto fix (Git update within 0.5.33):** explicitly choosing AV1 with container Auto now also prefers MP4 (faststart), retaining WebM → MKV as alternatives and the final H.264/MP4 fallback. VP9 and explicit container choices are unchanged. Regression tests cover selection/fallbacks plus real CPU AV1 MP4 encode/decode with and without AAC audio. No version bump.
+
 - **Enhanced Video Combine: Auto outputs AV1 in MP4 (0.5.33):** Auto now prefers 8-bit AV1 inside MP4 with faststart, so browser tabs and streaming seek immediately; VP9 → WebM and H.264 → MP4 stay as automatic fallbacks and explicit codec/container picks are untouched. Auto audio is AAC. The redundant `Help` button under the preview is gone — the `?` on the node title opens the same dialog.
 - **Seed Control: poller stops with the node (0.5.33):** deleting a Seed Control node now clears its external-socket poll interval instead of leaking it for the rest of the session.
 

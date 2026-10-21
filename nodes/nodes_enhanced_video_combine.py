@@ -175,7 +175,9 @@ def detect_bit_depth(images):
 def _container_candidates(codec, container):
     if container != "Auto":
         return (container,)
-    if codec in {"AV1", "VP9"}:
+    if codec == "AV1":
+        return ("MP4", "WebM", "MKV")
+    if codec == "VP9":
         return ("WebM", "MKV", "MP4")
     return ("MP4", "MKV")
 

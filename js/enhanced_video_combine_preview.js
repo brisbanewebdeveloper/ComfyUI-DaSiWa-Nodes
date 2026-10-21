@@ -99,7 +99,7 @@ function showHelpDialog() {
         <p>Encodes a connected IMAGE batch into a video. It returns the frames optionally and shows an in-node preview after execution.</p>
         <dl style="margin:0;display:grid;grid-template-columns:max-content 1fr;gap:6px 12px">
             <dt><b>codec</b></dt><dd><b>Auto</b> prefers browser-compatible 8-bit AV1/MP4 (faststart), then VP9 (WebM) and H.264 (MP4). H.265 remains an explicit choice with hardware-to-software fallback.</dd>
-            <dt><b>container</b></dt><dd>Auto selects compatible containers: MP4 for AV1 and H.264, WebM for VP9. Explicit codecs try WebM, MKV, then MP4 for AV1/VP9; MP4 then MKV for H.264/H.265.</dd>
+            <dt><b>container</b></dt><dd>Auto selects compatible containers: MP4 for AV1 and H.264, WebM for VP9. Explicit AV1 tries MP4, then WebM, then MKV; VP9 tries WebM, then MKV, then MP4; H.264/H.265 try MP4 then MKV.</dd>
             <dt><b>image animation</b></dt><dd>Animated WebP and Animated AVIF are manual image-animation outputs. They are excluded from Auto codec/container selection, ignore the codec choice, and omit connected audio.</dd>
             <dt><b>bit depth / quality</b></dt><dd>With an explicit codec, Auto bit depth detects 8- or 10-bit frame precision; codec Auto uses browser-compatible 8-bit output. Lower quality values retain more detail and create larger files.</dd>
             <dt><b>audio</b></dt><dd>Connect AUDIO to mux it. Choose Auto, AAC, Opus, or MP3 plus a target bitrate; Auto uses Opus for WebM and AAC for MKV/MP4. Crop to audio ends video at the audio duration. Preview sound is on only while the pointer is over the video. Check <b>Mute</b> to keep the preview permanently silent; the choice is saved with the node.</dd>
