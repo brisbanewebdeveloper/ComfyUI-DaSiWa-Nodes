@@ -183,7 +183,7 @@ def _container_candidates(codec, container):
 def _auto_container_candidates(codec, container):
     if container != "Auto":
         return _container_candidates(codec, container)
-    return {"AV1": ("WebM",), "VP9": ("WebM",), "H.264": ("MP4",)}[codec]
+    return {"AV1": ("MP4",), "VP9": ("WebM",), "H.264": ("MP4",)}[codec]
 
 
 def _codec_candidates(codec):
@@ -429,7 +429,7 @@ class DaSiWa_EnhancedVideoCombine:
             "required": {
                 "images": ("IMAGE", {"description": "Frames to encode as a video."}),
                 "frame_rate": ("FLOAT", {"default": 24.0, "min": 0.1, "max": 240.0, "step": 0.01}),
-                "codec": (_CODEC_OPTIONS, {"default": "Auto", "description": "Auto prefers browser-compatible 8-bit AV1/WebM, then VP9 and H.264 fallbacks. Choose H.265 explicitly when required."}),
+                "codec": (_CODEC_OPTIONS, {"default": "Auto", "description": "Auto prefers browser-compatible 8-bit AV1/MP4 (faststart), then VP9/WebM and H.264/MP4 fallbacks. Choose H.265 explicitly when required."}),
                 "container": (_CONTAINER_OPTIONS, {"default": "Auto", "description": "Auto tries video containers only. Select Animated WebP or Animated AVIF manually; these image animations ignore codec selection and cannot include audio."}),
                 "bit_depth": (["Auto", "8-bit", "10-bit"], {"default": "Auto"}),
                 "quality": ("INT", {"default": 20, "min": 0, "max": 51, "description": "Encoding quality for every encoder. 0 is no compression (largest files); higher values increase compression and reduce quality. 20 is the recommended default."}),

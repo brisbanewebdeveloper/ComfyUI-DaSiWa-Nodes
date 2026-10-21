@@ -2,9 +2,12 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-18**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-21**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **Enhanced Video Combine: Auto outputs AV1 in MP4 (0.5.33):** Auto now prefers 8-bit AV1 inside MP4 with faststart, so browser tabs and streaming seek immediately; VP9 → WebM and H.264 → MP4 stay as automatic fallbacks and explicit codec/container picks are untouched. Auto audio is AAC. The redundant `Help` button under the preview is gone — the `?` on the node title opens the same dialog.
+- **Seed Control: poller stops with the node (0.5.33):** deleting a Seed Control node now clears its external-socket poll interval instead of leaking it for the rest of the session.
 
 - **Tiled Diffusion (Image) (0.5.32):** new MODEL patch node for ordinary image checkpoints. Every sampling step denoises overlapping tiles (default 1024 px, 128 px overlap) and blends the predictions with positive pyramid weights, so SD/SDXL/Flux-family models sample canvases far larger than their native size without seams. Written from the pack's own H3 tiled sampler; ControlNet is not supported. [Details →](tiled_diffusion.md)
 - **Wildcard build over HTTP (0.5.31):** `POST /dasiwa/wildcard-preset-prompt-builder/build` takes the node's rules (`style`, `seed`, `reroll`, `token_budget`, `selection_state`) and returns the resolved positive/negative strings, so apps outside the graph such as DEAS can hand the picked wildcards to the Prompt Writer.
