@@ -1,3 +1,11 @@
+import sys
+
+# Windows consoles default to cp1252; startup logs contain emoji. UTF-8 with
+# replacement keeps printing non-ASCII safe on any console code page.
+for _stream in (sys.__stdout__, sys.__stderr__):
+    if _stream is not None:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 _DARK_YELLOW = "\033[38;5;136m"
 _RESET = "\033[0m"
 
