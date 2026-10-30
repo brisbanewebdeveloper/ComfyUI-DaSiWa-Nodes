@@ -76,6 +76,16 @@ def segment_render_plan(video, audio, context):
     return plan
 
 
+def reject_swapped_vaes(vae,audio_vae):
+    # Classified by Core's model classes, not filenames/keys, so new H3 VAE variants keep passing.
+    from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
+    from comfy.ldm.minimax.audio_vae import MiniMaxH3AudioVAE
+    if isinstance(getattr(vae,'first_stage_model',None),MiniMaxH3AudioVAE):
+        raise ValueError("Segment Decode: the H3 audio VAE is connected to 'vae'. Connect an H3 video VAE (e.g. minimax_h3_video_vae_* or minimax_h3_sol_vae_*) to 'vae' and minimax_h3_audio_vae_* to 'audio_vae'.")
+    if isinstance(getattr(audio_vae,'first_stage_model',None),MiniMaxH3VideoVAE):
+        raise ValueError("Segment Decode: an H3 video VAE is connected to 'audio_vae'. Connect minimax_h3_audio_vae_* to 'audio_vae' and the video VAE (e.g. minimax_h3_video_vae_* or minimax_h3_sol_vae_*) to 'vae'.")
+
+
 def validate_segment_vaes(vae,audio_vae):
     from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
     from comfy.ldm.minimax.audio_vae import MiniMaxH3AudioVAE, BigVGAN, AMPBlock1, Activation1d
@@ -119,6 +129,7 @@ class DaSiWaH3ContinuitySegmentDecode:
     CATEGORY = 'DaSiWa/MiniMax H3'
 
     def decode(self, latent, vae, audio_vae, context):
+        reject_swapped_vaes(vae,audio_vae)
         if context.get('render_kind') != 'segment':
             # Full timeline: exactly the core VAE Decode / VAE Decode Audio results.
             import nodes as comfy_nodes

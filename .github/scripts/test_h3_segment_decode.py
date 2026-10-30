@@ -139,3 +139,15 @@ def test_full_mode_decode_matches_core_decoders(monkeypatch):
     assert torch.equal(images,comfy_nodes.VAEDecode().decode(vae,take)[0])
     core_audio = vae_decode_audio(avae,take)
     assert torch.equal(audio['waveform'],core_audio['waveform']) and audio['sample_rate'] == core_audio['sample_rate']
+
+@pytest.mark.parametrize('output_mode',['full','segment'])
+def test_segment_decode_names_swapped_vae_slots(output_mode):
+    from comfy.ldm.minimax.audio_vae import MiniMaxH3AudioVAE
+    mod = importlib.import_module('h3_segment_test.nodes.h3_continuity.segment_nodes')
+    video = SimpleNamespace(first_stage_model=video_decoder())
+    audio = SimpleNamespace(first_stage_model=MiniMaxH3AudioVAE.__new__(MiniMaxH3AudioVAE))
+    ctx = {'output_mode':output_mode,'render_kind':'segment'} if output_mode == 'segment' else {'output_mode':'full'}
+    with pytest.raises(ValueError,match="video VAE is connected to 'audio_vae'"):
+        mod.DaSiWaH3ContinuitySegmentDecode().decode(None,video,video,ctx)
+    with pytest.raises(ValueError,match="audio VAE is connected to 'vae'"):
+        mod.DaSiWaH3ContinuitySegmentDecode().decode(None,audio,audio,ctx)

@@ -49,7 +49,7 @@ def _validate_h3_vaes(vae, audio_vae, mode, *, audio_required=True):
     if vae_kind == "audio":
         raise ValueError(
             "MiniMax H3 Director: Audio VAE is connected to the 'vae' "
-            "(Video VAE) slot. Connect minimax_h3_video_vae_* to 'vae'."
+            "(Video VAE) slot. Connect an H3 video VAE (e.g. minimax_h3_video_vae_* or minimax_h3_sol_vae_*) to 'vae'."
         )
 
     if mode == "REF2VA":
