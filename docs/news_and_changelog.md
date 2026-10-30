@@ -2,9 +2,11 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-21**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-30**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **Continuity Segment Decode: swapped VAE slots named (0.5.34):** a video VAE wired into `audio_vae` (or the audio VAE into `vae`) used to fail deep inside Core with `tuple index out of range`. Segment Decode now checks both slots against Core's MiniMax H3 VAE classes in both output modes and says which VAE belongs where. Every H3 video VAE variant Core loads (stock, int8, LightVAE, the new Sol-H3-VAE) keeps passing; the Director Guide hint now names `minimax_h3_sol_vae_*` too.
 
 - **Enhanced Video Combine: explicit AV1/Auto fix (Git update within 0.5.33):** explicitly choosing AV1 with container Auto now also prefers MP4 (faststart), retaining WebM → MKV as alternatives and the final H.264/MP4 fallback. VP9 and explicit container choices are unchanged. Regression tests cover selection/fallbacks plus real CPU AV1 MP4 encode/decode with and without AAC audio. No version bump.
 
@@ -195,6 +197,8 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.34 | 10-30 | Continuity Segment Decode names swapped video/audio VAE slots; Sol-H3-VAE in the hints |
+| 0.5.33 | 10-21 | Enhanced Video Combine Auto outputs AV1 in MP4; Seed Control poller stops with the node |
 | 0.5.32 | 10-19 | New **Tiled Diffusion (Image)** MODEL patch: per-step overlapping-tile sampling for SD/SDXL/Flux-family image models |
 | 0.5.31 | 10-18 | `POST /dasiwa/wildcard-preset-prompt-builder/build`: resolved wildcard prompts for apps outside the graph; Metadata Image Saver model hash cache survives restarts |
 | 0.5.30 | 10-18 | `POST /dasiwa/llm/write`: Prompt Writer dialects on the Forge backends for apps outside the graph |
